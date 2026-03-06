@@ -71,11 +71,8 @@ jobs:
           go build -ldflags="-s -w -X main.Version=${{ github.ref_name }}" \
             -trimpath -o vane-linux-arm64 .
 
-      - name: Compress binaries
-        run: |
-          upx --best vane-linux-amd64 || true
-          upx --best vane-linux-arm64 || true
-          sha256sum vane-linux-amd64 vane-linux-arm64 > sha256sums.txt
+      - name: Checksum
+        run: sha256sum vane-linux-amd64 vane-linux-arm64 > sha256sums.txt
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
