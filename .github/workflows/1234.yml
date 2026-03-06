@@ -1,0 +1,89 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Vane
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm install
+
+      - name: Build frontend
+        working-directory: web
+        run: npm run build
+
+      - name: Download Go dependencies
+        run: |
+          go mod tidy
+          go mod download
+
+      - name: Build linux/amd64
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: 0
+        run: |
+          go build -ldflags="-s -w -X main.Version=${{ github.ref_name }}" \
+            -trimpath -o vane-linux-amd64 .
+
+      - name: Build linux/arm64
+        env:
+          GOOS: linux
+          GOARCH: arm64
+          CGO_ENABLED: 0
+        run: |
+          go build -ldflags="-s -w -X main.Version=${{ github.ref_name }}" \
+            -trimpath -o vane-linux-arm64 .
+
+      - name: Checksum
+        run: sha256sum vane-linux-amd64 vane-linux-arm64 > sha256sums.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Vane ${{ github.ref_name }}"
+          body: |
+            ## 🌀 Vane ${{ github.ref_name }}
+
+            ### 下载
+            | 平台 | 文件 |
+            |------|------|
+            | Linux x86_64 | `vane-linux-amd64` |
+            | Linux ARM64 | `vane-linux-arm64` |
+
+            ### 快速开始
+
+            # 访问: http://your-ip:4455
+            # 账号: admin / admin
+```
+          files: |
+            vane-linux-amd64
+            vane-linux-arm64
+            sha256sums.txt
+          draft: false
+          prerelease: false
