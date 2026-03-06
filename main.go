@@ -3,10 +3,11 @@ package main
 import (
 	"embed"
 	"fmt"
-	"io/fs"
 	"log"
+	"mime"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gin-contrib/cors"
@@ -22,7 +23,6 @@ import (
 //go:embed web/dist
 var embeddedFiles embed.FS
 
-// Version is injected by the build via -ldflags
 var Version = "dev"
 
 func main() {
@@ -56,23 +56,14 @@ func main() {
 		AllowCredentials: true,
 	}))
 
-	// Register API routes
 	apiHandler := api.NewHandler(cfg, pfManager, ddnsManager, wsManager, tlsManager)
 	apiHandler.Register(r)
 
-	// Embedded frontend
-	distFS, err := fs.Sub(embeddedFiles, "web/dist")
-	if err != nil {
-		log.Fatalf("Failed to sub dist: %v", err)
-	}
-
-	// Safe-entry middleware for SPA
 	r.Use(api.SafeEntryMiddleware(cfg))
 
 	r.NoRoute(func(c *gin.Context) {
 		path := c.Request.URL.Path
 
-		// Strip safe-entry prefix before resolving asset
 		cfg.RLock()
 		entry := cfg.Admin.SafeEntry
 		cfg.RUnlock()
@@ -86,16 +77,28 @@ func main() {
 			}
 		}
 
-		rfs, ok := distFS.(fs.ReadFileFS)
-		if path == "/" || path == "" || !ok {
-			c.FileFromFS("index.html", http.FS(distFS))
+		filePath := strings.TrimPrefix(path, "/")
+		if filePath == "" {
+			filePath = "index.html"
+		}
+
+		data, err := embeddedFiles.ReadFile("web/dist/" + filePath)
+		if err != nil {
+			data, err = embeddedFiles.ReadFile("web/dist/index.html")
+			if err != nil {
+				c.String(500, "index.html not found")
+				return
+			}
+			c.Data(200, "text/html; charset=utf-8", data)
 			return
 		}
-		if _, err := rfs.ReadFile(strings.TrimPrefix(path, "/")); err != nil {
-			c.FileFromFS("index.html", http.FS(distFS))
-			return
+
+		ext := filepath.Ext(filePath)
+		ct := mime.TypeByExtension(ext)
+		if ct == "" {
+			ct = "application/octet-stream"
 		}
-		c.FileFromFS(strings.TrimPrefix(path, "/"), http.FS(distFS))
+		c.Data(200, ct, data)
 	})
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Admin.Port)
@@ -111,16 +114,13 @@ func printBanner(cfg *config.Config) {
 		entry = "/" + cfg.Admin.SafeEntry
 	}
 	fmt.Printf(`
- ██╗   ██╗ █████╗ ███╗   ██╗███████╗
- ██║   ██║██╔══██╗████╗  ██║██╔════╝
- ██║   ██║███████║██╔██╗ ██║█████╗
- ╚██╗ ██╔╝██╔══██║██║╚██╗██║██╔══╝
-  ╚████╔╝ ██║  ██║██║ ╚████║███████╗
-   ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝
-
   ✨ Dashboard : http://0.0.0.0:%d%s
   🔑 Login     : %s / admin
   📦 Version   : %s
 
 `, cfg.Admin.Port, entry, cfg.Admin.Username, Version)
+}
+
+func init() {
+	_ = http.MethodGet // suppress unused import
 }
