@@ -43,7 +43,9 @@ jobs:
         run: ls -la web/dist/
 
       - name: Download Go dependencies
-        run: go mod download
+        run: |
+          go mod tidy
+          go mod download
 
       - name: Build linux/amd64
         env:
