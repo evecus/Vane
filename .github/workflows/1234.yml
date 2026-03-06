@@ -42,14 +42,6 @@ jobs:
           go mod tidy
           go mod download
 
-      - name: Build linux/amd64
-        env:
-          GOOS: linux
-          GOARCH: amd64
-          CGO_ENABLED: 0
-        run: |
-          go build -ldflags="-s -w -X main.Version=${{ github.ref_name }}" \
-            -trimpath -o vane-linux-amd64 .
 
       - name: Build linux/arm64
         env:
@@ -61,8 +53,17 @@ jobs:
             -trimpath -o vane-linux-arm64 .
 
       - name: Checksum
-        run: sha256sum vane-linux-amd64 vane-linux-arm64 > sha256sums.txt
+        run: sha256sum vane-linux-arm64 > sha256sums.txt
 
+      - name: Create tag if missing
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          TAG="build-$(date +%Y%m%d%H%M%S)"
+          git tag $TAG
+          git push origin $TAG
+          echo "TAG=$TAG" >> $GITHUB_ENV
+    
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -86,7 +87,6 @@ jobs:
             账号: admin / admin
 
           files: |
-            vane-linux-amd64
             vane-linux-arm64
             sha256sums.txt
           draft: false
