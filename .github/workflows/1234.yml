@@ -63,8 +63,7 @@ jobs:
           GOARCH: arm64
           CGO_ENABLED: 0
         run: |
-          # 使用上面定义的 ENV.RELEASE_VERSION
-          go build -ldflags="-s -w -X main.Version=${{ env.RELEASE_VERSION }}" \
+          go build -ldflags="-s -w -X main.Version=${{ github.ref_name }}" \
             -trimpath -o vane-linux-arm64 .
 
       - name: Checksum
