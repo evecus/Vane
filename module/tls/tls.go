@@ -1,7 +1,8 @@
 package tls
 
 import (
-	"crypto/ecdsa"
+	"crypto"
+    "crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
@@ -154,7 +155,7 @@ type acmeUser struct {
 
 func (u *acmeUser) GetEmail() string                        { return u.email }
 func (u *acmeUser) GetRegistration() *registration.Resource { return u.registration }
-func (u *acmeUser) GetPrivateKey() interface{}               { return u.key }
+func (u *acmeUser) GetPrivateKey() crypto.PrivateKey { return u.key }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
