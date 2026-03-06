@@ -5,6 +5,12 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    # 新增：手动触发时允许输入版本号
+    inputs:
+      version:
+        description: '发布版本号 (例如: v1.0.0)'
+        required: true
+        default: 'v1.0.0'
 
 permissions:
   contents: write
@@ -17,6 +23,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # 1. 确定版本号变量：如果是 Tag 触发则用 tag，手动触发则用输入的变量
+      - name: Set Version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "RELEASE_VERSION=${{ github.event.inputs.version }}" >> $GITHUB_ENV
+          else
+            echo "RELEASE_VERSION=${{ github.ref_name }}" >> $GITHUB_ENV
+          fi
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -42,50 +57,40 @@ jobs:
           go mod tidy
           go mod download
 
-
       - name: Build linux/arm64
         env:
           GOOS: linux
           GOARCH: arm64
           CGO_ENABLED: 0
         run: |
-          go build -ldflags="-s -w -X main.Version=${{ github.ref_name }}" \
+          # 使用上面定义的 ENV.RELEASE_VERSION
+          go build -ldflags="-s -w -X main.Version=${{ env.RELEASE_VERSION }}" \
             -trimpath -o vane-linux-arm64 .
 
       - name: Checksum
         run: sha256sum vane-linux-arm64 > sha256sums.txt
 
-      - name: Create tag if missing
-        run: |
-          git config user.email "actions@github.com"
-          git config user.name "GitHub Actions"
-          TAG="build-$(date +%Y%m%d%H%M%S)"
-          git tag $TAG
-          git push origin $TAG
-          echo "TAG=$TAG" >> $GITHUB_ENV
-    
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          name: "Vane ${{ github.ref_name }}"
+          # 使用统一的变量名
+          tag_name: ${{ env.RELEASE_VERSION }}
+          name: "Vane ${{ env.RELEASE_VERSION }}"
           body: |
-            ## 🌀 Vane ${{ github.ref_name }}
+            ## 🌀 Vane ${{ env.RELEASE_VERSION }}
 
             ### 下载
             | 平台 | 文件 |
             |------|------|
-            | Linux x86_64 | `vane-linux-amd64` |
             | Linux ARM64 | `vane-linux-arm64` |
 
             ### 快速开始
-            chmod +x vane-linux-amd64
-
-            ./vane-linux-amd64
-
+            ```bash
+            chmod +x vane-linux-arm64
+            ./vane-linux-arm64
+            ```
             访问: http://your-ip:4455
-
             账号: admin / admin
-
           files: |
             vane-linux-arm64
             sha256sums.txt
