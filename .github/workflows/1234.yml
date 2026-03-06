@@ -77,10 +77,14 @@ jobs:
             | Linux ARM64 | `vane-linux-arm64` |
 
             ### 快速开始
+            chmod +x vane-linux-amd64
 
-            # 访问: http://your-ip:4455
-            # 账号: admin / admin
-```
+            ./vane-linux-amd64
+
+            访问: http://your-ip:4455
+
+            账号: admin / admin
+
           files: |
             vane-linux-amd64
             vane-linux-arm64
