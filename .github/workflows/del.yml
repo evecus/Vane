@@ -14,7 +14,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: master
           fetch-depth: 0
 
       # 1. 删除所有本地和远程 Tags
