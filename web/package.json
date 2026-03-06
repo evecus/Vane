@@ -13,7 +13,7 @@
     "lucide-vue-next": "^0.395.0",
     "pinia": "^2.1.7",
     "vue": "^3.4.29",
-    "vue-apexcharts": "^1.10.0",
+    "vue3-apexcharts": "^1.8.0",
     "vue-router": "^4.3.3"
   },
   "devDependencies": {
