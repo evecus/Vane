@@ -8,7 +8,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "apexcharts": "^3.49.0",
+    "apexcharts": "^5.10.0",
     "axios": "^1.7.2",
     "lucide-vue-next": "^0.395.0",
     "pinia": "^2.1.7",
