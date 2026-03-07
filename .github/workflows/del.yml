@@ -65,7 +65,7 @@ jobs:
           if [ -n "$(git status --porcelain)" ]; then
             git add .
             git commit -m "chore: complete reset (removed all files, tags, and releases)"
-            git push origin main --force
+            git push origin master --force
           else
             echo "No file changes to commit"
           fi
