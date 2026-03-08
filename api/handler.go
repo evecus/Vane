@@ -1,7 +1,12 @@
 package api
 
 import (
+	"archive/zip"
+	"bytes"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
@@ -1326,30 +1331,71 @@ func (h *Handler) issueCert(c *gin.Context) {
 }
 
 func (h *Handler) uploadCert(c *gin.Context) {
-	var req struct {
-		Domain    string `json:"domain"`
-		CertPEM   string `json:"cert_pem"`
-		KeyPEM    string `json:"key_pem"`
-		AutoRenew bool   `json:"auto_renew"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"error": err.Error()})
+	file, _, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(400, gin.H{"error": "请上传证书 ZIP 文件"})
 		return
 	}
-	// Validate PEM pair before storing
-	if _, err := tlsParsePair(req.CertPEM, req.KeyPEM); err != nil {
+	defer file.Close()
+
+	raw, err := io.ReadAll(file)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "读取文件失败"})
+		return
+	}
+
+	// Parse zip
+	zr, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
+	if err != nil {
+		c.JSON(400, gin.H{"error": "无法解析 ZIP 文件: " + err.Error()})
+		return
+	}
+
+	var certPEM, keyPEM string
+	for _, f := range zr.File {
+		name := strings.ToLower(filepath.Base(f.Name))
+		rc, err := f.Open()
+		if err != nil {
+			continue
+		}
+		content, _ := io.ReadAll(rc)
+		rc.Close()
+		switch name {
+		case "cert.pem", "fullchain.pem", "certificate.pem":
+			certPEM = string(content)
+		case "key.pem", "privkey.pem", "private.pem":
+			keyPEM = string(content)
+		}
+	}
+
+	if certPEM == "" || keyPEM == "" {
+		c.JSON(400, gin.H{"error": "ZIP 中未找到证书文件（需包含 cert.pem/fullchain.pem 和 key.pem/privkey.pem）"})
+		return
+	}
+
+	// Validate PEM pair
+	if _, err := tlsParsePair(certPEM, keyPEM); err != nil {
 		c.JSON(400, gin.H{"error": "无效的证书或私钥: " + err.Error()})
 		return
 	}
+
+	// Extract domains from cert SAN
+	domains := extractDomainsFromCertPEM(certPEM)
+	domain := ""
+	if len(domains) > 0 {
+		domain = domains[0]
+	}
+
 	cert := config.TLSCert{
 		ID:        config.NewID(),
-		Domain:    req.Domain,
-		Domains:   []string{req.Domain},
+		Name:      domain,
+		Domain:    domain,
+		Domains:   domains,
 		Source:    "manual",
-		CertPEM:   req.CertPEM,
-		KeyPEM:    req.KeyPEM,
+		CertPEM:   certPEM,
+		KeyPEM:    keyPEM,
 		IssuedAt:  config.Now(),
-		AutoRenew: req.AutoRenew,
+		AutoRenew: false,
 		Status:    "active",
 		CreatedAt: config.Now(),
 	}
@@ -1361,6 +1407,31 @@ func (h *Handler) uploadCert(c *gin.Context) {
 		return
 	}
 	c.JSON(201, cert)
+}
+
+// extractDomainsFromCertPEM parses a PEM certificate and returns all SANs (DNS names).
+func extractDomainsFromCertPEM(certPEM string) []string {
+	block, _ := pem.Decode([]byte(certPEM))
+	if block == nil {
+		return nil
+	}
+	x509Cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var domains []string
+	for _, name := range x509Cert.DNSNames {
+		if !seen[name] {
+			seen[name] = true
+			domains = append(domains, name)
+		}
+	}
+	// Fallback to CN if no SANs
+	if len(domains) == 0 && x509Cert.Subject.CommonName != "" {
+		domains = append(domains, x509Cert.Subject.CommonName)
+	}
+	return domains
 }
 
 func (h *Handler) downloadCert(c *gin.Context) {
@@ -1383,10 +1454,47 @@ func (h *Handler) downloadCert(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "证书尚未签发，无法下载"})
 		return
 	}
-	// Sanitize domain for use in filename
-	domain := sanitizeFilename(found.Domain)
-	c.Header("Content-Disposition", `attachment; filename="`+domain+`-cert.pem"`)
-	c.Data(200, "application/x-pem-file", []byte(found.CertPEM))
+
+	// Build zip in memory
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+
+	addFile := func(name, content string) error {
+		w, err := zw.Create(name)
+		if err != nil {
+			return err
+		}
+		_, err = w.Write([]byte(content))
+		return err
+	}
+
+	_ = addFile("cert.pem", found.CertPEM)
+	_ = addFile("key.pem", found.KeyPEM)
+
+	// info.json with domains and metadata
+	domains := found.Domains
+	if len(domains) == 0 && found.Domain != "" {
+		domains = []string{found.Domain}
+	}
+	info := map[string]interface{}{
+		"domain":     found.Domain,
+		"domains":    domains,
+		"issued_at":  found.IssuedAt,
+		"expires_at": found.ExpiresAt,
+		"source":     found.Source,
+		"name":       found.Name,
+	}
+	infoJSON, _ := json.MarshalIndent(info, "", "  ")
+	_ = addFile("info.json", string(infoJSON))
+
+	zw.Close()
+
+	safeName := sanitizeFilename(found.Domain)
+	if safeName == "" {
+		safeName = "cert"
+	}
+	c.Header("Content-Disposition", `attachment; filename="`+safeName+`-certs.zip"`)
+	c.Data(200, "application/zip", buf.Bytes())
 }
 
 func (h *Handler) getCertPEM(c *gin.Context) {
