@@ -106,21 +106,19 @@
               <template v-for="n in sysinfo.network" :key="n.iface">
                 <div v-if="!isVirtualIface(n.iface) && (n.rx_bytes > 0 || n.tx_bytes > 0)"
                      class="text-xs">
-                  <!-- 桌面：同行左右排列 -->
-                  <div class="hidden sm:flex items-center justify-between gap-2">
+                  <!-- 桌面：名称左，↓↑ 两行靠右 -->
+                  <div class="hidden sm:flex items-start justify-between gap-2">
                     <span class="font-mono text-slate-600 flex-shrink-0">{{ n.iface }}</span>
-                    <span class="flex items-center gap-2 flex-shrink-0">
-                      <span class="text-blue-500">↓{{ fmtBytes(n.rx_bytes) }}</span>
-                      <span class="text-emerald-500">↑{{ fmtBytes(n.tx_bytes) }}</span>
-                    </span>
-                  </div>
-                  <!-- 移动端：流量在名称下方 -->
-                  <div class="sm:hidden">
-                    <div class="font-mono text-slate-600">{{ n.iface }}</div>
-                    <div class="flex gap-2 mt-0.5 pl-0.5">
+                    <div class="flex flex-col items-end gap-0.5">
                       <span class="text-blue-500">↓{{ fmtBytes(n.rx_bytes) }}</span>
                       <span class="text-emerald-500">↑{{ fmtBytes(n.tx_bytes) }}</span>
                     </div>
+                  </div>
+                  <!-- 移动端：名称一行，↓↑ 各占一行在下方 -->
+                  <div class="sm:hidden">
+                    <div class="font-mono text-slate-600">{{ n.iface }}</div>
+                    <div class="text-blue-500 mt-0.5">↓{{ fmtBytes(n.rx_bytes) }}</div>
+                    <div class="text-emerald-500">↑{{ fmtBytes(n.tx_bytes) }}</div>
                   </div>
                 </div>
               </template>
