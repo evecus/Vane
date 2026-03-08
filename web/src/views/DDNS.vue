@@ -1,105 +1,130 @@
 <template>
-  <div class="space-y-6 animate-fade-in">
+  <div class="space-y-4 sm:space-y-6 animate-fade-in">
+
+    <!-- 页面标题 + 添加按钮 -->
     <div class="page-header">
-      <div>
-        <h1 class="page-title">{{ t('ddnsTitle') }}</h1>
-        <p class="page-subtitle">{{ t('ddnsSubtitle') }}</p>
-      </div>
-      <button class="btn-primary" @click="openModal()">
-        <Plus :size="16" /> {{ t('addRule') }}
+      <h1 class="page-title">{{ t('ddnsTitle') }}</h1>
+      <button class="btn-primary btn-sm sm:btn-normal" @click="openModal()">
+        <Plus :size="15" /> <span class="hidden xs:inline">{{ t('addRule') }}</span><span class="xs:hidden">{{ t('addRule') }}</span>
       </button>
     </div>
 
-    <div v-if="rules.length === 0" class="glass-card p-16 text-center">
-      <div class="w-16 h-16 rounded-3xl bg-emerald-50 flex items-center justify-center mx-auto mb-4">
-        <Globe :size="28" class="text-emerald-400" />
+    <!-- 空状态 -->
+    <div v-if="rules.length === 0" class="glass-card p-10 sm:p-16 text-center">
+      <div class="w-14 h-14 sm:w-16 sm:h-16 rounded-3xl bg-emerald-50 flex items-center justify-center mx-auto mb-4">
+        <Globe :size="26" class="text-emerald-400" />
       </div>
       <p class="text-slate-500 font-medium">{{ t('noDdns') }}</p>
     </div>
 
-    <div v-else class="grid gap-4">
+    <!-- 规则列表 -->
+    <div v-else class="grid gap-3 sm:gap-4">
       <div v-for="rule in rules" :key="rule.id"
-           class="glass-card p-5 group hover:shadow-colored-green transition-all duration-300">
-        <div class="flex items-start gap-4">
-          <div class="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0"
+           class="glass-card p-4 sm:p-5 transition-all duration-300">
+        <div class="flex items-start gap-3 sm:gap-4">
+
+          <!-- 图标 -->
+          <div class="w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center flex-shrink-0"
                :style="rule.enabled ? 'background:linear-gradient(135deg,#10b981,#059669)' : 'background:#f1f5f9'">
-            <Globe :size="20" :class="rule.enabled ? 'text-white' : 'text-slate-400'" />
+            <Globe :size="18" :class="rule.enabled ? 'text-white' : 'text-slate-400'" />
           </div>
 
+          <!-- 内容区 -->
           <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-2 mb-2 flex-wrap">
-              <span class="font-semibold text-slate-900">{{ rule.name || t('unnamed') }}</span>
-              <span class="status-dot" :class="rule.enabled ? 'active' : 'inactive'"></span>
+            <!-- 名称 + 状态标签行 -->
+            <div class="flex items-center gap-1.5 mb-1.5 flex-wrap">
+              <span class="font-semibold text-slate-900 text-sm sm:text-base leading-tight">{{ rule.name || t('unnamed') }}</span>
+              <span class="status-dot flex-shrink-0" :class="rule.enabled ? 'active' : 'inactive'"></span>
               <ProviderBadge :provider="rule.provider" />
-              <span class="badge badge-slate">{{ rule.ip_version === 'ipv6' ? 'IPv6' : 'IPv4' }}</span>
+              <span class="badge badge-slate text-xs">{{ ipVersionLabel(rule.ip_version) }}</span>
               <span v-if="rule.ip_detect_mode === 'iface'" class="badge text-xs" style="background:#f0f9ff;color:#0369a1;border:1px solid #bae6fd">
                 {{ t('ifaceBadge', {iface: rule.ip_interface}) }}{{ rule.ip_version === 'ipv6' && rule.ip_index ? ` [${rule.ip_index}]` : '' }}
               </span>
               <span v-else class="badge text-xs" style="background:#f0fdf4;color:#166534;border:1px solid #bbf7d0">{{ t('apiMode') }}</span>
             </div>
 
-            <div class="flex flex-wrap gap-1.5 mb-3">
+            <!-- 域名标签 -->
+            <div class="flex flex-wrap gap-1 mb-2">
               <span v-for="d in effectiveDomains(rule)" :key="d"
-                    class="font-mono text-xs text-slate-600 bg-slate-100 px-2 py-0.5 rounded-lg">{{ d }}</span>
+                    class="font-mono text-xs text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded-md break-all">{{ d }}</span>
             </div>
 
-            <div class="flex items-end gap-0.5 h-6 mb-2">
+            <!-- IP 历史迷你图 -->
+            <div class="flex items-end gap-0.5 h-5 mb-1.5">
               <div v-for="(rec, i) in (rule.ip_history||[]).slice(-30)" :key="i"
                    class="flex-1 rounded-sm"
-                   :style="`height:${Math.max(3,(i+1)/30*24)}px;background:${rule.enabled?'#10b981':'#94a3b8'};opacity:${0.3+(i/30)*0.7}`"
+                   :style="`height:${Math.max(3,(i+1)/30*20)}px;background:${rule.enabled?'#10b981':'#94a3b8'};opacity:${0.3+(i/30)*0.7}`"
                    :title="`${rec.ip} @ ${new Date(rec.timestamp).toLocaleString('zh-CN')}`"></div>
               <div v-if="!(rule.ip_history?.length)" class="text-xs text-slate-300 italic">{{ t('noHistory') }}</div>
             </div>
 
-            <div class="flex items-center gap-4 text-xs text-slate-400">
-              <!-- IP status with real-time feedback -->
+            <!-- IP 状态信息 -->
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
               <span v-if="ipStatus[rule.id] === 'fetching'" class="flex items-center gap-1 text-amber-500 font-medium">
-                <span class="inline-block w-3 h-3 border-2 border-amber-400 border-t-transparent rounded-full animate-spin"></span>
+                <span class="inline-block w-2.5 h-2.5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin"></span>
                 {{ t('fetchingIp') }}
               </span>
               <span v-else-if="ipStatus[rule.id] === 'fail'" class="text-red-400 font-medium">{{ t('ipFetchFail') }}</span>
               <span v-else>
                 {{ t('currentIp') }}
-                <span class="font-mono" :class="rule.last_ip ? 'text-slate-700' : 'text-slate-400'">
-                  {{ rule.last_ip || t('unknown') }}
-                </span>
+                <span class="font-mono" :class="rule.last_ip ? 'text-slate-700' : 'text-slate-400'">{{ rule.last_ip || t('unknown') }}</span>
               </span>
-              <span v-if="rule.last_updated">{{ t('lastUpdated') }} {{ new Date(rule.last_updated).toLocaleString() }}</span>
-              <span>{{ t('interval') }} {{ rule.interval || 300 }}s</span>
+              <span v-if="rule.last_updated" class="hidden sm:inline">
+                {{ t('lastUpdated') }} {{ new Date(rule.last_updated).toLocaleString() }}
+              </span>
+              <span>{{ t('interval') }} {{ rule.interval || 60 }}s</span>
             </div>
           </div>
 
-          <div class="flex items-center gap-2 flex-shrink-0">
-            <button @click="refresh(rule.id)" class="btn-ghost btn-sm text-emerald-500" :title="t('detectNow')">
+          <!-- 操作按钮区（移动端始终可见，桌面hover显示编辑/删除） -->
+          <div class="flex items-center gap-1 flex-shrink-0">
+            <button @click="refresh(rule.id)" class="btn-ghost btn-sm text-emerald-500 p-1.5" :title="t('detectNow')">
               <RefreshCw :size="14" />
             </button>
-            <label class="toggle">
+            <label class="toggle scale-90 sm:scale-100">
               <input type="checkbox" :checked="rule.enabled" @change="toggle(rule.id)" />
               <div class="toggle-track"></div><div class="toggle-thumb"></div>
             </label>
-            <button @click="openModal(rule)" class="btn-ghost btn-sm opacity-0 group-hover:opacity-100"><Pencil :size="14" /></button>
-            <button @click="del(rule.id)" class="btn-ghost btn-sm text-red-400 hover:bg-red-50 opacity-0 group-hover:opacity-100"><Trash2 :size="14" /></button>
+            <!-- 编辑/删除：移动端始终显示，桌面hover显示 -->
+            <button @click="openModal(rule)" class="btn-ghost btn-sm p-1.5 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+              <Pencil :size="14" />
+            </button>
+            <button @click="del(rule.id)" class="btn-ghost btn-sm text-red-400 hover:bg-red-50 p-1.5 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+              <Trash2 :size="14" />
+            </button>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Modal -->
+    <!-- ══ 弹窗 ══════════════════════════════════════════════════ -->
     <Teleport to="body">
       <div v-if="modal" class="modal-overlay" @click.self="modal=null">
-        <div class="modal-box max-w-lg">
-          <div class="flex items-center justify-between p-6 border-b border-slate-100">
-            <h3 class="font-semibold text-slate-900">{{ editing ? t('editDdns') : t('addDdns') }}</h3>
-            <button @click="modal=null" class="btn-ghost btn-sm"><X :size="16" /></button>
-          </div>
-          <div class="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
+        <div class="modal-box">
 
+          <!-- 标题栏：移动端加拖动指示条 -->
+          <div class="flex-shrink-0">
+            <!-- 移动端拖动条 -->
+            <div class="sm:hidden flex justify-center pt-3 pb-1">
+              <div class="w-10 h-1 bg-slate-200 rounded-full"></div>
+            </div>
+            <div class="flex items-center justify-between px-5 sm:px-6 py-3 sm:py-4 border-b border-slate-100">
+              <h3 class="font-semibold text-slate-900 text-base">{{ editing ? t('editDdns') : t('addDdns') }}</h3>
+              <button @click="modal=null" class="btn-ghost btn-sm p-1.5"><X :size="16" /></button>
+            </div>
+          </div>
+
+          <!-- 内容（可滚动） -->
+          <div class="flex-1 overflow-y-auto overscroll-contain px-5 sm:px-6 py-4 space-y-4">
+
+            <!-- 规则名称 -->
             <div>
               <label class="input-label">{{ t('ruleName') }}</label>
               <input v-model="form.name" class="input" placeholder="My DDNS" />
             </div>
 
-            <div class="grid grid-cols-2 gap-4">
+            <!-- DNS 服务商 + IP 版本：移动端单列，sm以上双列 -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
               <div>
                 <label class="input-label">{{ t('dnsProvider') }}</label>
                 <select v-model="form.provider" class="select">
@@ -111,99 +136,215 @@
               </div>
               <div>
                 <label class="input-label">{{ t('ipVersion') }}</label>
-                <select v-model="form.ip_version" class="select" @change="onIfaceChange">
+                <select v-model="form.ip_version" class="select" @change="onIpVersionChange">
                   <option value="ipv4">IPv4</option>
                   <option value="ipv6">IPv6</option>
+                  <option value="dual">IPv4 + IPv6</option>
                 </select>
               </div>
             </div>
 
-            <div>
-              <label class="input-label">{{ t('ipDetectMode') }}</label>
-              <select v-model="form.ip_detect_mode" class="select" @change="onDetectModeChange">
-                <option value="api">{{ t('apiModeOpt') }}</option>
-                <option value="iface">{{ t('ifaceModeOpt') }}</option>
-              </select>
-            </div>
+            <!-- ═══ 单 IP 版本模式 ═══ -->
+            <template v-if="form.ip_version !== 'dual'">
 
-            <template v-if="form.ip_detect_mode === 'iface'">
               <div>
-                <label class="input-label">{{ t('ifaceList') }}</label>
-                <div class="flex gap-2">
-                  <select v-if="interfaces.length" v-model="form.ip_interface" class="select flex-1" @change="onIfaceChange">
-                    <option v-for="i in interfaces" :key="i" :value="i">{{ i }}</option>
-                  </select>
-                  <input v-else v-model="form.ip_interface" class="input flex-1 font-mono" placeholder="eth0" @blur="onIfaceChange" />
-                  <button type="button" class="btn-secondary btn-sm whitespace-nowrap" @click="loadInterfaces">
-                    <RefreshCw :size="13" :class="ifaceLoading ? 'animate-spin' : ''" />
-                  </button>
-                </div>
+                <label class="input-label">{{ t('ipDetectMode') }}</label>
+                <select v-model="form.ip_detect_mode" class="select" @change="onDetectModeChange">
+                  <option value="api">{{ t('apiModeOpt') }}</option>
+                  <option value="iface">{{ t('ifaceModeOpt') }}</option>
+                </select>
               </div>
 
-              <div v-if="form.ip_version === 'ipv6'">
-                <label class="input-label">
-                  {{ t('selectIpv6') }}
-                  <span v-if="ifaceLoading" class="ml-2 text-xs text-amber-500 inline-flex items-center gap-1">
-                    <span class="inline-block w-3 h-3 border-2 border-amber-400 border-t-transparent rounded-full animate-spin"></span>
-                    {{ t('loadingIface') }}
-                  </span>
-                </label>
+              <template v-if="form.ip_detect_mode === 'iface'">
+                <div>
+                  <label class="input-label">{{ t('ifaceList') }}</label>
+                  <div class="flex gap-2">
+                    <select v-if="interfaces.length" v-model="form.ip_interface" class="select flex-1" @change="onIfaceChange">
+                      <option v-for="i in interfaces" :key="i" :value="i">{{ i }}</option>
+                    </select>
+                    <input v-else v-model="form.ip_interface" class="input flex-1 font-mono" placeholder="eth0" @blur="onIfaceChange" />
+                    <button type="button" class="btn-secondary btn-sm px-3 flex-shrink-0" @click="loadInterfaces">
+                      <RefreshCw :size="13" :class="ifaceLoading ? 'animate-spin' : ''" />
+                    </button>
+                  </div>
+                </div>
 
-                    <div v-if="ifaceIPs.length" class="space-y-1.5">
-                  <label v-for="(ip, i) in ifaceIPs" :key="i"
-                         class="flex items-center gap-3 p-2.5 rounded-xl border-2 cursor-pointer transition-all"
-                         :class="(form.ip_index ?? 0) === i
-                           ? 'border-vane-500 bg-vane-50'
-                           : 'border-slate-200 hover:border-vane-300'">
-                    <input type="radio" :value="i" v-model.number="form.ip_index" class="accent-vane-500" />
-                    <span class="font-mono text-sm text-slate-700 flex-1 break-all">{{ ip }}</span>
-                    <span class="text-xs text-slate-400 flex-shrink-0">{{ t('ipIndex', {n: i+1}) }}</span>
+                <div v-if="form.ip_version === 'ipv6'">
+                  <label class="input-label">
+                    {{ t('selectIpv6') }}
+                    <span v-if="ifaceLoading" class="ml-2 text-xs text-amber-500 inline-flex items-center gap-1">
+                      <span class="inline-block w-3 h-3 border-2 border-amber-400 border-t-transparent rounded-full animate-spin"></span>
+                      {{ t('loadingIface') }}
+                    </span>
                   </label>
+                  <div v-if="ifaceIPs.length" class="space-y-1.5">
+                    <label v-for="(ip, i) in ifaceIPs" :key="i"
+                           class="flex items-center gap-3 p-2.5 rounded-xl border-2 cursor-pointer transition-all"
+                           :class="(form.ip_index ?? 0) === i ? 'border-vane-500 bg-vane-50' : 'border-slate-200 hover:border-vane-300'">
+                      <input type="radio" :value="i" v-model.number="form.ip_index" class="accent-vane-500 flex-shrink-0" />
+                      <span class="font-mono text-xs sm:text-sm text-slate-700 flex-1 break-all">{{ ip }}</span>
+                      <span class="text-xs text-slate-400 flex-shrink-0">{{ t('ipIndex', {n: i+1}) }}</span>
+                    </label>
+                  </div>
+                  <div v-else-if="!ifaceLoading && ifaceLoadError"
+                       class="p-3 bg-red-50 border border-red-100 rounded-xl text-xs text-red-600 font-mono break-all">
+                    ⚠ {{ ifaceLoadError }}
+                  </div>
+                  <div v-else-if="!ifaceLoading && form.ip_interface"
+                       class="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-500">
+                    {{ t('noGlobalIpv6') }}
+                  </div>
+                  <p class="text-xs text-slate-400 mt-1.5">{{ t('ipv6Hint') }}</p>
                 </div>
+              </template>
 
-                    <div v-else-if="!ifaceLoading && ifaceLoadError"
-                     class="p-3 bg-red-50 border border-red-100 rounded-xl text-xs text-red-600 font-mono">
-                  ⚠ {{ ifaceLoadError }}
-                </div>
-
-                    <div v-else-if="!ifaceLoading && form.ip_interface"
-                     class="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-500">
-                  {{ t('noGlobalIpv6') }}
-                </div>
-
-                <p class="text-xs text-slate-400 mt-1.5">{{ t('ipv6Hint') }}</p>
+              <div>
+                <label class="input-label">{{ t('domainList') }}</label>
+                <textarea v-model="form.domainsText" class="input font-mono text-sm resize-none" rows="3"
+                          placeholder="home.example.com&#10;*.example.com&#10;example.com"></textarea>
+                <p class="text-xs text-slate-400 mt-1">{{ t('domainListHint') }}</p>
               </div>
+
+              <div>
+                <label class="input-label">{{ t('checkInterval') }}</label>
+                <input v-model.number="form.interval" type="number" min="60" class="input" style="max-width:160px" placeholder="60" />
+              </div>
+
             </template>
 
-            <div>
-              <label class="input-label">{{ t('domainList') }}</label>
-              <textarea v-model="form.domainsText" class="input font-mono text-sm resize-none" rows="4"
-                        placeholder="home.example.com&#10;*.example.com&#10;example.com"></textarea>
-              <p class="text-xs text-slate-400 mt-1">{{ t('domainListHint') }}</p>
-            </div>
+            <!-- ═══ IPv4 + IPv6 双模式 ═══ -->
+            <template v-else>
 
-            <div>
-              <label class="input-label">{{ t('checkInterval') }}</label>
-              <input v-model.number="form.interval" type="number" min="60" class="input max-w-xs" placeholder="300" />
-            </div>
+              <!-- IPv4 块 -->
+              <div class="p-3 sm:p-4 bg-blue-50 rounded-xl border border-blue-100 space-y-3">
+                <h4 class="text-xs font-bold text-blue-700 uppercase tracking-wide">IPv4</h4>
 
-            <!-- Cloudflare -->
+                <div>
+                  <label class="input-label">{{ t('ipv4DetectMode') }}</label>
+                  <select v-model="form.ipv4_detect_mode" class="select" @change="onDualDetectModeChange('ipv4')">
+                    <option value="api">{{ t('apiModeOpt') }}</option>
+                    <option value="iface">{{ t('ifaceModeOpt') }}</option>
+                  </select>
+                </div>
+
+                <template v-if="form.ipv4_detect_mode === 'iface'">
+                  <div>
+                    <label class="input-label">{{ t('ifaceList') }}</label>
+                    <div class="flex gap-2">
+                      <select v-if="interfaces.length" v-model="form.ipv4_interface" class="select flex-1">
+                        <option v-for="i in interfaces" :key="i" :value="i">{{ i }}</option>
+                      </select>
+                      <input v-else v-model="form.ipv4_interface" class="input flex-1 font-mono" placeholder="eth0" />
+                      <button type="button" class="btn-secondary btn-sm px-3 flex-shrink-0" @click="loadInterfaces">
+                        <RefreshCw :size="13" :class="ifaceLoading ? 'animate-spin' : ''" />
+                      </button>
+                    </div>
+                  </div>
+                </template>
+
+                <div>
+                  <label class="input-label">{{ t('ipv4DomainList') }}</label>
+                  <textarea v-model="form.ipv4_domainsText" class="input font-mono text-sm resize-none" rows="3"
+                            placeholder="home.example.com&#10;*.example.com"></textarea>
+                  <p class="text-xs text-slate-400 mt-1">{{ t('domainListHint') }}</p>
+                </div>
+
+                <div>
+                  <label class="input-label">{{ t('ipv4Interval') }}</label>
+                  <input v-model.number="form.ipv4_interval" type="number" min="60" class="input" style="max-width:160px" placeholder="60" />
+                </div>
+              </div>
+
+              <!-- IPv6 块 -->
+              <div class="p-3 sm:p-4 bg-purple-50 rounded-xl border border-purple-100 space-y-3">
+                <h4 class="text-xs font-bold text-purple-700 uppercase tracking-wide">IPv6</h4>
+
+                <div>
+                  <label class="input-label">{{ t('ipv6DetectMode') }}</label>
+                  <select v-model="form.ipv6_detect_mode" class="select" @change="onDualDetectModeChange('ipv6')">
+                    <option value="api">{{ t('apiModeOpt') }}</option>
+                    <option value="iface">{{ t('ifaceModeOpt') }}</option>
+                  </select>
+                </div>
+
+                <template v-if="form.ipv6_detect_mode === 'iface'">
+                  <div>
+                    <label class="input-label">{{ t('ifaceList') }}</label>
+                    <div class="flex gap-2">
+                      <select v-if="interfaces.length" v-model="form.ipv6_interface" class="select flex-1" @change="onDualIpv6IfaceChange">
+                        <option v-for="i in interfaces" :key="i" :value="i">{{ i }}</option>
+                      </select>
+                      <input v-else v-model="form.ipv6_interface" class="input flex-1 font-mono" placeholder="eth0" @blur="onDualIpv6IfaceChange" />
+                      <button type="button" class="btn-secondary btn-sm px-3 flex-shrink-0" @click="loadInterfaces">
+                        <RefreshCw :size="13" :class="ifaceLoading ? 'animate-spin' : ''" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label class="input-label">
+                      {{ t('selectIpv6') }}
+                      <span v-if="ifaceLoading" class="ml-2 text-xs text-amber-500 inline-flex items-center gap-1">
+                        <span class="inline-block w-3 h-3 border-2 border-amber-400 border-t-transparent rounded-full animate-spin"></span>
+                        {{ t('loadingIface') }}
+                      </span>
+                    </label>
+                    <div v-if="ifaceIPs.length" class="space-y-1.5">
+                      <label v-for="(ip, i) in ifaceIPs" :key="i"
+                             class="flex items-center gap-3 p-2.5 rounded-xl border-2 cursor-pointer transition-all"
+                             :class="(form.ipv6_ip_index ?? 0) === i ? 'border-vane-500 bg-vane-50' : 'border-slate-200 hover:border-vane-300'">
+                        <input type="radio" :value="i" v-model.number="form.ipv6_ip_index" class="accent-vane-500 flex-shrink-0" />
+                        <span class="font-mono text-xs sm:text-sm text-slate-700 flex-1 break-all">{{ ip }}</span>
+                        <span class="text-xs text-slate-400 flex-shrink-0">{{ t('ipIndex', {n: i+1}) }}</span>
+                      </label>
+                    </div>
+                    <div v-else-if="!ifaceLoading && ifaceLoadError"
+                         class="p-3 bg-red-50 border border-red-100 rounded-xl text-xs text-red-600 font-mono break-all">
+                      ⚠ {{ ifaceLoadError }}
+                    </div>
+                    <div v-else-if="!ifaceLoading && form.ipv6_interface"
+                         class="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-500">
+                      {{ t('noGlobalIpv6') }}
+                    </div>
+                    <p class="text-xs text-slate-400 mt-1.5">{{ t('ipv6Hint') }}</p>
+                  </div>
+                </template>
+
+                <div>
+                  <label class="input-label">{{ t('ipv6DomainList') }}</label>
+                  <textarea v-model="form.ipv6_domainsText" class="input font-mono text-sm resize-none" rows="3"
+                            placeholder="home.example.com&#10;*.example.com"></textarea>
+                  <p class="text-xs text-slate-400 mt-1">{{ t('domainListHint') }}</p>
+                </div>
+
+                <div>
+                  <label class="input-label">{{ t('ipv6Interval') }}</label>
+                  <input v-model.number="form.ipv6_interval" type="number" min="60" class="input" style="max-width:160px" placeholder="60" />
+                </div>
+              </div>
+
+            </template>
+
+            <!-- DNS 服务商配置 -->
             <template v-if="form.provider === 'cloudflare'">
-              <div class="p-4 bg-amber-50 rounded-xl border border-amber-100 space-y-3">
+              <div class="p-3 sm:p-4 bg-amber-50 rounded-xl border border-amber-100 space-y-3">
                 <h4 class="text-xs font-bold text-amber-700 uppercase tracking-wide">{{ t('cfConfig') }}</h4>
                 <div>
                   <label class="input-label">{{ t('cfApiToken') }} <span class="text-red-400">*</span></label>
                   <input v-model="form.provider_conf.api_token" class="input font-mono text-xs" placeholder="API Token (DNS:Edit)" />
                 </div>
                 <div>
-                  <label class="input-label">{{ t('cfZoneId') }} <span class="text-xs font-normal text-slate-400 ml-1">{{ t('cfZoneIdHint') }}</span></label>
+                  <label class="input-label">
+                    {{ t('cfZoneId') }}
+                    <span class="text-xs font-normal text-slate-400 ml-1 normal-case tracking-normal">{{ t('cfZoneIdHint') }}</span>
+                  </label>
                   <input v-model="form.provider_conf.zone_id" class="input font-mono text-xs" :placeholder="t('cfZonePlaceholder')" />
                 </div>
               </div>
             </template>
 
             <template v-if="form.provider === 'alidns'">
-              <div class="p-4 bg-blue-50 rounded-xl border border-blue-100 space-y-3">
+              <div class="p-3 sm:p-4 bg-blue-50 rounded-xl border border-blue-100 space-y-3">
                 <h4 class="text-xs font-bold text-blue-700 uppercase tracking-wide">{{ t('alidnsConfig') }}</h4>
                 <div><label class="input-label">Access Key ID</label><input v-model="form.provider_conf.access_key_id" class="input font-mono text-xs" /></div>
                 <div><label class="input-label">Access Key Secret</label><input v-model="form.provider_conf.access_key_secret" class="input font-mono text-xs" type="password" /></div>
@@ -211,26 +352,35 @@
             </template>
 
             <template v-if="form.provider === 'dnspod' || form.provider === 'tencentcloud'">
-              <div class="p-4 bg-blue-50 rounded-xl border border-blue-100 space-y-3">
+              <div class="p-3 sm:p-4 bg-blue-50 rounded-xl border border-blue-100 space-y-3">
                 <h4 class="text-xs font-bold text-blue-700 uppercase tracking-wide">{{ t('dnspodConfig', {name: form.provider === 'dnspod' ? 'DNSPod' : t('tencentCloud')}) }}</h4>
                 <div><label class="input-label">SecretId</label><input v-model="form.provider_conf.secret_id" class="input font-mono text-xs" /></div>
                 <div><label class="input-label">SecretKey</label><input v-model="form.provider_conf.secret_key" class="input font-mono text-xs" type="password" /></div>
               </div>
             </template>
 
-            <div class="flex items-center gap-3">
-              <label class="toggle">
-                <input type="checkbox" v-model="form.enabled" />
-                <div class="toggle-track"></div><div class="toggle-thumb"></div>
-              </label>
-              <span class="text-sm text-slate-600">{{ t('enableAfterCreate') }}</span>
-            </div>
+          </div>
 
+          <!-- 底部操作栏（fixed at bottom, never scrolls away）-->
+          <div class="flex-shrink-0 border-t border-slate-100 px-5 sm:px-6 py-3 sm:py-4">
+            <!-- 移动端：启用行 + 按钮行各占一行；sm以上：左右并排 -->
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <!-- 启用开关 -->
+              <div class="flex items-center gap-2">
+                <span class="text-sm text-slate-600">{{ t('enableAfterCreate') }}</span>
+                <label class="toggle">
+                  <input type="checkbox" v-model="form.enabled" />
+                  <div class="toggle-track"></div><div class="toggle-thumb"></div>
+                </label>
+              </div>
+              <!-- 保存 + 取消 -->
+              <div class="flex gap-2 sm:gap-3">
+                <button class="btn-primary flex-1 sm:flex-none sm:min-w-[80px] justify-center" @click="save">{{ t('save') }}</button>
+                <button class="btn-secondary flex-1 sm:flex-none sm:min-w-[80px] justify-center" @click="modal=null">{{ t('cancel') }}</button>
+              </div>
+            </div>
           </div>
-          <div class="flex justify-end gap-3 px-6 pb-6">
-            <button class="btn-secondary" @click="modal=null">{{ t('cancel') }}</button>
-            <button class="btn-primary" @click="save">{{ editing ? t('save') : t('create') }}</button>
-          </div>
+
         </div>
       </div>
     </Teleport>
@@ -255,8 +405,13 @@ const ifaceIPs = ref([])
 const ifaceTestResult = ref('')
 const ifaceLoading = ref(false)
 const ifaceLoadError = ref('')
-// per-rule IP fetch status: { [id]: 'fetching' | 'ok' | 'fail' }
 const ipStatus = ref({})
+
+function ipVersionLabel(v) {
+  if (v === 'ipv6') return 'IPv6'
+  if (v === 'dual') return 'IPv4+IPv6'
+  return 'IPv4'
+}
 
 function effectiveDomains(rule) {
   if (rule.domains?.length) return rule.domains
@@ -273,7 +428,10 @@ function defaultForm() {
     name: '', provider: 'cloudflare', domainsText: '',
     ip_version: 'ipv4', ip_detect_mode: 'api',
     ip_interface: '', ip_index: 0,
-    interval: 300, enabled: true, provider_conf: {}
+    interval: 60, enabled: true, provider_conf: {},
+    ipv4_detect_mode: 'api', ipv4_interface: '', ipv4_domainsText: '', ipv4_interval: 60,
+    ipv6_detect_mode: 'api', ipv6_interface: '', ipv6_domainsText: '', ipv6_interval: 60,
+    ipv6_ip_index: 0,
   }
 }
 
@@ -289,7 +447,6 @@ async function loadInterfaces() {
     if (interfaces.value.length && !form.value.ip_interface) {
       form.value.ip_interface = interfaces.value[0]
     }
-    // Always trigger IP load after interface list is ready
     onIfaceChange()
   } catch {}
 }
@@ -301,7 +458,6 @@ async function loadIfaceIPs(iface, version) {
   try {
     const { data } = await api.get('/ddns/iface-ips', { params: { iface, version } })
     ifaceIPs.value = data || []
-    // Auto-select first address if current index out of range
     if (ifaceIPs.value.length && (form.value.ip_index ?? 0) >= ifaceIPs.value.length) {
       form.value.ip_index = 0
     }
@@ -321,8 +477,14 @@ function onIfaceChange() {
   }
 }
 
-// Called when user switches to "通过网卡获取":
-// load physical interfaces and immediately detect IPs on the first one
+function onIpVersionChange() {
+  if (form.value.ip_version === 'dual') {
+    loadInterfaces()
+  } else {
+    onIfaceChange()
+  }
+}
+
 async function onDetectModeChange() {
   if (form.value.ip_detect_mode !== 'iface') return
   ifaceIPs.value = []
@@ -331,9 +493,7 @@ async function onDetectModeChange() {
     const { data } = await api.get('/ddns/interfaces')
     interfaces.value = data || []
     if (interfaces.value.length) {
-      // Auto-select first physical interface
       form.value.ip_interface = interfaces.value[0]
-      // Auto-load IPv6 addresses if in IPv6 mode
       if (form.value.ip_version === 'ipv6') {
         loadIfaceIPs(form.value.ip_interface, 'ipv6')
       }
@@ -341,7 +501,25 @@ async function onDetectModeChange() {
   } catch {}
 }
 
+async function onDualDetectModeChange(which) {
+  try {
+    const { data } = await api.get('/ddns/interfaces')
+    interfaces.value = data || []
+    if (interfaces.value.length) {
+      if (which === 'ipv4' && !form.value.ipv4_interface) form.value.ipv4_interface = interfaces.value[0]
+      if (which === 'ipv6' && !form.value.ipv6_interface) {
+        form.value.ipv6_interface = interfaces.value[0]
+        loadIfaceIPs(form.value.ipv6_interface, 'ipv6')
+      }
+    }
+  } catch {}
+}
 
+function onDualIpv6IfaceChange() {
+  ifaceIPs.value = []
+  ifaceLoadError.value = ''
+  if (form.value.ipv6_interface) loadIfaceIPs(form.value.ipv6_interface, 'ipv6')
+}
 
 function openModal(rule = null) {
   editing.value = !!rule
@@ -350,12 +528,14 @@ function openModal(rule = null) {
   if (rule) {
     const domains = rule.domains?.length ? rule.domains : effectiveDomains(rule)
     form.value = {
+      ...defaultForm(),
       ...rule,
       provider_conf: { ...rule.provider_conf },
       domainsText: domains.join('\n'),
       ip_detect_mode: rule.ip_detect_mode || 'api',
       ip_interface: rule.ip_interface || '',
       ip_index: rule.ip_index ?? 0,
+      interval: rule.interval || 60,
     }
     if (rule.ip_detect_mode === 'iface' && rule.ip_version === 'ipv6') {
       loadIfaceIPs(rule.ip_interface, 'ipv6')
@@ -368,8 +548,27 @@ function openModal(rule = null) {
 }
 
 async function save() {
-  const domains = form.value.domainsText
-    .split('\n').map(s => s.trim()).filter(Boolean)
+  if (form.value.ip_version === 'dual') {
+    const base = { name: form.value.name, provider: form.value.provider, provider_conf: form.value.provider_conf, enabled: form.value.enabled }
+    const v4domains = form.value.ipv4_domainsText.split('\n').map(s => s.trim()).filter(Boolean)
+    const v6domains = form.value.ipv6_domainsText.split('\n').map(s => s.trim()).filter(Boolean)
+    const payloadV4 = { ...base, ip_version: 'ipv4', ip_detect_mode: form.value.ipv4_detect_mode, ip_interface: form.value.ipv4_interface, domains: v4domains, interval: form.value.ipv4_interval || 60 }
+    const payloadV6 = { ...base, ip_version: 'ipv6', ip_detect_mode: form.value.ipv6_detect_mode, ip_interface: form.value.ipv6_interface, ip_index: form.value.ipv6_ip_index ?? 0, domains: v6domains, interval: form.value.ipv6_interval || 60 }
+    if (editing.value) {
+      await api.put(`/ddns/${form.value.id}`, payloadV4)
+      const { data: nv6 } = await api.post('/ddns', payloadV6)
+      modal.value = null; await load()
+      triggerRefreshWithStatus(form.value.id); triggerRefreshWithStatus(nv6.id)
+    } else {
+      const { data: r4 } = await api.post('/ddns', payloadV4)
+      const { data: r6 } = await api.post('/ddns', payloadV6)
+      modal.value = null; await load()
+      triggerRefreshWithStatus(r4.id); triggerRefreshWithStatus(r6.id)
+    }
+    return
+  }
+
+  const domains = form.value.domainsText.split('\n').map(s => s.trim()).filter(Boolean)
   const payload = { ...form.value, domains, domainsText: undefined }
   let savedId = form.value.id
   if (editing.value) {
@@ -380,16 +579,13 @@ async function save() {
   }
   modal.value = null
   await load()
-  // Trigger immediate IP detection and show status
   triggerRefreshWithStatus(savedId)
 }
 
-// Trigger a refresh and track its status in ipStatus
 async function triggerRefreshWithStatus(id) {
   ipStatus.value[id] = 'fetching'
   try {
     await api.post(`/ddns/${id}/refresh`)
-    // Poll until last_ip appears or timeout (30s)
     const deadline = Date.now() + 30000
     while (Date.now() < deadline) {
       await new Promise(r => setTimeout(r, 1200))
@@ -397,12 +593,10 @@ async function triggerRefreshWithStatus(id) {
       const rule = rules.value.find(r => r.id === id)
       if (rule?.last_ip) {
         ipStatus.value[id] = 'ok'
-        // Clear 'ok' status after 5s so it looks normal
         setTimeout(() => { delete ipStatus.value[id] }, 5000)
         return
       }
     }
-    // Timeout — still no IP
     ipStatus.value[id] = 'fail'
     setTimeout(() => { delete ipStatus.value[id] }, 8000)
   } catch {
