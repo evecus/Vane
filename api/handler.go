@@ -72,6 +72,7 @@ func (h *Handler) Register(r *gin.Engine) {
 	// Settings
 	auth.GET("/settings", h.getSettings)
 	auth.PUT("/settings", h.updateSettings)
+	auth.POST("/settings/welcome-shown", h.markWelcomeShown)
 	auth.GET("/settings/backup", h.backupConfig)
 	auth.POST("/settings/restore", h.restoreConfig)
 
@@ -348,11 +349,23 @@ func (h *Handler) getSettings(c *gin.Context) {
 	h.cfg.RLock()
 	defer h.cfg.RUnlock()
 	c.JSON(200, gin.H{
-		"username":   h.cfg.Admin.Username,
-		"port":       h.cfg.Admin.Port,
-		"safe_entry": h.cfg.Admin.SafeEntry,
-		"version":    h.version,
+		"username":       h.cfg.Admin.Username,
+		"port":           h.cfg.Admin.Port,
+		"safe_entry":     h.cfg.Admin.SafeEntry,
+		"version":        h.version,
+		"welcome_shown":  h.cfg.Admin.WelcomeShown,
 	})
+}
+
+func (h *Handler) markWelcomeShown(c *gin.Context) {
+	h.cfg.Lock()
+	h.cfg.Admin.WelcomeShown = true
+	h.cfg.Unlock()
+	if err := h.cfg.SaveAdmin(); err != nil {
+		c.JSON(500, gin.H{"error": "保存失败: " + err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"ok": true})
 }
 
 func (h *Handler) updateSettings(c *gin.Context) {
@@ -369,6 +382,7 @@ func (h *Handler) updateSettings(c *gin.Context) {
 	}
 	h.cfg.Lock()
 	oldPort := h.cfg.Admin.Port
+	oldSafeEntry := h.cfg.Admin.SafeEntry
 	// Require current password confirmation before changing credentials
 	if req.NewPassword != "" {
 		if !h.cfg.Admin.CheckPassword(req.CurrentPassword) {
@@ -403,7 +417,14 @@ func (h *Handler) updateSettings(c *gin.Context) {
 
 	// If port changed, respond first then restart the process so it binds the new port.
 	portChanged := req.Port > 0 && req.Port != oldPort
-	c.JSON(200, gin.H{"ok": true, "restart": portChanged})
+	safeEntryChanged := strings.Trim(req.SafeEntry, "/") != strings.Trim(oldSafeEntry, "/")
+	needsLogout := portChanged || safeEntryChanged
+
+	if needsLogout {
+		sessions.clearAll()
+	}
+
+	c.JSON(200, gin.H{"ok": true, "restart": portChanged, "logout": needsLogout})
 
 	if portChanged {
 		go func() {
