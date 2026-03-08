@@ -1,12 +1,5 @@
 <template>
   <div class="animate-fade-in">
-    <div class="page-header mb-6">
-      <div>
-        <h1 class="page-title">{{ i18n.t('systemSettings') }}</h1>
-        <p class="page-subtitle">{{ i18n.t('systemSettingsDesc') }}</p>
-      </div>
-    </div>
-
     <!--
       桌面：2列网格，左列=账号安全+系统配置，右列=备份与恢复+关于Vane
       移动：单列，顺序 账号安全→系统配置→备份与恢复→关于Vane
