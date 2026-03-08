@@ -1,8 +1,10 @@
 package webservice
 
 import (
+	"bufio"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -15,7 +17,7 @@ import (
 	"github.com/yourusername/vane/config"
 )
 
-// ─── Access log store (in-memory ring buffer, 2000 entries) ──────────────────
+// ─── Access log store ─────────────────────────────────────────────────────────
 
 const maxLogs = 2000
 
@@ -61,6 +63,108 @@ func (r *responseRecorder) WriteHeader(code int) {
 	r.ResponseWriter.WriteHeader(code)
 }
 
+// ─── 协议嗅探：单端口同时支持 HTTP 和 HTTPS ───────────────────────────────────
+//
+// 原理：TCP 连接建立后，偷看第一个字节。
+//   0x16 = TLS ClientHello → 走 TLS 握手
+//   其他  = 明文 HTTP       → 直接回复 301 重定向到 HTTPS
+
+type peekConn struct {
+	net.Conn
+	r io.Reader
+}
+
+func (c *peekConn) Read(b []byte) (int, error) { return c.r.Read(b) }
+
+type sniffListener struct {
+	net.Listener
+	httpCh chan net.Conn
+	tlsCh  chan net.Conn
+	done   chan struct{}
+}
+
+func newSniffListener(inner net.Listener) *sniffListener {
+	sl := &sniffListener{
+		Listener: inner,
+		httpCh:   make(chan net.Conn, 64),
+		tlsCh:    make(chan net.Conn, 64),
+		done:     make(chan struct{}),
+	}
+	go sl.dispatch()
+	return sl
+}
+
+func (sl *sniffListener) dispatch() {
+	for {
+		conn, err := sl.Listener.Accept()
+		if err != nil {
+			select {
+			case <-sl.done:
+			default:
+				log.Printf("[webservice] accept error: %v", err)
+			}
+			// 关闭两个 channel，让 chanListener.Accept() 退出
+			close(sl.httpCh)
+			close(sl.tlsCh)
+			return
+		}
+		go func(c net.Conn) {
+			br := bufio.NewReader(c)
+			b, err := br.Peek(1)
+			if err != nil {
+				c.Close()
+				return
+			}
+			pc := &peekConn{Conn: c, r: br}
+			if b[0] == 0x16 { // TLS ClientHello
+				sl.tlsCh <- pc
+			} else {
+				sl.httpCh <- pc
+			}
+		}(conn)
+	}
+}
+
+func (sl *sniffListener) close() {
+	select {
+	case <-sl.done:
+	default:
+		close(sl.done)
+	}
+	sl.Listener.Close()
+}
+
+// chanListener 把 chan net.Conn 包装成 net.Listener
+type chanListener struct {
+	ch     chan net.Conn
+	addr   net.Addr
+	once   sync.Once
+	closed chan struct{}
+}
+
+func newChanListener(ch chan net.Conn, addr net.Addr) *chanListener {
+	return &chanListener{ch: ch, addr: addr, closed: make(chan struct{})}
+}
+
+func (cl *chanListener) Accept() (net.Conn, error) {
+	select {
+	case c, ok := <-cl.ch:
+		if !ok {
+			return nil, fmt.Errorf("listener closed")
+		}
+		return c, nil
+	case <-cl.closed:
+		return nil, fmt.Errorf("listener closed")
+	}
+}
+
+func (cl *chanListener) Close() error {
+	cl.once.Do(func() { close(cl.closed) })
+	return nil
+}
+
+func (cl *chanListener) Addr() net.Addr { return cl.addr }
+
 // ─── Manager ─────────────────────────────────────────────────────────────────
 
 type Manager struct {
@@ -70,16 +174,28 @@ type Manager struct {
 }
 
 type managedServer struct {
-	httpsSrv    *http.Server // main HTTPS server on listen_port
-	redirectSrv *http.Server // HTTP→HTTPS redirect on listen_port-1 (or 80 if port==443)
+	sniff     *sniffListener
+	httpSrv   *http.Server
+	httpsSrv  *http.Server
+	httpLn    *chanListener
+	httpsLn   *chanListener
 }
 
 func (ms *managedServer) close() {
+	if ms.httpSrv != nil {
+		_ = ms.httpSrv.Close()
+	}
 	if ms.httpsSrv != nil {
 		_ = ms.httpsSrv.Close()
 	}
-	if ms.redirectSrv != nil {
-		_ = ms.redirectSrv.Close()
+	if ms.httpLn != nil {
+		_ = ms.httpLn.Close()
+	}
+	if ms.httpsLn != nil {
+		_ = ms.httpsLn.Close()
+	}
+	if ms.sniff != nil {
+		ms.sniff.close()
 	}
 }
 
@@ -102,9 +218,9 @@ func (m *Manager) StartAll() {
 	}
 }
 
-// Start launches a web service. All services are HTTPS-only.
-// A companion HTTP server on the redirect port automatically issues 301→HTTPS.
-// If no valid TLS cert is configured, Start returns an error — HTTP fallback is intentionally removed.
+// Start 在单个端口上同时监听 HTTP 和 HTTPS。
+// HTTP 请求自动 301 重定向到 https://同域名:同端口。
+// 没有证书则拒绝启动。
 func (m *Manager) Start(id string) error {
 	m.cfg.RLock()
 	var svc *config.WebService
@@ -120,7 +236,7 @@ func (m *Manager) Start(id string) error {
 		return fmt.Errorf("service %s not found", id)
 	}
 
-	// Stop any existing instance first
+	// 先停掉旧实例
 	m.mu.Lock()
 	if old, ok := m.servers[id]; ok {
 		old.close()
@@ -128,54 +244,39 @@ func (m *Manager) Start(id string) error {
 	}
 	m.mu.Unlock()
 
-	// Require a valid TLS certificate — no HTTP-only fallback
+	// 必须有有效证书
 	certPEM, keyPEM := m.getCertPEM(svc.TLSCertID)
 	if certPEM == "" || keyPEM == "" {
-		return fmt.Errorf("service %q requires a TLS certificate but none is configured or the cert has not been issued yet", svc.Name)
+		return fmt.Errorf("service %q requires a TLS certificate but none is configured or issued yet", svc.Name)
 	}
 	tlsCert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
 	if err != nil {
 		return fmt.Errorf("invalid TLS certificate for service %q: %w", svc.Name, err)
 	}
 
-	ms := &managedServer{}
-	router := m.buildRouter(svc)
-
-	// ── HTTPS server on listen_port ──
-	httpsAddr := fmt.Sprintf("0.0.0.0:%d", svc.ListenPort)
-	ms.httpsSrv = &http.Server{
-		Addr:    httpsAddr,
-		Handler: router,
-		TLSConfig: &tls.Config{
-			Certificates: []tls.Certificate{tlsCert},
-			MinVersion:   tls.VersionTLS12,
-		},
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
-		IdleTimeout:  120 * time.Second,
+	// 绑定端口
+	addr := fmt.Sprintf("0.0.0.0:%d", svc.ListenPort)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", addr, err)
 	}
-	go func() {
-		log.Printf("[webservice] HTTPS :%d  (service %q)", svc.ListenPort, svc.Name)
-		if err := ms.httpsSrv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
-			log.Printf("[webservice] HTTPS :%d error: %v", svc.ListenPort, err)
-		}
-	}()
 
-	// ── HTTP redirect companion ──
-	// Convention: if HTTPS is on 443 → redirect from 80
-	//             if HTTPS is on any other port → redirect from that port - 1
-	//             (operator should configure their firewall/NAT accordingly)
-	redirectPort := svc.ListenPort - 1
-	if svc.ListenPort == 443 {
-		redirectPort = 80
+	sl := newSniffListener(ln)
+	httpLn := newChanListener(sl.httpCh, ln.Addr())
+	httpsLn := newChanListener(sl.tlsCh, ln.Addr())
+
+	ms := &managedServer{
+		sniff:   sl,
+		httpLn:  httpLn,
+		httpsLn: httpsLn,
 	}
+
 	httpsPort := svc.ListenPort
-	redirectAddr := fmt.Sprintf("0.0.0.0:%d", redirectPort)
-	ms.redirectSrv = &http.Server{
-		Addr: redirectAddr,
+
+	// ── HTTP server：收到明文请求，301 → https://host:port/path ──
+	ms.httpSrv = &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			host := r.Host
-			// Strip port if present, then re-attach HTTPS port (only if non-standard)
 			hostName := host
 			if h, _, err := net.SplitHostPort(host); err == nil {
 				hostName = h
@@ -192,9 +293,31 @@ func (m *Manager) Start(id string) error {
 		WriteTimeout: 10 * time.Second,
 	}
 	go func() {
-		log.Printf("[webservice] HTTP→HTTPS redirect :%d → :%d  (service %q)", redirectPort, httpsPort, svc.Name)
-		if err := ms.redirectSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("[webservice] redirect :%d error: %v", redirectPort, err)
+		log.Printf("[webservice] HTTP→HTTPS redirect on :%d  (service %q)", httpsPort, svc.Name)
+		if err := ms.httpSrv.Serve(httpLn); err != nil && err.Error() != "listener closed" {
+			log.Printf("[webservice] HTTP redirect error: %v", err)
+		}
+	}()
+
+	// ── HTTPS server：TLS 连接，正常反代 ──
+	router := m.buildRouter(svc)
+	tlsCfg := &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+		MinVersion:   tls.VersionTLS12,
+	}
+	ms.httpsSrv = &http.Server{
+		Handler:      router,
+		TLSConfig:    tlsCfg,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+	go func() {
+		log.Printf("[webservice] HTTPS :%d  (service %q)", httpsPort, svc.Name)
+		// ServeTLS 的第2/3参数传空字符串，证书已在 TLSConfig 里
+		tlsLn := tls.NewListener(httpsLn, tlsCfg)
+		if err := ms.httpsSrv.Serve(tlsLn); err != nil && err != http.ErrServerClosed && err.Error() != "listener closed" {
+			log.Printf("[webservice] HTTPS error: %v", err)
 		}
 	}()
 
@@ -213,7 +336,7 @@ func (m *Manager) Stop(id string) {
 	}
 }
 
-// buildRouter creates an http.Handler that dispatches by Host header.
+// buildRouter 按 Host header 分发到对应后端
 func (m *Manager) buildRouter(svc *config.WebService) http.Handler {
 	type entry struct {
 		route config.WebRoute
@@ -236,7 +359,6 @@ func (m *Manager) buildRouter(svc *config.WebService) http.Handler {
 			orig(req)
 			req.Host = target.Host
 		}
-		// Suppress noisy upstream error logs for broken pipes
 		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Printf("[webservice] proxy error %s: %v", r.URL, err)
 			http.Error(w, "Bad Gateway", http.StatusBadGateway)
@@ -270,8 +392,6 @@ func (m *Manager) buildRouter(svc *config.WebService) http.Handler {
 	})
 }
 
-// logAccess records one access. Client IP is derived from the TCP connection
-// only — X-Forwarded-For and X-Real-IP are never trusted to prevent spoofing.
 func logAccess(svcID, routeID, domain string, r *http.Request, status int, dur time.Duration) {
 	clientIP := r.RemoteAddr
 	if ip, _, err := net.SplitHostPort(clientIP); err == nil {
