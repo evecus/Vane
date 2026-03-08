@@ -281,18 +281,14 @@ const wsRules = ref([])
 const sysinfo = ref(null)
 
 // ── First-login modal ──────────────────────────────────────────────────────
-const WELCOME_KEY = 'vane_welcome_shown'
 const showWelcomeModal = ref(false)
-function checkWelcomeModal() {
-  if (!localStorage.getItem(WELCOME_KEY)) showWelcomeModal.value = true
-}
-function dismissModal() {
-  localStorage.setItem(WELCOME_KEY, '1')
+async function dismissModal() {
   showWelcomeModal.value = false
+  try { await api.post('/settings/welcome-shown') } catch {}
 }
-function goToSettings() {
-  localStorage.setItem(WELCOME_KEY, '1')
+async function goToSettings() {
   showWelcomeModal.value = false
+  try { await api.post('/settings/welcome-shown') } catch {}
   router.push('/settings')
 }
 
@@ -327,9 +323,10 @@ function domainLabel(r) {
 // ── Data loading ───────────────────────────────────────────────────────────
 async function load() {
   try {
-    const [db, certsRes, ddnsRes, pfRes, wsRes, sysinfoRes] = await Promise.all([
+    const [db, certsRes, ddnsRes, pfRes, wsRes, sysinfoRes, settingsRes] = await Promise.all([
       api.get('/dashboard'), api.get('/tls'), api.get('/ddns'),
       api.get('/portforward'), api.get('/webservice'), api.get('/sysinfo'),
+      api.get('/settings'),
     ])
     dashboard.value = db.data
     certs.value = certsRes.data
@@ -337,13 +334,15 @@ async function load() {
     pfRules.value = pfRes.data
     wsRules.value = wsRes.data
     sysinfo.value = sysinfoRes.data
+    if (!settingsRes.data.welcome_shown) {
+      showWelcomeModal.value = true
+    }
   } catch {}
 }
 
 let sysinfoTimer
 onMounted(() => {
   load()
-  checkWelcomeModal()
   sysinfoTimer = setInterval(async () => {
     try { sysinfo.value = (await api.get('/sysinfo')).data } catch {}
   }, 10000)
