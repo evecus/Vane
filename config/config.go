@@ -196,7 +196,6 @@ func (dd *DataDir) migrate() error {
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL DEFAULT '',
 			listen_port INTEGER NOT NULL,
-			tls_cert_id TEXT NOT NULL DEFAULT '',
 			enable_https INTEGER NOT NULL DEFAULT 1,
 			enabled INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL
@@ -207,6 +206,8 @@ func (dd *DataDir) migrate() error {
 			domain TEXT NOT NULL DEFAULT '',
 			backend_url_enc TEXT NOT NULL DEFAULT '',
 			enabled INTEGER NOT NULL DEFAULT 0,
+			matched_cert_id TEXT NOT NULL DEFAULT '',
+			cert_status TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
 			FOREIGN KEY(service_id) REFERENCES web_services(id) ON DELETE CASCADE
 		)`,
@@ -243,6 +244,10 @@ func (dd *DataDir) migrate() error {
 	}
 	// Migrate existing databases that may not have the welcome_shown column
 	_, _ = dd.db.Exec(`ALTER TABLE admin ADD COLUMN welcome_shown INTEGER NOT NULL DEFAULT 0`)
+	// Migrate web_routes to add cert matching columns
+	_, _ = dd.db.Exec(`ALTER TABLE web_routes ADD COLUMN matched_cert_id TEXT NOT NULL DEFAULT ''`)
+	_, _ = dd.db.Exec(`ALTER TABLE web_routes ADD COLUMN cert_status TEXT NOT NULL DEFAULT ''`)
+	// Migrate web_services to drop tls_cert_id (SQLite can't DROP columns, just ignore it on load)
 	return nil
 }
 
@@ -337,7 +342,6 @@ type WebService struct {
 	ID          string     `json:"id"`
 	Name        string     `json:"name"`
 	ListenPort  int        `json:"listen_port"`
-	TLSCertID   string     `json:"tls_cert_id"`
 	EnableHTTPS bool       `json:"enable_https"`
 	Enabled     bool       `json:"enabled"`
 	Routes      []WebRoute `json:"routes"`
@@ -345,11 +349,13 @@ type WebService struct {
 }
 
 type WebRoute struct {
-	ID         string `json:"id"`
-	Domain     string `json:"domain"`
-	BackendURL string `json:"backend_url"`
-	Enabled    bool   `json:"enabled"`
-	CreatedAt  string `json:"created_at"`
+	ID            string `json:"id"`
+	Domain        string `json:"domain"`
+	BackendURL    string `json:"backend_url"`
+	Enabled       bool   `json:"enabled"`
+	MatchedCertID string `json:"matched_cert_id"`
+	CertStatus    string `json:"cert_status"` // "ok" | "no_cert" | "cert_inactive"
+	CreatedAt     string `json:"created_at"`
 }
 
 type WebAccessLog struct {
@@ -487,7 +493,7 @@ func (c *Config) loadFromDB() error {
 	}
 
 	// WebServices + Routes
-	wsrows, err := db.Query(`SELECT id, name, listen_port, tls_cert_id, enable_https, enabled, created_at FROM web_services ORDER BY created_at`)
+	wsrows, err := db.Query(`SELECT id, name, listen_port, enable_https, enabled, created_at FROM web_services ORDER BY created_at`)
 	if err != nil {
 		return fmt.Errorf("load web_services: %w", err)
 	}
@@ -495,12 +501,12 @@ func (c *Config) loadFromDB() error {
 	for wsrows.Next() {
 		var svc WebService
 		var httpsInt, enabledInt int
-		if err := wsrows.Scan(&svc.ID, &svc.Name, &svc.ListenPort, &svc.TLSCertID, &httpsInt, &enabledInt, &svc.CreatedAt); err != nil {
+		if err := wsrows.Scan(&svc.ID, &svc.Name, &svc.ListenPort, &httpsInt, &enabledInt, &svc.CreatedAt); err != nil {
 			return err
 		}
 		svc.EnableHTTPS = httpsInt == 1
 		svc.Enabled = enabledInt == 1
-		rrows, err := db.Query(`SELECT id, domain, backend_url_enc, enabled, created_at FROM web_routes WHERE service_id=? ORDER BY created_at`, svc.ID)
+		rrows, err := db.Query(`SELECT id, domain, backend_url_enc, enabled, matched_cert_id, cert_status, created_at FROM web_routes WHERE service_id=? ORDER BY created_at`, svc.ID)
 		if err != nil {
 			return err
 		}
@@ -508,7 +514,7 @@ func (c *Config) loadFromDB() error {
 			var route WebRoute
 			var renabledInt int
 			var backendEnc string
-			if err := rrows.Scan(&route.ID, &route.Domain, &backendEnc, &renabledInt, &route.CreatedAt); err != nil {
+			if err := rrows.Scan(&route.ID, &route.Domain, &backendEnc, &renabledInt, &route.MatchedCertID, &route.CertStatus, &route.CreatedAt); err != nil {
 				rrows.Close()
 				return err
 			}
@@ -634,9 +640,9 @@ func (c *Config) DeleteDDNS(id string) error {
 
 func (c *Config) SaveWebService(svc WebService) error {
 	_, err := c.dataDir.db.Exec(
-		`INSERT INTO web_services(id,name,listen_port,tls_cert_id,enable_https,enabled,created_at) VALUES(?,?,?,?,?,?,?)
-		 ON CONFLICT(id) DO UPDATE SET name=excluded.name, listen_port=excluded.listen_port, tls_cert_id=excluded.tls_cert_id, enable_https=excluded.enable_https, enabled=excluded.enabled`,
-		svc.ID, svc.Name, svc.ListenPort, svc.TLSCertID, boolToInt(svc.EnableHTTPS), boolToInt(svc.Enabled), svc.CreatedAt,
+		`INSERT INTO web_services(id,name,listen_port,enable_https,enabled,created_at) VALUES(?,?,?,?,?,?)
+		 ON CONFLICT(id) DO UPDATE SET name=excluded.name, listen_port=excluded.listen_port, enable_https=excluded.enable_https, enabled=excluded.enabled`,
+		svc.ID, svc.Name, svc.ListenPort, boolToInt(svc.EnableHTTPS), boolToInt(svc.Enabled), svc.CreatedAt,
 	)
 	return err
 }
@@ -653,9 +659,9 @@ func (c *Config) SaveWebRoute(svcID string, route WebRoute) error {
 		return err
 	}
 	_, err = c.dataDir.db.Exec(
-		`INSERT INTO web_routes(id,service_id,domain,backend_url_enc,enabled,created_at) VALUES(?,?,?,?,?,?)
-		 ON CONFLICT(id) DO UPDATE SET domain=excluded.domain, backend_url_enc=excluded.backend_url_enc, enabled=excluded.enabled`,
-		route.ID, svcID, route.Domain, backendEnc, boolToInt(route.Enabled), route.CreatedAt,
+		`INSERT INTO web_routes(id,service_id,domain,backend_url_enc,enabled,matched_cert_id,cert_status,created_at) VALUES(?,?,?,?,?,?,?,?)
+		 ON CONFLICT(id) DO UPDATE SET domain=excluded.domain, backend_url_enc=excluded.backend_url_enc, enabled=excluded.enabled, matched_cert_id=excluded.matched_cert_id, cert_status=excluded.cert_status`,
+		route.ID, svcID, route.Domain, backendEnc, boolToInt(route.Enabled), route.MatchedCertID, route.CertStatus, route.CreatedAt,
 	)
 	return err
 }
