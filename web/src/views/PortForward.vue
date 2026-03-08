@@ -1,10 +1,10 @@
 <template>
   <div class="space-y-4 sm:space-y-6 animate-fade-in">
 
-    <!-- Header：去除副标题，按钮移动端全宽 -->
-    <div class="flex items-center justify-between gap-3">
+    <!-- 页面标题 -->
+    <div class="page-header">
       <h1 class="page-title">{{ t('pfTitle') }}</h1>
-      <button class="btn-primary flex-shrink-0" @click="openModal()">
+      <button class="btn-primary btn-sm sm:btn-normal flex-shrink-0" @click="openModal()">
         <Plus :size="16" /> <span class="hidden sm:inline">{{ t('addRule') }}</span><span class="sm:hidden">添加</span>
       </button>
     </div>
@@ -78,16 +78,21 @@
     <!-- Modal -->
     <Teleport to="body">
       <div v-if="modal" class="modal-overlay" @click.self="modal=null">
-        <div class="modal-box w-full max-w-md mx-4 sm:mx-auto">
+        <div class="modal-box w-full max-w-md">
 
-          <!-- Modal header -->
-          <div class="flex items-center justify-between p-5 sm:p-6 border-b border-slate-100">
-            <h3 class="font-semibold text-slate-900">{{ editing ? t('editRule') : t('addRule') }}</h3>
-            <button @click="modal=null" class="btn-ghost btn-sm"><X :size="16" /></button>
+          <!-- 移动端拖动条 -->
+          <div class="sm:hidden flex justify-center pt-3 pb-1 flex-shrink-0">
+            <div class="w-10 h-1 bg-slate-200 rounded-full"></div>
           </div>
 
-          <!-- Modal body -->
-          <div class="p-5 sm:p-6 space-y-4">
+          <!-- 标题栏 -->
+          <div class="flex-shrink-0 flex items-center justify-between px-5 sm:px-6 py-3 sm:py-4 border-b border-slate-100">
+            <h3 class="font-semibold text-slate-900">{{ editing ? t('editRule') : t('addRule') }}</h3>
+            <button @click="modal=null" class="btn-ghost btn-sm p-1.5"><X :size="16" /></button>
+          </div>
+
+          <!-- 内容 -->
+          <div class="flex-1 overflow-y-auto overscroll-contain px-5 sm:px-6 py-4 space-y-4">
             <div>
               <label class="input-label">{{ t('ruleName') }}</label>
               <input v-model="form.name" class="input" placeholder="My Rule" />
@@ -117,29 +122,30 @@
               </div>
             </div>
 
-            <!-- Error -->
-            <div v-if="formError" class="flex items-center gap-2 text-red-600 bg-red-50 px-3 py-2.5 rounded-xl border border-red-200 text-sm">
-              <AlertCircle :size="14" /> {{ formError }}
+            <!-- 错误提示 -->
+            <div v-if="formError" class="flex items-center gap-2 text-red-600 bg-red-50 px-3 py-2.5 rounded-xl border border-red-100 text-xs">
+              <AlertCircle :size="13" class="flex-shrink-0" /> {{ formError }}
             </div>
           </div>
 
-          <!-- Modal footer：启用开关在右，保存/取消居中对称 -->
-          <div class="px-5 sm:px-6 pb-5 sm:pb-6 space-y-4">
-            <!-- Enable toggle：右对齐 -->
-            <div class="flex justify-end items-center gap-2.5">
-              <span class="text-sm text-slate-600">启用</span>
-              <label class="toggle">
-                <input type="checkbox" v-model="form.enabled" />
-                <div class="toggle-track"></div>
-                <div class="toggle-thumb"></div>
-              </label>
-            </div>
-            <!-- Buttons：保存左，取消右，居中对称 -->
-            <div class="flex justify-center gap-3">
-              <button class="btn-primary flex-1 max-w-[140px] justify-center" @click="save">{{ t('save') }}</button>
-              <button class="btn-secondary flex-1 max-w-[140px] justify-center" @click="modal=null">{{ t('cancel') }}</button>
+          <!-- 底部操作栏 -->
+          <div class="flex-shrink-0 border-t border-slate-100 px-5 sm:px-6 py-3 sm:py-4">
+            <div class="flex items-center justify-between gap-3">
+              <div class="flex items-center gap-2">
+                <span class="text-sm text-slate-600">{{ t('enable') }}</span>
+                <label class="toggle">
+                  <input type="checkbox" v-model="form.enabled" />
+                  <div class="toggle-track"></div>
+                  <div class="toggle-thumb"></div>
+                </label>
+              </div>
+              <div class="flex gap-2">
+                <button class="btn-primary sm:min-w-[80px] justify-center" @click="save">{{ t('save') }}</button>
+                <button class="btn-secondary sm:min-w-[80px] justify-center" @click="modal=null">{{ t('cancel') }}</button>
+              </div>
             </div>
           </div>
+
         </div>
       </div>
     </Teleport>

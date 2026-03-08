@@ -272,12 +272,10 @@
             </div>
           </div>
 
-          <!-- 底部操作栏（不随内容滚动） -->
+          <!-- 底部操作栏 -->
           <div class="flex-shrink-0 border-t border-slate-100 px-5 sm:px-6 py-3 sm:py-4">
-            <!-- 移动端：两行；sm以上：一行左右分布 -->
-            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <!-- 自动续期：文字 + 开关 -->
-              <div class="flex items-center justify-end sm:justify-start gap-2 order-2 sm:order-1">
+            <div class="flex items-center justify-between gap-3">
+              <div class="flex items-center gap-2">
                 <span class="text-sm text-slate-600">{{ t('autoRenewHint') }}</span>
                 <label class="toggle">
                   <input type="checkbox" v-model="form.auto_renew" />
@@ -285,15 +283,13 @@
                   <div class="toggle-thumb"></div>
                 </label>
               </div>
-              <!-- 按钮组 -->
-              <div class="flex gap-2 order-1 sm:order-2">
-                <button class="btn-primary flex-1 sm:flex-none sm:min-w-[120px] justify-center"
+              <div class="flex gap-2">
+                <button class="btn-primary sm:min-w-[120px] justify-center"
                         @click="editId ? updateCert() : createAndIssue()" :disabled="saving">
                   <Shield :size="14" />
                   <span>{{ editId ? t('saveReApply') : t('createApply') }}</span>
                 </button>
-                <button class="btn-secondary flex-1 sm:flex-none sm:min-w-[80px] justify-center"
-                        @click="modal=null">
+                <button class="btn-secondary sm:min-w-[80px] justify-center" @click="modal=null">
                   {{ t('cancel') }}
                 </button>
               </div>

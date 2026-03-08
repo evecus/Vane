@@ -24,7 +24,7 @@
     </div>
 
     <!-- 服务卡片列表 -->
-    <div v-for="svc in services" :key="svc.id" class="glass-card overflow-hidden">
+    <div v-for="svc in services" :key="svc.id" class="glass-card overflow-hidden group">
 
       <!-- 服务头部 -->
       <div class="flex items-center gap-3 sm:gap-4 p-4 sm:p-5 border-b border-slate-100">
@@ -181,13 +181,17 @@
               {{ t('httpsHint') }}证书将根据子规则域名自动匹配。
             </div>
 
+            <!-- 错误提示 -->
+            <div v-if="svcError" class="flex items-center gap-2 text-red-600 bg-red-50 px-3 py-2.5 rounded-xl border border-red-100 text-xs">
+              <AlertCircle :size="13" class="flex-shrink-0" /> {{ svcError }}
+            </div>
+
           </div>
 
           <!-- 底部操作栏 -->
           <div class="flex-shrink-0 border-t border-slate-100 px-5 sm:px-6 py-3 sm:py-4">
-            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <!-- 启用开关 -->
-              <div class="flex items-center justify-between sm:justify-start gap-2">
+            <div class="flex items-center justify-between gap-3">
+              <div class="flex items-center gap-2">
                 <span class="text-sm text-slate-600">{{ t('enableService') }}</span>
                 <label class="toggle">
                   <input type="checkbox" v-model="svcForm.enabled" />
@@ -195,15 +199,9 @@
                   <div class="toggle-thumb"></div>
                 </label>
               </div>
-              <!-- 按钮 + 错误提示 -->
-              <div class="flex flex-col gap-2">
-                <div v-if="svcError" class="flex items-center gap-2 text-red-600 bg-red-50 px-3 py-2 rounded-xl border border-red-100 text-xs">
-                  <span>⚠️ {{ svcError }}</span>
-                </div>
-                <div class="flex gap-2 sm:gap-3">
-                  <button class="btn-primary flex-1 sm:flex-none sm:min-w-[80px] justify-center" @click="saveService">{{ t('save') }}</button>
-                  <button class="btn-secondary flex-1 sm:flex-none sm:min-w-[80px] justify-center" @click="serviceModal=null">{{ t('cancel') }}</button>
-                </div>
+              <div class="flex gap-2">
+                <button class="btn-primary sm:min-w-[80px] justify-center" @click="saveService">{{ t('save') }}</button>
+                <button class="btn-secondary sm:min-w-[80px] justify-center" @click="serviceModal=null">{{ t('cancel') }}</button>
               </div>
             </div>
           </div>
@@ -263,13 +261,17 @@
               <p class="text-xs text-slate-400 mt-1">{{ t('backendAddrHint') }}</p>
             </div>
 
+            <!-- 错误提示 -->
+            <div v-if="routeError" class="flex items-center gap-2 text-red-600 bg-red-50 px-3 py-2.5 rounded-xl border border-red-100 text-xs">
+              <AlertCircle :size="13" class="flex-shrink-0" /> {{ routeError }}
+            </div>
+
           </div>
 
           <!-- 底部操作栏 -->
           <div class="flex-shrink-0 border-t border-slate-100 px-5 sm:px-6 py-3 sm:py-4">
-            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <!-- 启用开关 -->
-              <div class="flex items-center justify-between sm:justify-start gap-2">
+            <div class="flex items-center justify-between gap-3">
+              <div class="flex items-center gap-2">
                 <span class="text-sm text-slate-600">{{ t('enableRouteLabel') }}</span>
                 <label class="toggle">
                   <input type="checkbox" v-model="routeForm.enabled" />
@@ -277,10 +279,9 @@
                   <div class="toggle-thumb"></div>
                 </label>
               </div>
-              <!-- 按钮 -->
-              <div class="flex gap-2 sm:gap-3">
-                <button class="btn-primary flex-1 sm:flex-none sm:min-w-[80px] justify-center" @click="saveRoute">{{ t('save') }}</button>
-                <button class="btn-secondary flex-1 sm:flex-none sm:min-w-[80px] justify-center" @click="routeModal=null">{{ t('cancel') }}</button>
+              <div class="flex gap-2">
+                <button class="btn-primary sm:min-w-[80px] justify-center" @click="saveRoute">{{ t('save') }}</button>
+                <button class="btn-secondary sm:min-w-[80px] justify-center" @click="routeModal=null">{{ t('cancel') }}</button>
               </div>
             </div>
           </div>
@@ -359,7 +360,7 @@
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
-import { Plus, Server, ArrowRight, Pencil, Trash2, X, ScrollText, RefreshCw } from 'lucide-vue-next'
+import { Plus, Server, ArrowRight, Pencil, Trash2, X, ScrollText, RefreshCw, AlertCircle } from 'lucide-vue-next'
 import { api } from '@/stores/auth'
 import { useI18n } from '@/stores/i18n'
 
@@ -383,6 +384,7 @@ const routeModal = ref(false)
 const editingRoute = ref(false)
 const currentSvcID = ref('')
 const routeForm = ref({})
+const routeError = ref('')
 
 // 后端地址拆分为 scheme + host:port
 const routeScheme = ref('http://')
@@ -481,6 +483,7 @@ async function delService(id) {
 function openRouteModal(svcID, route = null) {
   currentSvcID.value = svcID
   editingRoute.value = !!route
+  routeError.value = ''
   if (route) {
     routeForm.value = { ...route }
     const parsed = parseBackendUrl(route.backend_url)
@@ -495,16 +498,20 @@ function openRouteModal(svcID, route = null) {
 }
 
 async function saveRoute() {
-  // 确保 backend_url 是完整 URL
+  routeError.value = ''
   routeForm.value.backend_url = routeScheme.value + routeHostPort.value
   const id = currentSvcID.value
-  if (editingRoute.value) {
-    await api.put(`/webservice/${id}/routes/${routeForm.value.id}`, routeForm.value)
-  } else {
-    await api.post(`/webservice/${id}/routes`, routeForm.value)
+  try {
+    if (editingRoute.value) {
+      await api.put(`/webservice/${id}/routes/${routeForm.value.id}`, routeForm.value)
+    } else {
+      await api.post(`/webservice/${id}/routes`, routeForm.value)
+    }
+    routeModal.value = false
+    await load()
+  } catch (e) {
+    routeError.value = e.response?.data?.error || e.message
   }
-  routeModal.value = false
-  await load()
 }
 
 async function toggleRoute(svcID, rid) {

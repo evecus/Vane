@@ -20,7 +20,7 @@
     <!-- 规则列表 -->
     <div v-else class="grid gap-3 sm:gap-4">
       <div v-for="rule in rules" :key="rule.id"
-           class="glass-card p-4 sm:p-5 transition-all duration-300">
+           class="glass-card p-4 sm:p-5 transition-all duration-300 group">
         <div class="flex items-start gap-3 sm:gap-4">
 
           <!-- 图标 -->
@@ -374,11 +374,13 @@
 
           </div>
 
-          <!-- 底部操作栏（fixed at bottom, never scrolls away）-->
+          <!-- 底部操作栏 -->
           <div class="flex-shrink-0 border-t border-slate-100 px-5 sm:px-6 py-3 sm:py-4">
-            <!-- 移动端：启用行 + 按钮行各占一行；sm以上：左右并排 -->
-            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <!-- 启用开关 -->
+            <!-- 错误提示 -->
+            <div v-if="saveError" class="flex items-center gap-2 text-red-600 bg-red-50 px-3 py-2 rounded-xl border border-red-100 text-xs mb-3">
+              <AlertCircle :size="13" class="flex-shrink-0" /> {{ saveError }}
+            </div>
+            <div class="flex items-center justify-between gap-3">
               <div class="flex items-center gap-2">
                 <span class="text-sm text-slate-600">{{ t('enableAfterCreate') }}</span>
                 <label class="toggle">
@@ -386,10 +388,9 @@
                   <div class="toggle-track"></div><div class="toggle-thumb"></div>
                 </label>
               </div>
-              <!-- 保存 + 取消 -->
-              <div class="flex gap-2 sm:gap-3">
-                <button class="btn-primary flex-1 sm:flex-none sm:min-w-[80px] justify-center" @click="save">{{ t('save') }}</button>
-                <button class="btn-secondary flex-1 sm:flex-none sm:min-w-[80px] justify-center" @click="modal=null">{{ t('cancel') }}</button>
+              <div class="flex gap-2">
+                <button class="btn-primary sm:min-w-[80px] justify-center" @click="save">{{ t('save') }}</button>
+                <button class="btn-secondary sm:min-w-[80px] justify-center" @click="modal=null">{{ t('cancel') }}</button>
               </div>
             </div>
           </div>
@@ -402,7 +403,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { Plus, Globe, Pencil, Trash2, X, RefreshCw } from 'lucide-vue-next'
+import { Plus, Globe, Pencil, Trash2, X, RefreshCw, AlertCircle } from 'lucide-vue-next'
 import { api } from '@/stores/auth'
 import { useI18n } from '@/stores/i18n'
 import ProviderBadge from '@/components/ProviderBadge.vue'
@@ -413,6 +414,7 @@ const rules = ref([])
 const modal = ref(null)
 const editing = ref(false)
 const form = ref({})
+const saveError = ref('')
 const interfaces = ref([])
 const ifaceIPs = ref([])
 const ifaceTestResult = ref('')
@@ -537,6 +539,7 @@ function onDualIpv6IfaceChange() {
 
 function openModal(rule = null) {
   editing.value = !!rule
+  saveError.value = ''
   ifaceIPs.value = []
   ifaceTestResult.value = ''
   if (rule) {
@@ -562,38 +565,43 @@ function openModal(rule = null) {
 }
 
 async function save() {
-  if (form.value.ip_version === 'dual') {
-    const base = { name: form.value.name, provider: form.value.provider, provider_conf: form.value.provider_conf, enabled: form.value.enabled }
-    const v4domains = form.value.ipv4_domainsText.split('\n').map(s => s.trim()).filter(Boolean)
-    const v6domains = form.value.ipv6_domainsText.split('\n').map(s => s.trim()).filter(Boolean)
-    const payloadV4 = { ...base, ip_version: 'ipv4', ip_detect_mode: form.value.ipv4_detect_mode, ip_interface: form.value.ipv4_interface, domains: v4domains, interval: form.value.ipv4_interval || 60 }
-    const payloadV6 = { ...base, ip_version: 'ipv6', ip_detect_mode: form.value.ipv6_detect_mode, ip_interface: form.value.ipv6_interface, ip_index: form.value.ipv6_ip_index ?? 0, domains: v6domains, interval: form.value.ipv6_interval || 60 }
-    if (editing.value) {
-      await api.put(`/ddns/${form.value.id}`, payloadV4)
-      const { data: nv6 } = await api.post('/ddns', payloadV6)
-      modal.value = null; await load()
-      triggerRefreshWithStatus(form.value.id); triggerRefreshWithStatus(nv6.id)
-    } else {
-      const { data: r4 } = await api.post('/ddns', payloadV4)
-      const { data: r6 } = await api.post('/ddns', payloadV6)
-      modal.value = null; await load()
-      triggerRefreshWithStatus(r4.id); triggerRefreshWithStatus(r6.id)
+  saveError.value = ''
+  try {
+    if (form.value.ip_version === 'dual') {
+      const base = { name: form.value.name, provider: form.value.provider, provider_conf: form.value.provider_conf, enabled: form.value.enabled }
+      const v4domains = form.value.ipv4_domainsText.split('\n').map(s => s.trim()).filter(Boolean)
+      const v6domains = form.value.ipv6_domainsText.split('\n').map(s => s.trim()).filter(Boolean)
+      const payloadV4 = { ...base, ip_version: 'ipv4', ip_detect_mode: form.value.ipv4_detect_mode, ip_interface: form.value.ipv4_interface, domains: v4domains, interval: form.value.ipv4_interval || 60 }
+      const payloadV6 = { ...base, ip_version: 'ipv6', ip_detect_mode: form.value.ipv6_detect_mode, ip_interface: form.value.ipv6_interface, ip_index: form.value.ipv6_ip_index ?? 0, domains: v6domains, interval: form.value.ipv6_interval || 60 }
+      if (editing.value) {
+        await api.put(`/ddns/${form.value.id}`, payloadV4)
+        const { data: nv6 } = await api.post('/ddns', payloadV6)
+        modal.value = null; await load()
+        triggerRefreshWithStatus(form.value.id); triggerRefreshWithStatus(nv6.id)
+      } else {
+        const { data: r4 } = await api.post('/ddns', payloadV4)
+        const { data: r6 } = await api.post('/ddns', payloadV6)
+        modal.value = null; await load()
+        triggerRefreshWithStatus(r4.id); triggerRefreshWithStatus(r6.id)
+      }
+      return
     }
-    return
-  }
 
-  const domains = form.value.domainsText.split('\n').map(s => s.trim()).filter(Boolean)
-  const payload = { ...form.value, domains, domainsText: undefined }
-  let savedId = form.value.id
-  if (editing.value) {
-    await api.put(`/ddns/${savedId}`, payload)
-  } else {
-    const { data } = await api.post('/ddns', payload)
-    savedId = data.id
+    const domains = form.value.domainsText.split('\n').map(s => s.trim()).filter(Boolean)
+    const payload = { ...form.value, domains, domainsText: undefined }
+    let savedId = form.value.id
+    if (editing.value) {
+      await api.put(`/ddns/${savedId}`, payload)
+    } else {
+      const { data } = await api.post('/ddns', payload)
+      savedId = data.id
+    }
+    modal.value = null
+    await load()
+    triggerRefreshWithStatus(savedId)
+  } catch (e) {
+    saveError.value = e.response?.data?.error || e.message
   }
-  modal.value = null
-  await load()
-  triggerRefreshWithStatus(savedId)
 }
 
 async function triggerRefreshWithStatus(id) {
