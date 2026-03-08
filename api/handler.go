@@ -778,7 +778,6 @@ func (h *Handler) toggleDDNS(c *gin.Context) {
 
 func (h *Handler) refreshDDNS(c *gin.Context) {
 	id := c.Param("id")
-	// Check existence first
 	h.cfg.RLock()
 	found := false
 	for _, d := range h.cfg.DDNS {
@@ -792,9 +791,27 @@ func (h *Handler) refreshDDNS(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "not found"})
 		return
 	}
+	// Stop the background worker so TriggerNow doesn't race with it
 	h.ddns.Stop(id)
-	h.ddns.Start(id)
-	c.JSON(200, gin.H{"ok": true})
+	res, err := h.ddns.TriggerNow(id)
+	// Restart the worker if the rule is still enabled
+	h.cfg.RLock()
+	var enabled bool
+	for _, d := range h.cfg.DDNS {
+		if d.ID == id {
+			enabled = d.Enabled
+			break
+		}
+	}
+	h.cfg.RUnlock()
+	if enabled {
+		h.ddns.Start(id)
+	}
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, res)
 }
 
 // ─── Web Service ──────────────────────────────────────────────────────────────
