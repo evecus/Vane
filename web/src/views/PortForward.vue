@@ -10,18 +10,6 @@
       </button>
     </div>
 
-    <!-- Traffic chart -->
-    <div v-if="rules.length" class="glass-card p-6">
-      <div class="flex items-center justify-between mb-4">
-        <h3 class="font-semibold text-slate-800">{{ t('liveTraffic') }}</h3>
-        <div class="flex gap-2">
-          <span class="flex items-center gap-1.5 text-xs text-blue-600"><span class="w-3 h-0.5 bg-blue-500 inline-block rounded"></span>{{ t('inbound') }}</span>
-          <span class="flex items-center gap-1.5 text-xs text-emerald-600"><span class="w-3 h-0.5 bg-emerald-500 inline-block rounded"></span>{{ t('outbound') }}</span>
-        </div>
-      </div>
-      <apexchart type="area" height="160" :options="chartOpts" :series="chartSeries" />
-    </div>
-
     <!-- Rules -->
     <div v-if="rules.length === 0" class="glass-card p-16 text-center">
       <div class="w-16 h-16 rounded-3xl bg-blue-50 flex items-center justify-center mx-auto mb-4">
@@ -152,19 +140,6 @@ const modal = ref(null)
 const editing = ref(false)
 const form = ref({})
 
-const chartOpts = {
-  chart: { type: 'area', toolbar: { show: false }, animations: { enabled: true, easing: 'linear', dynamicAnimation: { enabled: true, speed: 1000 } }, background: 'transparent' },
-  stroke: { curve: 'smooth', width: 2 }, fill: { type: 'gradient', gradient: { opacityFrom: 0.3, opacityTo: 0.0 } },
-  colors: ['#3b82f6', '#10b981'],
-  xaxis: { labels: { show: false }, axisBorder: { show: false }, axisTicks: { show: false } },
-  yaxis: { labels: { style: { colors: '#94a3b8', fontSize: '11px' } } },
-  grid: { borderColor: '#f1f5f9', strokeDashArray: 4 }, legend: { show: false },
-  dataLabels: { enabled: false }, tooltip: { theme: 'light' },
-}
-const trafficIn = ref(Array(20).fill(0))
-const trafficOut = ref(Array(20).fill(0))
-const chartSeries = ref([{ name: t('inbound'), data: trafficIn.value }, { name: t('outbound'), data: trafficOut.value }])
-
 let ws = null
 
 async function load() {
@@ -207,11 +182,7 @@ function connectWS() {
     const msg = JSON.parse(e.data)
     if (msg.type === 'stats') {
       stats.value = msg.data
-      let totalIn = 0, totalOut = 0
-      Object.values(msg.data).forEach(s => { totalIn += s.bytes_in || 0; totalOut += s.bytes_out || 0 })
-      trafficIn.value = [...trafficIn.value.slice(1), totalIn]
-      trafficOut.value = [...trafficOut.value.slice(1), totalOut]
-      chartSeries.value = [{ name: t('inbound'), data: [...trafficIn.value] }, { name: t('outbound'), data: [...trafficOut.value] }]
+
     }
   }
   ws.onclose = () => setTimeout(connectWS, 3000)
