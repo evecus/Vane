@@ -64,6 +64,7 @@
                 <span class="inline-block w-2.5 h-2.5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin"></span>
                 {{ t('fetchingIp') }}
               </span>
+              <span v-else-if="ipStatus[rule.id] === 'fail' && syncStatus[rule.id]?.ipErr" class="text-red-400 font-medium">{{ t('ipFetchFail') }}：{{ syncStatus[rule.id].ipErr }}</span>
               <span v-else-if="ipStatus[rule.id] === 'fail'" class="text-red-400 font-medium">{{ t('ipFetchFail') }}</span>
               <span v-else>
                 {{ t('currentIp') }}
@@ -73,6 +74,18 @@
                 {{ t('lastUpdated') }} {{ new Date(rule.last_updated).toLocaleString() }}
               </span>
               <span>{{ t('interval') }} {{ rule.interval || 60 }}s</span>
+            </div>
+
+            <!-- DNS 同步结果 -->
+            <div v-if="syncStatus[rule.id] && !syncStatus[rule.id].ipErr" class="mt-1.5 space-y-0.5">
+              <div v-for="(errMsg, fqdn) in syncStatus[rule.id].domains" :key="fqdn"
+                   class="flex items-start gap-1.5 text-xs">
+                <span v-if="errMsg === ''" class="flex-shrink-0 text-emerald-500 font-bold mt-px">✓</span>
+                <span v-else class="flex-shrink-0 text-red-400 font-bold mt-px">✗</span>
+                <span class="font-mono text-slate-600">{{ fqdn }}</span>
+                <span v-if="errMsg === ''" class="text-emerald-500">同步成功</span>
+                <span v-else class="text-red-400 break-all">{{ errMsg }}</span>
+              </div>
             </div>
           </div>
 
@@ -406,6 +419,7 @@ const ifaceTestResult = ref('')
 const ifaceLoading = ref(false)
 const ifaceLoadError = ref('')
 const ipStatus = ref({})
+const syncStatus = ref({}) // id → { ok, domains: {fqdn: errMsg|''}, ipErr }
 
 function ipVersionLabel(v) {
   if (v === 'ipv6') return 'IPv6'
@@ -584,24 +598,29 @@ async function save() {
 
 async function triggerRefreshWithStatus(id) {
   ipStatus.value[id] = 'fetching'
+  delete syncStatus.value[id]
   try {
-    await api.post(`/ddns/${id}/refresh`)
-    const deadline = Date.now() + 30000
-    while (Date.now() < deadline) {
-      await new Promise(r => setTimeout(r, 1200))
-      await load()
-      const rule = rules.value.find(r => r.id === id)
-      if (rule?.last_ip) {
-        ipStatus.value[id] = 'ok'
-        setTimeout(() => { delete ipStatus.value[id] }, 5000)
-        return
-      }
+    const { data } = await api.post(`/ddns/${id}/refresh`)
+    await load()
+    if (data.ip_err) {
+      ipStatus.value[id] = 'fail'
+      syncStatus.value[id] = { ok: false, ipErr: data.ip_err }
+    } else {
+      ipStatus.value[id] = 'ok'
+      const allOK = Object.values(data.domains || {}).every(e => e === '')
+      syncStatus.value[id] = { ok: allOK, domains: data.domains || {}, ip: data.ip }
     }
-    ipStatus.value[id] = 'fail'
-    setTimeout(() => { delete ipStatus.value[id] }, 8000)
+    setTimeout(() => {
+      delete ipStatus.value[id]
+      delete syncStatus.value[id]
+    }, 10000)
   } catch {
     ipStatus.value[id] = 'fail'
-    setTimeout(() => { delete ipStatus.value[id] }, 8000)
+    syncStatus.value[id] = { ok: false, ipErr: '请求失败' }
+    setTimeout(() => {
+      delete ipStatus.value[id]
+      delete syncStatus.value[id]
+    }, 8000)
   }
 }
 
