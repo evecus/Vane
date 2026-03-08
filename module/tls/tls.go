@@ -7,9 +7,11 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -169,10 +171,13 @@ func (m *Manager) IssueCert(certID string) error {
 	var reg *registration.Resource
 	if cert.CAProvider == "zerossl" && cert.ProviderConf.ZeroSSLAPIKey != "" && cert.ProviderConf.ZeroSSLKeyID != "" {
 		log.Printf("[tls] registering ZeroSSL EAB account for cert %s", certID)
+		// ZeroSSL 返回的 HMAC Key 是 Base64url 无 padding 格式。
+		// lego 的 HmacEncoded 字段内部用标准 Base64 解码，需先做格式转换。
+		hmac := normalizeBase64(cert.ProviderConf.ZeroSSLAPIKey)
 		reg, err = client.Registration.RegisterWithExternalAccountBinding(registration.RegisterEABOptions{
 			TermsOfServiceAgreed: true,
 			Kid:                  cert.ProviderConf.ZeroSSLKeyID,
-			HmacEncoded:          cert.ProviderConf.ZeroSSLAPIKey,
+			HmacEncoded:          hmac,
 		})
 	} else {
 		if cert.CAProvider == "zerossl" {
@@ -296,4 +301,34 @@ func parseCertExpiry(certPEM []byte) string {
 		return ""
 	}
 	return cert.NotAfter.UTC().Format(time.RFC3339)
+}
+
+// normalizeBase64 将 Base64url（无 padding，含 - _）转换为标准 Base64（含 + /，有 padding）。
+// ZeroSSL 下发的 HMAC Key 是 Base64url 格式，lego 内部用标准 Base64 解码，需做此转换。
+func normalizeBase64(s string) string {
+	// 先解码 Base64url（无 padding）
+	raw, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		// 如果解码失败，尝试标准 Base64url（有 padding）
+		s2 := s
+		switch len(s2) % 4 {
+		case 2:
+			s2 += "=="
+		case 3:
+			s2 += "="
+		}
+		raw, err = base64.URLEncoding.DecodeString(s2)
+		if err != nil {
+			// 已经是标准 Base64 或其他格式，直接补 padding 返回
+			switch len(s) % 4 {
+			case 2:
+				s += "=="
+			case 3:
+				s += "="
+			}
+			return strings.ReplaceAll(strings.ReplaceAll(s, "-", "+"), "_", "/")
+		}
+	}
+	// 用标准 Base64 重新编码
+	return base64.StdEncoding.EncodeToString(raw)
 }
