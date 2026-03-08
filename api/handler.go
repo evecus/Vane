@@ -42,17 +42,18 @@ var upgrader = websocket.Upgrader{
 }
 
 type Handler struct {
-	cfg     *config.Config
-	pf      *portforward.Manager
-	ddns    *ddns.Manager
-	ws      *webservice.Manager
-	tls     *tlsmod.Manager
-	version string
+	cfg            *config.Config
+	pf             *portforward.Manager
+	ddns           *ddns.Manager
+	ws             *webservice.Manager
+	tls            *tlsmod.Manager
+	version        string
+	disableSysinfo bool
 }
 
 func NewHandler(cfg *config.Config, pf *portforward.Manager, d *ddns.Manager,
-	ws *webservice.Manager, t *tlsmod.Manager, version string) *Handler {
-	return &Handler{cfg: cfg, pf: pf, ddns: d, ws: ws, tls: t, version: version}
+	ws *webservice.Manager, t *tlsmod.Manager, version string, disableSysinfo bool) *Handler {
+	return &Handler{cfg: cfg, pf: pf, ddns: d, ws: ws, tls: t, version: version, disableSysinfo: disableSysinfo}
 }
 
 // Register wires all routes.
@@ -1437,6 +1438,10 @@ func sanitizeFilename(s string) string {
 // ─── Sysinfo ──────────────────────────────────────────────────────────────────
 
 func (h *Handler) getSysinfo(c *gin.Context) {
+	if h.disableSysinfo {
+		c.JSON(200, gin.H{"disabled": true})
+		return
+	}
 	c.JSON(200, gin.H{
 		"os":      readSysinfoOS(),
 		"kernel":  readSysinfoKernel(),
