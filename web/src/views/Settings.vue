@@ -247,10 +247,13 @@ import {
   User, Settings2, Save, CheckCircle, AlertCircle,
   HardDrive, Download, Upload, AlertTriangle, Eye, EyeOff, Info, RefreshCw
 } from 'lucide-vue-next'
-import { api } from '@/stores/auth'
+import { api, useAuthStore } from '@/stores/auth'
+import { useRouter } from 'vue-router'
 import { useI18n } from '@/stores/i18n'
 
 const i18n = useI18n()
+const authStore = useAuthStore()
+const router = useRouter()
 const form = ref({ username: '', current_password: '', new_password: '', confirm_password: '', port: 4455, safe_entry: '', version: '' })
 const savedPort      = ref(4455)   // port at load time
 const savedEntry     = ref('')     // safe_entry at load time
@@ -323,7 +326,7 @@ async function doSave() {
   const willRestart = needsRestart.value
   const targetUrl   = newUrl.value
   try {
-    await api.put('/settings', {
+    const res = await api.put('/settings', {
       username:         form.value.username,
       current_password: form.value.current_password || '',
       new_password:     form.value.new_password || '',
@@ -337,10 +340,15 @@ async function doSave() {
     savedEntry.value = form.value.safe_entry || ''
 
     if (willRestart) {
-      // 等待后端重启（约 1.5s），然后轮询新 URL 直到可访问，再跳转
+      // 端口变更：等待后端重启，然后跳转新地址（会触发重新登录）
       await new Promise(r => setTimeout(r, 1500))
       await pollUntilAlive(targetUrl)
+      authStore.logout()
       window.location.href = targetUrl
+    } else if (res.data?.logout) {
+      // 安全路径变更：清除登录状态，跳转到登录页
+      authStore.logout()
+      router.replace('/login')
     }
   } catch (e) {
     saveError.value = e.response?.data?.error || e.message
