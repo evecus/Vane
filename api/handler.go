@@ -5,14 +5,11 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -40,16 +37,17 @@ var upgrader = websocket.Upgrader{
 }
 
 type Handler struct {
-	cfg  *config.Config
-	pf   *portforward.Manager
-	ddns *ddns.Manager
-	ws   *webservice.Manager
-	tls  *tlsmod.Manager
+	cfg     *config.Config
+	pf      *portforward.Manager
+	ddns    *ddns.Manager
+	ws      *webservice.Manager
+	tls     *tlsmod.Manager
+	version string
 }
 
 func NewHandler(cfg *config.Config, pf *portforward.Manager, d *ddns.Manager,
-	ws *webservice.Manager, t *tlsmod.Manager) *Handler {
-	return &Handler{cfg: cfg, pf: pf, ddns: d, ws: ws, tls: t}
+	ws *webservice.Manager, t *tlsmod.Manager, version string) *Handler {
+	return &Handler{cfg: cfg, pf: pf, ddns: d, ws: ws, tls: t, version: version}
 }
 
 // Register wires all routes.
@@ -65,7 +63,6 @@ func (h *Handler) Register(r *gin.Engine) {
 
 	// Dashboard + WS
 	auth.GET("/dashboard", h.getDashboard)
-	auth.GET("/sysinfo", h.getSysInfo)
 	auth.GET("/ws/stats", h.wsStats)
 
 	// Settings
@@ -336,6 +333,7 @@ func (h *Handler) getSettings(c *gin.Context) {
 		"username":   h.cfg.Admin.Username,
 		"port":       h.cfg.Admin.Port,
 		"safe_entry": h.cfg.Admin.SafeEntry,
+		"version":    h.version,
 	})
 }
 
@@ -1343,180 +1341,7 @@ func (h *Handler) listIfaceIPs(c *gin.Context) {
 	c.JSON(200, ips)
 }
 
-// ─── SysInfo ──────────────────────────────────────────────────────────────────
-
-func (h *Handler) getSysInfo(c *gin.Context) {
-	info := gin.H{
-		"os":      readSysOSName(),
-		"kernel":  readSysKernel(),
-		"uptime":  readSysUptime(),
-		"memory":  readSysMemory(),
-		"disk":    readSysDisk(),
-		"network": readSysNetworkTraffic(),
-		"ifaces":  readSysIfaceIPs(),
-	}
-	c.JSON(200, info)
-}
-
-func readSysOSName() string {
-	data, err := os.ReadFile("/etc/os-release")
-	if err != nil {
-		return "Unknown"
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "PRETTY_NAME=") {
-			return strings.Trim(strings.TrimPrefix(line, "PRETTY_NAME="), "\"")
-		}
-	}
-	return "Linux"
-}
-
-func readSysKernel() string {
-	data, err := os.ReadFile("/proc/sys/kernel/osrelease")
-	if err != nil {
-		return "Unknown"
-	}
-	return strings.TrimSpace(string(data))
-}
-
-func readSysUptime() map[string]interface{} {
-	data, err := os.ReadFile("/proc/uptime")
-	if err != nil {
-		return map[string]interface{}{"seconds": 0, "human": "N/A"}
-	}
-	fields := strings.Fields(string(data))
-	if len(fields) == 0 {
-		return map[string]interface{}{"seconds": 0, "human": "N/A"}
-	}
-	var secs float64
-	fmt.Sscanf(fields[0], "%f", &secs)
-	d := int(secs)
-	days := d / 86400
-	hours := (d % 86400) / 3600
-	mins := (d % 3600) / 60
-	var human string
-	if days > 0 {
-		human = fmt.Sprintf("%d天 %d时 %d分", days, hours, mins)
-	} else if hours > 0 {
-		human = fmt.Sprintf("%d时 %d分", hours, mins)
-	} else {
-		human = fmt.Sprintf("%d分钟", mins)
-	}
-	return map[string]interface{}{"seconds": int(secs), "human": human}
-}
-
-func readSysMemory() map[string]interface{} {
-	data, err := os.ReadFile("/proc/meminfo")
-	if err != nil {
-		return nil
-	}
-	vals := map[string]uint64{}
-	for _, line := range strings.Split(string(data), "\n") {
-		parts := strings.Fields(line)
-		if len(parts) >= 2 {
-			var v uint64
-			fmt.Sscanf(parts[1], "%d", &v)
-			key := strings.TrimSuffix(parts[0], ":")
-			vals[key] = v
-		}
-	}
-	total := vals["MemTotal"]
-	avail := vals["MemAvailable"]
-	used := total - avail
-	pct := 0.0
-	if total > 0 {
-		pct = float64(used) / float64(total) * 100
-	}
-	return map[string]interface{}{
-		"total_kb": total,
-		"used_kb":  used,
-		"free_kb":  avail,
-		"pct":      fmt.Sprintf("%.1f", pct),
-	}
-}
-
-func readSysDisk() map[string]interface{} {
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs("/", &stat); err != nil {
-		return map[string]interface{}{"total_kb": uint64(0), "used_kb": uint64(0), "pct": "0.0"}
-	}
-	total := stat.Blocks * uint64(stat.Bsize) / 1024
-	free := stat.Bfree * uint64(stat.Bsize) / 1024
-	used := total - free
-	pct := 0.0
-	if total > 0 {
-		pct = float64(used) / float64(total) * 100
-	}
-	return map[string]interface{}{
-		"total_kb": total,
-		"used_kb":  used,
-		"free_kb":  free,
-		"pct":      fmt.Sprintf("%.1f", pct),
-	}
-}
-
-func readSysNetworkTraffic() []map[string]interface{} {
-	data, err := os.ReadFile("/proc/net/dev")
-	if err != nil {
-		return nil
-	}
-	var result []map[string]interface{}
-	lines := strings.Split(string(data), "\n")
-	if len(lines) <= 2 {
-		return result
-	}
-	for _, line := range lines[2:] {
-		fields := strings.Fields(strings.TrimSpace(line))
-		if len(fields) < 10 {
-			continue
-		}
-		iface := strings.TrimSuffix(fields[0], ":")
-		if iface == "lo" {
-			continue
-		}
-		var rxBytes, txBytes uint64
-		fmt.Sscanf(fields[1], "%d", &rxBytes)
-		fmt.Sscanf(fields[9], "%d", &txBytes)
-		result = append(result, map[string]interface{}{
-			"iface":    iface,
-			"rx_bytes": rxBytes,
-			"tx_bytes": txBytes,
-		})
-	}
-	return result
-}
-
-func readSysIfaceIPs() []map[string]interface{} {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return nil
-	}
-	var result []map[string]interface{}
-	for _, iface := range ifaces {
-		if iface.Flags&net.FlagLoopback != 0 {
-			continue
-		}
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		var ips []string
-		for _, addr := range addrs {
-			ips = append(ips, addr.String())
-		}
-		if len(ips) > 0 {
-			result = append(result, map[string]interface{}{
-				"name": iface.Name,
-				"ips":  ips,
-				"mac":  iface.HardwareAddr.String(),
-			})
-		}
-	}
-	return result
-}
-
 // ─── Utility helpers ──────────────────────────────────────────────────────────
-
 
 func tlsParsePair(certPEM, keyPEM string) (interface{}, error) {
 	_, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
