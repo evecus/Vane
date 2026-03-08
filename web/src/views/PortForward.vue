@@ -82,7 +82,7 @@
 
           <!-- Modal header -->
           <div class="flex items-center justify-between p-5 sm:p-6 border-b border-slate-100">
-            <h3 class="font-semibold text-slate-900">{{ t('editRule') }}</h3>
+            <h3 class="font-semibold text-slate-900">{{ editing ? t('editRule') : t('addRule') }}</h3>
             <button @click="modal=null" class="btn-ghost btn-sm"><X :size="16" /></button>
           </div>
 
