@@ -197,6 +197,9 @@
 
     <!-- ── 底部：反馈 + 保存按钮，靠右下 ────────────────────────── -->
     <div class="mt-6 flex flex-col sm:flex-row items-start sm:items-center justify-end gap-3">
+      <div v-if="saveOk" class="flex items-center gap-2 text-emerald-600 bg-emerald-50 px-4 py-2.5 rounded-xl border border-emerald-200 text-sm">
+        <CheckCircle :size="15" /> {{ saveOk }}
+      </div>
       <div v-if="saveError" class="flex items-center gap-2 text-red-600 bg-red-50 px-4 py-2.5 rounded-xl border border-red-200 text-sm">
         <AlertCircle :size="15" /> {{ saveError }}
       </div>
@@ -258,6 +261,7 @@ const form = ref({ username: '', current_password: '', new_password: '', confirm
 const savedPort      = ref(4455)   // port at load time
 const savedEntry     = ref('')     // safe_entry at load time
 const saveError      = ref('')
+const saveOk         = ref('')
 const saving         = ref(false)
 const checking       = ref(false)
 const showPwd        = ref(false)
@@ -364,6 +368,10 @@ async function doSave() {
       }
       // 安全路径变更（或端口变更）：跳转到包含新路径的新 URL，触发重新登录
       window.location.href = targetUrl
+    } else {
+      // 仅修改了用户名或密码，无需跳转，显示成功提示
+      saveOk.value = '保存成功'
+      setTimeout(() => { saveOk.value = '' }, 3000)
     }
   } catch (e) {
     saveError.value = e.response?.data?.error || e.message
