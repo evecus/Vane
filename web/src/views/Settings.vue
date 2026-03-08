@@ -200,8 +200,8 @@
       <div v-if="saveError" class="flex items-center gap-2 text-red-600 bg-red-50 px-4 py-2.5 rounded-xl border border-red-200 text-sm">
         <AlertCircle :size="15" /> {{ saveError }}
       </div>
-      <button class="btn-primary" @click="confirmSave" :disabled="saving">
-        <Save :size="15" /> {{ saving ? i18n.t('saving') : i18n.t('saveSettings') }}
+      <button class="btn-primary" @click="confirmSave" :disabled="saving || checking">
+        <Save :size="15" /> {{ checking ? "检测端口..." : saving ? i18n.t("saving") : i18n.t("saveSettings") }}
       </button>
     </div>
 
@@ -259,6 +259,7 @@ const savedPort      = ref(4455)   // port at load time
 const savedEntry     = ref('')     // safe_entry at load time
 const saveError      = ref('')
 const saving         = ref(false)
+const checking       = ref(false)
 const showPwd        = ref(false)
 const restoreMsg     = ref('')
 const restoreError   = ref('')
@@ -304,13 +305,27 @@ async function load() {
 }
 
 // 点保存按钮：先校验，如需重启则弹确认框，否则直接保存
-function confirmSave() {
+async function confirmSave() {
   saveError.value = ''
   if (form.value.new_password && form.value.new_password !== form.value.confirm_password) {
     saveError.value = i18n.t('pwdMismatch'); return
   }
   if (false && form.value.new_password && form.value.new_password.length < 6) {
     saveError.value = i18n.t('pwdTooShort'); return
+  }
+  // 如果端口发生变化，先检测新端口是否可用
+  if (form.value.port !== savedPort.value) {
+    checking.value = true
+    try {
+      const { data } = await api.get('/check-port', { params: { port: form.value.port } })
+      if (!data.available) {
+        saveError.value = i18n.t('portOccupied', { port: form.value.port }); return
+      }
+    } catch {
+      saveError.value = '端口检测失败，请重试'; return
+    } finally {
+      checking.value = false
+    }
   }
   if (needsRestart.value) {
     showRestartModal.value = true
@@ -323,8 +338,9 @@ function confirmSave() {
 async function doSave() {
   showRestartModal.value = false
   saving.value = true
-  const willRestart = needsRestart.value
-  const targetUrl   = newUrl.value
+  // 在保存前先锁定目标 URL（保存后 savedPort/savedEntry 会更新，newUrl 会变）
+  const targetUrl = newUrl.value
+  const portWillChange = form.value.port !== savedPort.value
   try {
     const res = await api.put('/settings', {
       username:         form.value.username,
@@ -339,16 +355,15 @@ async function doSave() {
     savedPort.value  = form.value.port
     savedEntry.value = form.value.safe_entry || ''
 
-    if (willRestart) {
-      // 端口变更：等待后端重启，然后跳转新地址（会触发重新登录）
-      await new Promise(r => setTimeout(r, 1500))
-      await pollUntilAlive(targetUrl)
+    if (res.data?.logout) {
       authStore.logout()
+      if (portWillChange) {
+        // 端口变更：后端会重启进程，需等待新端口就绪后再跳转
+        await new Promise(r => setTimeout(r, 1500))
+        await pollUntilAlive(targetUrl)
+      }
+      // 安全路径变更（或端口变更）：跳转到包含新路径的新 URL，触发重新登录
       window.location.href = targetUrl
-    } else if (res.data?.logout) {
-      // 安全路径变更：清除登录状态，跳转到登录页
-      authStore.logout()
-      router.replace('/login')
     }
   } catch (e) {
     saveError.value = e.response?.data?.error || e.message
