@@ -35,6 +35,13 @@ func (s *sessionStore) delete(token string) {
 	delete(s.data, token)
 }
 
+// clearAll removes all active sessions (forces re-login for all clients).
+func (s *sessionStore) clearAll() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.data = make(map[string]time.Time)
+}
+
 // purgeExpired removes sessions whose expiry has passed.
 func (s *sessionStore) purgeExpired() {
 	s.mu.Lock()
