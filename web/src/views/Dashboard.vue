@@ -317,7 +317,6 @@
 
     </div>
   </div>
-</template>  </div>
 </template>
 
 <script setup>
