@@ -160,7 +160,8 @@ func (dd *DataDir) migrate() error {
 			username TEXT NOT NULL,
 			password_hash TEXT NOT NULL,
 			port INTEGER NOT NULL DEFAULT 4455,
-			safe_entry TEXT NOT NULL DEFAULT ''
+			safe_entry TEXT NOT NULL DEFAULT '',
+			welcome_shown INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE TABLE IF NOT EXISTS port_forwards (
 			id TEXT PRIMARY KEY,
@@ -240,6 +241,8 @@ func (dd *DataDir) migrate() error {
 			return fmt.Errorf("migrate: %w", err)
 		}
 	}
+	// Migrate existing databases that may not have the welcome_shown column
+	_, _ = dd.db.Exec(`ALTER TABLE admin ADD COLUMN welcome_shown INTEGER NOT NULL DEFAULT 0`)
 	return nil
 }
 
@@ -259,10 +262,11 @@ type Config struct {
 }
 
 type AdminConfig struct {
-	Username     string `json:"username"`
-	PasswordHash string `json:"password_hash"`
-	Port         int    `json:"port"`
-	SafeEntry    string `json:"safe_entry"`
+	Username      string `json:"username"`
+	PasswordHash  string `json:"password_hash"`
+	Port          int    `json:"port"`
+	SafeEntry     string `json:"safe_entry"`
+	WelcomeShown  bool   `json:"welcome_shown"`
 }
 
 func (a *AdminConfig) CheckPassword(plain string) bool {
@@ -407,15 +411,16 @@ func (c *Config) loadFromDB() error {
 	// Admin
 	var username, passwordHash, safeEntry string
 	var port int
-	err := db.QueryRow(`SELECT username, password_hash, port, safe_entry FROM admin WHERE id=1`).
-		Scan(&username, &passwordHash, &port, &safeEntry)
+	var welcomeShownInt int
+	err := db.QueryRow(`SELECT username, password_hash, port, safe_entry, welcome_shown FROM admin WHERE id=1`).
+		Scan(&username, &passwordHash, &port, &safeEntry, &welcomeShownInt)
 	if err == sql.ErrNoRows {
 		return c.initDefaults()
 	}
 	if err != nil {
 		return fmt.Errorf("load admin: %w", err)
 	}
-	c.Admin = AdminConfig{Username: username, PasswordHash: passwordHash, Port: port, SafeEntry: safeEntry}
+	c.Admin = AdminConfig{Username: username, PasswordHash: passwordHash, Port: port, SafeEntry: safeEntry, WelcomeShown: welcomeShownInt == 1}
 
 	// PortForwards
 	rows, err := db.Query(`SELECT id, name, protocol, listen_port, target_ip_enc, target_port, enabled, created_at FROM port_forwards ORDER BY created_at`)
@@ -561,10 +566,14 @@ func (c *Config) loadFromDB() error {
 // ─── Atomic save helpers ──────────────────────────────────────────────────────
 
 func (c *Config) SaveAdmin() error {
+	welcomeShownInt := 0
+	if c.Admin.WelcomeShown {
+		welcomeShownInt = 1
+	}
 	_, err := c.dataDir.db.Exec(
-		`INSERT INTO admin(id,username,password_hash,port,safe_entry) VALUES(1,?,?,?,?)
-		 ON CONFLICT(id) DO UPDATE SET username=excluded.username, password_hash=excluded.password_hash, port=excluded.port, safe_entry=excluded.safe_entry`,
-		c.Admin.Username, c.Admin.PasswordHash, c.Admin.Port, c.Admin.SafeEntry,
+		`INSERT INTO admin(id,username,password_hash,port,safe_entry,welcome_shown) VALUES(1,?,?,?,?,?)
+		 ON CONFLICT(id) DO UPDATE SET username=excluded.username, password_hash=excluded.password_hash, port=excluded.port, safe_entry=excluded.safe_entry, welcome_shown=excluded.welcome_shown`,
+		c.Admin.Username, c.Admin.PasswordHash, c.Admin.Port, c.Admin.SafeEntry, welcomeShownInt,
 	)
 	return err
 }
