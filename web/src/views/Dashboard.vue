@@ -126,38 +126,12 @@
       </div>
     </div>
 
-    <!-- ══ 四个功能卡片：2×2 网格 ════════════════════════════════════ -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+    <!-- ══ 第一行：动态域名 + Web 服务 ══════════════════════════════ -->
+    <!-- 移动端1列；sm以上：动态域名占1份，Web服务占2份 -->
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
 
-      <!-- 端口转发 -->
-      <div class="glass-card p-5 sm:p-6 flex flex-col min-h-[200px]">
-        <div class="flex items-start justify-between mb-4">
-          <div class="flex items-center gap-3">
-            <div class="w-10 h-10 rounded-xl flex items-center justify-center text-white shadow flex-shrink-0"
-                 style="background: linear-gradient(135deg,#3b82f6,#06b6d4)">
-              <ArrowLeftRight :size="17" />
-            </div>
-            <div>
-              <div class="font-semibold text-slate-800 text-base leading-tight">端口转发</div>
-              <div class="text-xs text-slate-400 mt-0.5">{{ pfRules.filter(r=>r.enabled).length }}/{{ pfRules.length }} 条启用</div>
-            </div>
-          </div>
-          <div class="text-4xl font-bold text-slate-900 tabular-nums leading-none">{{ pfRules.length }}</div>
-        </div>
-        <div v-if="pfRules.length === 0" class="flex-1 flex items-center justify-center text-slate-300 text-sm">暂无规则</div>
-        <div v-else class="flex-1 space-y-2">
-          <div v-for="r in pfRules.slice(0,6)" :key="r.id"
-               class="flex items-center gap-2.5 py-2 border-b border-slate-50 last:border-0">
-            <span class="status-dot flex-shrink-0" :class="r.enabled ? 'active' : 'inactive'"></span>
-            <span class="text-slate-700 font-medium text-sm truncate flex-1">{{ r.name }}</span>
-            <span class="text-slate-400 font-mono text-xs flex-shrink-0">:{{ r.listen_port }}</span>
-          </div>
-          <div v-if="pfRules.length > 6" class="text-xs text-slate-400 text-center pt-1">+{{ pfRules.length - 6 }} 条</div>
-        </div>
-      </div>
-
-      <!-- 动态域名 -->
-      <div class="glass-card p-5 sm:p-6 flex flex-col min-h-[200px]">
+      <!-- 动态域名（1/3） -->
+      <div class="sm:col-span-1 glass-card p-5 sm:p-6 flex flex-col min-h-[220px]">
         <div class="flex items-start justify-between mb-4">
           <div class="flex items-center gap-3">
             <div class="w-10 h-10 rounded-xl flex items-center justify-center text-white shadow flex-shrink-0"
@@ -173,17 +147,17 @@
         </div>
         <div v-if="ddnsRules.length === 0" class="flex-1 flex items-center justify-center text-slate-300 text-sm">暂无规则</div>
         <div v-else class="flex-1 space-y-2">
-          <div v-for="r in ddnsRules.slice(0,6)" :key="r.id"
+          <div v-for="r in ddnsRules.slice(0,7)" :key="r.id"
                class="flex items-center gap-2.5 py-2 border-b border-slate-50 last:border-0">
             <span class="status-dot flex-shrink-0" :class="r.enabled ? 'active' : 'inactive'"></span>
             <span class="text-slate-700 font-medium text-sm truncate flex-1 font-mono">{{ domainLabel(r) }}</span>
           </div>
-          <div v-if="ddnsRules.length > 6" class="text-xs text-slate-400 text-center pt-1">+{{ ddnsRules.length - 6 }} 条</div>
+          <div v-if="ddnsRules.length > 7" class="text-xs text-slate-400 text-center pt-1">+{{ ddnsRules.length - 7 }} 条</div>
         </div>
       </div>
 
-      <!-- Web 服务 -->
-      <div class="glass-card p-5 sm:p-6 flex flex-col min-h-[220px]">
+      <!-- Web 服务（2/3） -->
+      <div class="sm:col-span-2 glass-card p-5 sm:p-6 flex flex-col min-h-[220px]">
         <div class="flex items-start justify-between mb-4">
           <div class="flex items-center gap-3">
             <div class="w-11 h-11 rounded-xl flex items-center justify-center text-white shadow flex-shrink-0"
@@ -215,8 +189,14 @@
         </div>
       </div>
 
-      <!-- 证书有效期 -->
-      <div class="glass-card p-5 sm:p-6 flex flex-col min-h-[220px]">
+    </div>
+
+    <!-- ══ 第二行：证书有效期 + 端口转发 ══════════════════════════════ -->
+    <!-- 移动端1列；sm以上：证书占2份，端口转发占1份 -->
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+
+      <!-- 证书有效期（2/3） -->
+      <div class="sm:col-span-2 glass-card p-5 sm:p-6 flex flex-col min-h-[220px]">
         <div class="flex items-start justify-between mb-4">
           <div class="flex items-center gap-3">
             <div class="w-10 h-10 rounded-xl flex items-center justify-center text-white shadow flex-shrink-0"
@@ -241,10 +221,10 @@
             <span class="text-sm">暂无证书</span>
           </div>
         </div>
-        <div v-else class="flex-1 space-y-3">
+        <div v-else class="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 content-start">
           <div v-for="cert in certs" :key="cert.id">
             <div class="flex items-center justify-between mb-1.5">
-              <span class="font-mono text-sm text-slate-600 truncate max-w-[160px] sm:max-w-[200px]">{{ cert.domain }}</span>
+              <span class="font-mono text-sm text-slate-600 truncate max-w-[180px]">{{ cert.domain }}</span>
               <span :class="cert.days_left < 14 ? 'text-red-500' : cert.days_left < 30 ? 'text-amber-500' : 'text-emerald-600'"
                     class="font-bold text-sm flex-shrink-0 ml-2">
                 {{ cert.days_left >= 0 ? cert.days_left + '天' : '?' }}
@@ -254,6 +234,33 @@
               <div class="h-full rounded-full transition-all duration-700" :style="certBarStyle(cert.days_left)"></div>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- 端口转发（1/3） -->
+      <div class="sm:col-span-1 glass-card p-5 sm:p-6 flex flex-col min-h-[220px]">
+        <div class="flex items-start justify-between mb-4">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl flex items-center justify-center text-white shadow flex-shrink-0"
+                 style="background: linear-gradient(135deg,#3b82f6,#06b6d4)">
+              <ArrowLeftRight :size="17" />
+            </div>
+            <div>
+              <div class="font-semibold text-slate-800 text-base leading-tight">端口转发</div>
+              <div class="text-xs text-slate-400 mt-0.5">{{ pfRules.filter(r=>r.enabled).length }}/{{ pfRules.length }} 条启用</div>
+            </div>
+          </div>
+          <div class="text-4xl font-bold text-slate-900 tabular-nums leading-none">{{ pfRules.length }}</div>
+        </div>
+        <div v-if="pfRules.length === 0" class="flex-1 flex items-center justify-center text-slate-300 text-sm">暂无规则</div>
+        <div v-else class="flex-1 space-y-2">
+          <div v-for="r in pfRules.slice(0,7)" :key="r.id"
+               class="flex items-center gap-2.5 py-2 border-b border-slate-50 last:border-0">
+            <span class="status-dot flex-shrink-0" :class="r.enabled ? 'active' : 'inactive'"></span>
+            <span class="text-slate-700 font-medium text-sm truncate flex-1">{{ r.name }}</span>
+            <span class="text-slate-400 font-mono text-xs flex-shrink-0">:{{ r.listen_port }}</span>
+          </div>
+          <div v-if="pfRules.length > 7" class="text-xs text-slate-400 text-center pt-1">+{{ pfRules.length - 7 }} 条</div>
         </div>
       </div>
 
