@@ -70,11 +70,7 @@
 
     <!-- Main content -->
     <main class="flex-1 overflow-y-auto">
-      <header class="sticky top-0 z-30 bg-white/80 backdrop-blur-sm border-b border-slate-100 px-8 py-4 flex items-center justify-between">
-        <div>
-          <h1 class="text-lg font-semibold text-slate-900">{{ currentPage.label }}</h1>
-          <p v-if="currentPage.desc" class="text-xs text-slate-400">{{ currentPage.desc }}</p>
-        </div>
+      <header class="sticky top-0 z-30 bg-white/80 backdrop-blur-sm border-b border-slate-100 px-8 py-4 flex items-center justify-end">
         <div class="flex items-center gap-3">
           <!-- Lang switch -->
           <button @click="i18n.toggle()"
