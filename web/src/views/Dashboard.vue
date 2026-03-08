@@ -1,5 +1,36 @@
 <template>
   <div class="space-y-6 animate-fade-in">
+
+    <!-- First-login welcome modal -->
+    <Teleport to="body">
+      <Transition name="modal">
+        <div v-if="showWelcomeModal"
+             class="fixed inset-0 z-50 flex items-center justify-center p-4"
+             style="background: rgba(0,0,0,0.45); backdrop-filter: blur(4px);">
+          <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 sm:p-8 relative">
+            <!-- Icon -->
+            <div class="flex items-center justify-center w-12 h-12 rounded-2xl bg-purple-100 mb-4 mx-auto">
+              <ShieldAlert :size="24" class="text-purple-600" />
+            </div>
+            <h3 class="text-lg font-bold text-slate-800 text-center mb-2">欢迎使用 Vane 👋</h3>
+            <p class="text-slate-500 text-sm text-center leading-relaxed mb-6">
+              检测到您正在首次登录，建议前往<span class="font-semibold text-slate-700">「设置」</span>修改默认用户名、密码及安全访问路径，以保障系统安全。
+            </p>
+            <div class="flex gap-3">
+              <button @click="dismissModal"
+                      class="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-50 active:scale-[0.98] transition-all">
+                暂不修改
+              </button>
+              <button @click="goToSettings"
+                      class="flex-1 py-2.5 rounded-xl bg-purple-600 text-white text-sm font-semibold hover:bg-purple-700 active:scale-[0.98] transition-all shadow-sm">
+                前往设置 →
+              </button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
     <!-- Stat cards -->
     <div class="grid grid-cols-2 xl:grid-cols-4 gap-4">
       <StatCard v-for="s in stats" :key="s.label" v-bind="s" />
@@ -7,7 +38,7 @@
 
     <!-- Charts row -->
     <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
-      <!-- Web services status (replaces useless traffic chart) -->
+      <!-- Web services status -->
       <div class="xl:col-span-2 glass-card p-6">
         <div class="flex items-center justify-between mb-5">
           <div>
@@ -98,13 +129,15 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue'
-import { Shield, Server } from 'lucide-vue-next'
+import { Shield, Server, ShieldAlert } from 'lucide-vue-next'
+import { useRouter } from 'vue-router'
 import { api } from '@/stores/auth'
 import { useI18n } from '@/stores/i18n'
 import StatCard from '@/components/StatCard.vue'
 import QuickStatusCard from '@/components/QuickStatusCard.vue'
 
 const i18n = useI18n()
+const router = useRouter()
 const dashboard = ref({})
 const certs = ref([])
 const ddnsRules = ref([])
@@ -113,6 +146,28 @@ const wsRules = ref([])
 const uptime = ref('—')
 let startTime = Date.now()
 
+// ── First-login modal ──────────────────────────────────────────────────────
+const WELCOME_KEY = 'vane_welcome_shown'
+const showWelcomeModal = ref(false)
+
+function checkWelcomeModal() {
+  if (!localStorage.getItem(WELCOME_KEY)) {
+    showWelcomeModal.value = true
+  }
+}
+
+function dismissModal() {
+  localStorage.setItem(WELCOME_KEY, '1')
+  showWelcomeModal.value = false
+}
+
+function goToSettings() {
+  localStorage.setItem(WELCOME_KEY, '1')
+  showWelcomeModal.value = false
+  router.push('/settings')
+}
+
+// ── Stats ──────────────────────────────────────────────────────────────────
 const stats = computed(() => [
   { label: i18n.t('portforward'), value: dashboard.value.port_forwards || 0, gradient: 'from-blue-500 to-cyan-400', icon: 'ArrowLeftRight', unit: i18n.t('portForwardRules') },
   { label: i18n.t('ddns'),        value: dashboard.value.ddns || 0,           gradient: 'from-emerald-500 to-teal-400', icon: 'Globe', unit: i18n.t('portForwardRules') },
@@ -147,6 +202,7 @@ async function load() {
 let uptimeTimer
 onMounted(() => {
   load()
+  checkWelcomeModal()
   uptimeTimer = setInterval(() => {
     const s = Math.floor((Date.now() - startTime) / 1000)
     const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60
@@ -155,3 +211,10 @@ onMounted(() => {
 })
 onUnmounted(() => clearInterval(uptimeTimer))
 </script>
+
+<style scoped>
+.modal-enter-active, .modal-leave-active { transition: opacity 0.2s ease; }
+.modal-enter-active .bg-white, .modal-leave-active .bg-white { transition: transform 0.2s ease, opacity 0.2s ease; }
+.modal-enter-from, .modal-leave-to { opacity: 0; }
+.modal-enter-from .bg-white { transform: scale(0.95); opacity: 0; }
+</style>
