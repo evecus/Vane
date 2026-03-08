@@ -155,7 +155,7 @@
               </label>
             </div>
 
-            <!-- TLS 开启时：证书提示（不强制） -->
+            <!-- TLS 开启时：证书选择（可选，留空自动匹配） -->
             <div v-if="svcForm.enable_https" class="space-y-3">
               <div class="p-3 bg-blue-50 rounded-xl border border-blue-100 flex items-start gap-2 text-xs text-blue-700">
                 <svg class="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -175,6 +175,13 @@
                     {{ cert.name || cert.domain }}
                   </option>
                 </select>
+                <!-- 自动匹配时的说明 -->
+                <p v-if="!svcForm.tls_cert_id" class="text-xs text-emerald-600 mt-1.5 flex items-center gap-1">
+                  <svg class="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                  </svg>
+                  {{ t('tlsAutoDetectHint') }}
+                </p>
                 <p v-if="certs.filter(c=>c.status==='active').length === 0" class="text-xs text-amber-500 mt-1">
                   {{ t('noCertsAvailable') }}
                 </p>
