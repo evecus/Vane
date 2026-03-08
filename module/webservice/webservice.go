@@ -218,9 +218,9 @@ func (m *Manager) StartAll() {
 	}
 }
 
-// Start 在单个端口上同时监听 HTTP 和 HTTPS。
-// HTTP 请求自动 301 重定向到 https://同域名:同端口。
-// 没有证书则拒绝启动。
+// Start 根据服务配置启动 HTTP 或 HTTP+HTTPS。
+// 若 EnableHTTPS=true：单端口嗅探，HTTP 自动 301 重定向至 HTTPS，HTTPS 正常反代。
+// 若 EnableHTTPS=false：单端口纯 HTTP 反代，无 TLS。
 func (m *Manager) Start(id string) error {
 	m.cfg.RLock()
 	var svc *config.WebService
@@ -244,7 +244,39 @@ func (m *Manager) Start(id string) error {
 	}
 	m.mu.Unlock()
 
-	// 必须有有效证书
+	addr := fmt.Sprintf("0.0.0.0:%d", svc.ListenPort)
+
+	// ── 纯 HTTP 模式 ──────────────────────────────────────────────────────────
+	if !svc.EnableHTTPS {
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("listen %s: %w", addr, err)
+		}
+		router := m.buildRouter(svc)
+		httpSrv := &http.Server{
+			Handler:      router,
+			ReadTimeout:  30 * time.Second,
+			WriteTimeout: 60 * time.Second,
+			IdleTimeout:  120 * time.Second,
+		}
+		ms := &managedServer{
+			httpSrv: httpSrv,
+			httpLn:  newChanListener(make(chan net.Conn), ln.Addr()), // placeholder
+		}
+		// 直接用原始 listener，不走 sniff
+		go func() {
+			log.Printf("[webservice] HTTP :%d  (service %q)", svc.ListenPort, svc.Name)
+			if err := httpSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
+				log.Printf("[webservice] HTTP error: %v", err)
+			}
+		}()
+		m.mu.Lock()
+		m.servers[id] = ms
+		m.mu.Unlock()
+		return nil
+	}
+
+	// ── HTTPS 模式（含 HTTP→HTTPS 重定向）────────────────────────────────────
 	certPEM, keyPEM := m.getCertPEM(svc.TLSCertID)
 	if certPEM == "" || keyPEM == "" {
 		return fmt.Errorf("service %q requires a TLS certificate but none is configured or issued yet", svc.Name)
@@ -254,8 +286,6 @@ func (m *Manager) Start(id string) error {
 		return fmt.Errorf("invalid TLS certificate for service %q: %w", svc.Name, err)
 	}
 
-	// 绑定端口
-	addr := fmt.Sprintf("0.0.0.0:%d", svc.ListenPort)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
@@ -273,7 +303,7 @@ func (m *Manager) Start(id string) error {
 
 	httpsPort := svc.ListenPort
 
-	// ── HTTP server：收到明文请求，301 → https://host:port/path ──
+	// HTTP server：收到明文请求，301 → https://host:port/path
 	ms.httpSrv = &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			host := r.Host
@@ -299,7 +329,7 @@ func (m *Manager) Start(id string) error {
 		}
 	}()
 
-	// ── HTTPS server：TLS 连接，正常反代 ──
+	// HTTPS server：TLS 连接，正常反代
 	router := m.buildRouter(svc)
 	tlsCfg := &tls.Config{
 		Certificates: []tls.Certificate{tlsCert},
@@ -314,7 +344,6 @@ func (m *Manager) Start(id string) error {
 	}
 	go func() {
 		log.Printf("[webservice] HTTPS :%d  (service %q)", httpsPort, svc.Name)
-		// ServeTLS 的第2/3参数传空字符串，证书已在 TLSConfig 里
 		tlsLn := tls.NewListener(httpsLn, tlsCfg)
 		if err := ms.httpsSrv.Serve(tlsLn); err != nil && err != http.ErrServerClosed && err.Error() != "listener closed" {
 			log.Printf("[webservice] HTTPS error: %v", err)
