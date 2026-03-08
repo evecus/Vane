@@ -91,6 +91,24 @@
               <span class="font-mono text-xs text-slate-600 bg-white border border-slate-100 px-2 py-0.5 rounded-lg break-all">
                 {{ route.backend_url }}
               </span>
+              <!-- 证书状态（仅 TLS 服务显示） -->
+              <template v-if="svc.enable_https">
+                <span v-if="route.cert_status === 'ok'"
+                      class="inline-flex items-center gap-1 text-xs text-emerald-600 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-lg flex-shrink-0">
+                  <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+                  证书已匹配
+                </span>
+                <span v-else-if="route.cert_status === 'cert_inactive'"
+                      class="inline-flex items-center gap-1 text-xs text-amber-600 bg-amber-50 border border-amber-100 px-2 py-0.5 rounded-lg flex-shrink-0">
+                  <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                  证书未激活
+                </span>
+                <span v-else
+                      class="inline-flex items-center gap-1 text-xs text-red-500 bg-red-50 border border-red-100 px-2 py-0.5 rounded-lg flex-shrink-0">
+                  <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                  无匹配证书
+                </span>
+              </template>
             </div>
 
             <!-- 路由操作：移动端始终可见 -->
@@ -155,37 +173,12 @@
               </label>
             </div>
 
-            <!-- TLS 开启时：证书选择（可选，留空自动匹配） -->
-            <div v-if="svcForm.enable_https" class="space-y-3">
-              <div class="p-3 bg-blue-50 rounded-xl border border-blue-100 flex items-start gap-2 text-xs text-blue-700">
-                <svg class="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
-                </svg>
-                {{ t('httpsHint') }}
-              </div>
-
-              <div>
-                <label class="input-label">
-                  {{ t('tlsCertOptional') }}
-                  <span class="text-xs font-normal text-slate-400 ml-1 normal-case tracking-normal">{{ t('tlsCertOptionalHint') }}</span>
-                </label>
-                <select v-model="svcForm.tls_cert_id" class="select">
-                  <option value="">{{ t('tlsAutoDetect') }}</option>
-                  <option v-for="cert in certs.filter(c=>c.status==='active')" :key="cert.id" :value="cert.id">
-                    {{ cert.name || cert.domain }}
-                  </option>
-                </select>
-                <!-- 自动匹配时的说明 -->
-                <p v-if="!svcForm.tls_cert_id" class="text-xs text-emerald-600 mt-1.5 flex items-center gap-1">
-                  <svg class="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                  </svg>
-                  {{ t('tlsAutoDetectHint') }}
-                </p>
-                <p v-if="certs.filter(c=>c.status==='active').length === 0" class="text-xs text-amber-500 mt-1">
-                  {{ t('noCertsAvailable') }}
-                </p>
-              </div>
+            <!-- TLS 开启时：提示信息 -->
+            <div v-if="svcForm.enable_https" class="p-3 bg-blue-50 rounded-xl border border-blue-100 flex items-start gap-2 text-xs text-blue-700">
+              <svg class="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+              </svg>
+              {{ t('httpsHint') }}证书将根据子规则域名自动匹配。
             </div>
 
           </div>
@@ -430,9 +423,8 @@ const filteredLogs = computed(() => {
 })
 
 async function load() {
-  const [svcRes, certRes] = await Promise.all([api.get('/webservice'), api.get('/tls')])
-  services.value = svcRes.data
-  certs.value = certRes.data
+  const res = await api.get('/webservice')
+  services.value = res.data
 }
 
 async function loadLogs() {
@@ -454,16 +446,12 @@ function openServiceModal(svc = null) {
   svcError.value = ''
   svcForm.value = svc
     ? { ...svc }
-    : { name: '', listen_port: 443, enable_https: true, tls_cert_id: '', enabled: true }
+    : { name: '', listen_port: 443, enable_https: true, enabled: true }
   serviceModal.value = true
 }
 
 async function saveService() {
   svcError.value = ''
-  // 不开TLS时清空证书
-  if (!svcForm.value.enable_https) {
-    svcForm.value.tls_cert_id = ''
-  }
   try {
     if (editingService.value) {
       await api.put(`/webservice/${svcForm.value.id}`, svcForm.value)
