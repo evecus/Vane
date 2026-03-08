@@ -837,12 +837,7 @@ func (h *Handler) createWebService(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "无效端口"})
 		return
 	}
-	// All web services require HTTPS
 	svc.EnableHTTPS = true
-	if svc.TLSCertID == "" {
-		c.JSON(400, gin.H{"error": "Web服务必须配置SSL证书才能启动"})
-		return
-	}
 	if svc.Enabled && !config.IsPortAvailable(svc.ListenPort) {
 		c.JSON(409, gin.H{"error": "端口已被占用", "port": svc.ListenPort})
 		return
@@ -876,10 +871,6 @@ func (h *Handler) updateWebService(c *gin.Context) {
 		return
 	}
 	req.EnableHTTPS = true // always
-	if req.TLSCertID == "" {
-		c.JSON(400, gin.H{"error": "Web服务必须配置SSL证书"})
-		return
-	}
 	h.ws.Stop(id)
 	if req.Enabled && !config.IsPortAvailable(req.ListenPort) {
 		c.JSON(409, gin.H{"error": "端口已被占用", "port": req.ListenPort})
@@ -1063,6 +1054,7 @@ func (h *Handler) createRoute(c *gin.Context) {
 		c.JSON(500, gin.H{"error": "保存失败"})
 		return
 	}
+	h.ws.MatchRouteCert(id, &route)
 	h.ws.Stop(id)
 	_ = h.ws.Start(id)
 	c.JSON(201, route)
@@ -1100,6 +1092,7 @@ func (h *Handler) updateRoute(c *gin.Context) {
 		c.JSON(500, gin.H{"error": "保存失败"})
 		return
 	}
+	h.ws.MatchRouteCert(svcID, &req)
 	h.ws.Stop(svcID)
 	_ = h.ws.Start(svcID)
 	c.JSON(200, req)
@@ -1153,6 +1146,7 @@ func (h *Handler) toggleRoute(c *gin.Context) {
 		c.JSON(500, gin.H{"error": "保存失败"})
 		return
 	}
+	h.ws.MatchRouteCert(svcID, &updatedRoute)
 	h.ws.Stop(svcID)
 	_ = h.ws.Start(svcID)
 	c.JSON(200, gin.H{"enabled": enabled})
@@ -1218,10 +1212,9 @@ func (h *Handler) createCert(c *gin.Context) {
 		c.JSON(500, gin.H{"error": "保存失败"})
 		return
 	}
+	go h.ws.RematchAllRoutes()
 	c.JSON(201, cert)
 }
-
-func (h *Handler) updateCert(c *gin.Context) {
 	id := c.Param("id")
 	var req config.TLSCert
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1256,6 +1249,7 @@ func (h *Handler) updateCert(c *gin.Context) {
 		c.JSON(500, gin.H{"error": "保存失败"})
 		return
 	}
+	go h.ws.RematchAllRoutes()
 	c.JSON(200, gin.H{"ok": true})
 }
 
@@ -1273,6 +1267,7 @@ func (h *Handler) deleteCert(c *gin.Context) {
 		c.JSON(500, gin.H{"error": "保存失败"})
 		return
 	}
+	go h.ws.RematchAllRoutes()
 	c.JSON(200, gin.H{"ok": true})
 }
 
@@ -1318,6 +1313,7 @@ func (h *Handler) issueCert(c *gin.Context) {
 					certCopy := h.cfg.TLSCerts[i]
 					h.cfg.Unlock()
 					_ = h.cfg.SaveTLSCert(certCopy)
+					go h.ws.RematchAllRoutes()
 					return
 				}
 				// Success: tls.IssueCert already persisted the cert
@@ -1325,6 +1321,7 @@ func (h *Handler) issueCert(c *gin.Context) {
 			}
 		}
 		h.cfg.Unlock()
+		go h.ws.RematchAllRoutes()
 	}()
 
 	c.JSON(202, gin.H{"ok": true, "message": "证书申请已开始，请稍后刷新查看状态"})
@@ -1406,6 +1403,7 @@ func (h *Handler) uploadCert(c *gin.Context) {
 		c.JSON(500, gin.H{"error": "保存失败"})
 		return
 	}
+	go h.ws.RematchAllRoutes()
 	c.JSON(201, cert)
 }
 
