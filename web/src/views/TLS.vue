@@ -309,98 +309,42 @@
       <div v-if="uploadModal" class="modal-overlay" @click.self="uploadModal=null">
         <div class="modal-box max-w-lg">
 
-          <!-- 移动端拖动条 -->
           <div class="sm:hidden flex justify-center pt-3 pb-1 flex-shrink-0">
             <div class="w-10 h-1 bg-slate-200 rounded-full"></div>
           </div>
 
-          <!-- 标题栏 -->
           <div class="flex-shrink-0 flex items-center justify-between px-5 sm:px-6 py-3 sm:py-4 border-b border-slate-100">
             <div>
               <h3 class="font-semibold text-slate-900 text-base">{{ t('uploadCertTitle') }}</h3>
-              <p class="text-xs text-slate-400 mt-0.5">{{ t('uploadCertDesc') }}</p>
+              <p class="text-xs text-slate-400 mt-0.5">上传包含 cert.pem 和 key.pem 的 ZIP 压缩包</p>
             </div>
             <button @click="uploadModal=null" class="btn-ghost btn-sm p-1.5 ml-2"><X :size="16" /></button>
           </div>
 
-          <!-- 可滚动内容 -->
           <div class="flex-1 overflow-y-auto overscroll-contain px-5 sm:px-6 py-4 space-y-4">
-            <!-- 域名 -->
+
             <div>
-              <label class="input-label">{{ t('domain') }}</label>
-              <input v-model="uploadForm.domain" class="input font-mono" :placeholder="t('domainPlaceholder')"
-                     inputmode="url" autocomplete="off" />
+              <label class="input-label">证书 ZIP 文件</label>
+              <label class="flex items-center gap-3 p-4 border-2 border-dashed border-slate-200 rounded-xl cursor-pointer hover:border-vane-300 hover:bg-vane-50/30 transition-all active:bg-vane-50/50">
+                <Upload :size="18" class="text-slate-400 flex-shrink-0" />
+                <div class="min-w-0">
+                  <div class="text-sm text-slate-600 truncate">{{ uploadForm.zipFile ? uploadForm.zipFile.name : '点击选择 ZIP 文件' }}</div>
+                  <div class="text-xs text-slate-400 mt-0.5">需包含 cert.pem（或 fullchain.pem）和 key.pem（或 privkey.pem）</div>
+                </div>
+                <input type="file" accept=".zip" class="hidden" @change="e => uploadForm.zipFile = e.target.files[0]" />
+              </label>
             </div>
 
-            <!-- 模式切换 tabs -->
-            <div class="flex gap-1.5 p-1 bg-slate-100 rounded-xl">
-              <button type="button" @click="uploadMode='files'"
-                      :class="['flex-1 py-1.5 text-xs font-medium rounded-lg transition-all', uploadMode==='files' ? 'bg-white shadow text-slate-800' : 'text-slate-500']">
-                {{ t('separatePem') }}
-              </button>
-              <button type="button" @click="uploadMode='zip'"
-                      :class="['flex-1 py-1.5 text-xs font-medium rounded-lg transition-all', uploadMode==='zip' ? 'bg-white shadow text-slate-800' : 'text-slate-500']">
-                {{ t('zipUpload') }}
-              </button>
-              <button type="button" @click="uploadMode='paste'"
-                      :class="['flex-1 py-1.5 text-xs font-medium rounded-lg transition-all', uploadMode==='paste' ? 'bg-white shadow text-slate-800' : 'text-slate-500']">
-                {{ t('pasteText') }}
-              </button>
+            <div class="flex items-start gap-2 text-xs text-slate-500 bg-slate-50 rounded-xl px-3 py-2.5">
+              <Info :size="13" class="flex-shrink-0 mt-0.5 text-slate-400" />
+              <span>程序将自动从证书中读取域名信息（SAN），无需手动填写。可直接上传从本程序下载的证书 ZIP。</span>
             </div>
 
-            <!-- 分开上传 -->
-            <template v-if="uploadMode==='files'">
-              <div>
-                <label class="input-label">{{ t('certFilePem') }}</label>
-                <label class="flex items-center gap-3 p-3 border-2 border-dashed border-slate-200 rounded-xl cursor-pointer hover:border-vane-300 hover:bg-vane-50/30 transition-all active:bg-vane-50/50">
-                  <Upload :size="16" class="text-slate-400 flex-shrink-0" />
-                  <span class="text-sm text-slate-500 truncate">{{ uploadForm.certFile ? uploadForm.certFile.name : t('selectFile') }}</span>
-                  <input type="file" accept=".pem,.crt,.cer" class="hidden" @change="e => uploadForm.certFile = e.target.files[0]" />
-                </label>
-              </div>
-              <div>
-                <label class="input-label">{{ t('keyFilePem') }}</label>
-                <label class="flex items-center gap-3 p-3 border-2 border-dashed border-slate-200 rounded-xl cursor-pointer hover:border-vane-300 hover:bg-vane-50/30 transition-all active:bg-vane-50/50">
-                  <Upload :size="16" class="text-slate-400 flex-shrink-0" />
-                  <span class="text-sm text-slate-500 truncate">{{ uploadForm.keyFile ? uploadForm.keyFile.name : t('selectKeyFile') }}</span>
-                  <input type="file" accept=".pem,.key" class="hidden" @change="e => uploadForm.keyFile = e.target.files[0]" />
-                </label>
-              </div>
-            </template>
-
-            <!-- zip 上传 -->
-            <template v-else-if="uploadMode==='zip'">
-              <div>
-                <label class="input-label">{{ t('zipHint') }}</label>
-                <label class="flex items-center gap-3 p-3 border-2 border-dashed border-slate-200 rounded-xl cursor-pointer hover:border-vane-300 hover:bg-vane-50/30 transition-all active:bg-vane-50/50">
-                  <Upload :size="16" class="text-slate-400 flex-shrink-0" />
-                  <span class="text-sm text-slate-500 truncate">{{ uploadForm.zipFile ? uploadForm.zipFile.name : t('selectZip') }}</span>
-                  <input type="file" accept=".zip" class="hidden" @change="e => uploadForm.zipFile = e.target.files[0]" />
-                </label>
-              </div>
-            </template>
-
-            <!-- 粘贴文本 -->
-            <template v-else>
-              <div>
-                <label class="input-label">{{ t('certPem') }}</label>
-                <textarea v-model="uploadForm.cert_pem" class="input font-mono text-xs h-24 resize-none"
-                          placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"></textarea>
-              </div>
-              <div>
-                <label class="input-label">{{ t('keyPem') }}</label>
-                <textarea v-model="uploadForm.key_pem" class="input font-mono text-xs h-24 resize-none"
-                          placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----"></textarea>
-              </div>
-            </template>
-
-            <!-- 错误 -->
             <div v-if="uploadError" class="flex items-start gap-2 text-red-600 bg-red-50 px-3 py-2 rounded-xl border border-red-100 text-xs">
               <AlertCircle :size="13" class="flex-shrink-0 mt-0.5" /> <span>{{ uploadError }}</span>
             </div>
           </div>
 
-          <!-- 底部操作栏 -->
           <div class="flex-shrink-0 border-t border-slate-100 px-5 sm:px-6 py-3 sm:py-4">
             <div class="flex gap-2">
               <button class="btn-primary flex-1 sm:flex-none sm:min-w-[100px] justify-center" @click="upload">
@@ -478,7 +422,7 @@
 import { ref, onMounted } from 'vue'
 import {
   Plus, Shield, Lock, RefreshCw, Upload, Trash2, X,
-  Download, Eye, Pencil, AlertCircle, Copy
+  Download, Eye, Pencil, AlertCircle, Copy, Info
 } from 'lucide-vue-next'
 import { api } from '@/stores/auth'
 import { useI18n } from '@/stores/i18n'
@@ -694,26 +638,13 @@ async function issue(id) {
 
 async function upload() {
   uploadError.value = ''
-  if (!uploadForm.value.domain) { uploadError.value = t('errNoDomainUpload'); return }
+  if (!uploadForm.value.zipFile) { uploadError.value = '请选择 ZIP 文件'; return }
   try {
-    if (uploadMode.value === 'files') {
-      if (!uploadForm.value.certFile || !uploadForm.value.keyFile) { uploadError.value = t('errNoCertKey'); return }
-      const cert_pem = await uploadForm.value.certFile.text()
-      const key_pem  = await uploadForm.value.keyFile.text()
-      await api.post('/tls/upload', { domain: uploadForm.value.domain, cert_pem, key_pem })
-    } else if (uploadMode.value === 'zip') {
-      if (!uploadForm.value.zipFile) { uploadError.value = t('errNoZip'); return }
-      const JSZip = (await import('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js')).default
-      const zip = await JSZip.loadAsync(uploadForm.value.zipFile)
-      const certEntry = zip.file('cert.pem') || zip.file('fullchain.pem') || zip.file('certificate.pem')
-      const keyEntry  = zip.file('key.pem')  || zip.file('privkey.pem')   || zip.file('private.pem')
-      if (!certEntry || !keyEntry) { uploadError.value = t('errZipContent'); return }
-      await api.post('/tls/upload', { domain: uploadForm.value.domain, cert_pem: await certEntry.async('string'), key_pem: await keyEntry.async('string') })
-    } else {
-      if (!uploadForm.value.cert_pem || !uploadForm.value.key_pem) { uploadError.value = t('errNoPasteContent'); return }
-      await api.post('/tls/upload', { domain: uploadForm.value.domain, cert_pem: uploadForm.value.cert_pem, key_pem: uploadForm.value.key_pem })
-    }
+    const fd = new FormData()
+    fd.append('file', uploadForm.value.zipFile)
+    await api.post('/tls/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
     uploadModal.value = null
+    uploadForm.value = {}
     await load()
   } catch (e) {
     uploadError.value = e.response?.data?.error || e.message
@@ -728,28 +659,9 @@ async function del(id) {
 
 // ─── 下载证书 ZIP ──────────────────────────────────────────────────────────
 async function downloadCert(cert) {
-  const { data } = await api.get(`/tls/${cert.id}/pem`)
-  const JSZip = (await import('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js')).default
-  const domains = cert.domains?.length ? cert.domains : (cert.domain ? [cert.domain] : ['cert'])
-
-  if (domains.length <= 1) {
-    const safeName = domains[0].replace(/\*/g, 'wildcard').replace(/[^a-zA-Z0-9._-]/g, '_')
-    const zip = new JSZip()
-    zip.file('cert.pem', data.cert_pem)
-    zip.file('key.pem', data.key_pem)
-    triggerDownload(`${safeName}-certs.zip`, await zip.generateAsync({ type: 'blob' }), true)
-  } else {
-    const outerZip = new JSZip()
-    for (const domain of domains) {
-      const safeName = domain.replace(/\*/g, 'wildcard').replace(/[^a-zA-Z0-9._-]/g, '_')
-      const inner = new JSZip()
-      inner.file('cert.pem', data.cert_pem)
-      inner.file('key.pem', data.key_pem)
-      outerZip.file(`${safeName}-certs.zip`, await inner.generateAsync({ type: 'uint8array' }))
-    }
-    const certLabel = (cert.name || cert.domain || 'certs').replace(/[^a-zA-Z0-9._-]/g, '_')
-    triggerDownload(`${certLabel}-all-certs.zip`, await outerZip.generateAsync({ type: 'blob' }), true)
-  }
+  const res = await api.get(`/tls/${cert.id}/download`, { responseType: 'blob' })
+  const safeName = (cert.domain || 'cert').replace(/\*/g, 'wildcard').replace(/[^a-zA-Z0-9._-]/g, '_')
+  triggerDownload(`${safeName}-certs.zip`, res.data, true)
 }
 
 async function viewPEM(cert) {
