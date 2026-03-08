@@ -105,12 +105,23 @@
             <div v-else class="space-y-1.5">
               <template v-for="n in sysinfo.network" :key="n.iface">
                 <div v-if="!isVirtualIface(n.iface) && (n.rx_bytes > 0 || n.tx_bytes > 0)"
-                     class="flex items-center justify-between gap-2 text-xs">
-                  <span class="font-mono text-slate-600 truncate flex-shrink-0">{{ n.iface }}</span>
-                  <span class="flex items-center gap-1.5 flex-shrink-0">
-                    <span class="text-blue-500">↓{{ fmtBytes(n.rx_bytes) }}</span>
-                    <span class="text-emerald-500">↑{{ fmtBytes(n.tx_bytes) }}</span>
-                  </span>
+                     class="text-xs">
+                  <!-- 桌面：同行左右排列 -->
+                  <div class="hidden sm:flex items-center justify-between gap-2">
+                    <span class="font-mono text-slate-600 flex-shrink-0">{{ n.iface }}</span>
+                    <span class="flex items-center gap-2 flex-shrink-0">
+                      <span class="text-blue-500">↓{{ fmtBytes(n.rx_bytes) }}</span>
+                      <span class="text-emerald-500">↑{{ fmtBytes(n.tx_bytes) }}</span>
+                    </span>
+                  </div>
+                  <!-- 移动端：流量在名称下方 -->
+                  <div class="sm:hidden">
+                    <div class="font-mono text-slate-600">{{ n.iface }}</div>
+                    <div class="flex gap-2 mt-0.5 pl-0.5">
+                      <span class="text-blue-500">↓{{ fmtBytes(n.rx_bytes) }}</span>
+                      <span class="text-emerald-500">↑{{ fmtBytes(n.tx_bytes) }}</span>
+                    </div>
+                  </div>
                 </div>
               </template>
             </div>
@@ -120,11 +131,21 @@
               <NetworkIcon :size="12" class="text-indigo-400" /> 网卡 IP
             </div>
             <div v-if="!sysinfo.ifaces?.length" class="text-xs text-slate-300 italic">无数据</div>
-            <div v-else class="space-y-1">
+            <div v-else class="space-y-1.5">
               <template v-for="iface in sysinfo.ifaces" :key="iface.name">
-                <div v-if="!isVirtualIface(iface.name)" class="flex flex-col gap-0.5">
-                  <span class="font-mono text-xs font-semibold text-slate-600">{{ iface.name }}</span>
-                  <span v-for="ip in iface.ips" :key="ip" class="font-mono text-xs text-slate-400 break-all">{{ ip }}</span>
+                <div v-if="!isVirtualIface(iface.name)" class="text-xs">
+                  <!-- 桌面：名称左，IP 右侧堆叠 -->
+                  <div class="hidden sm:flex items-start justify-between gap-2">
+                    <span class="font-mono font-semibold text-slate-600 flex-shrink-0">{{ iface.name }}</span>
+                    <div class="flex flex-col items-end gap-0.5">
+                      <span v-for="ip in iface.ips" :key="ip" class="font-mono text-slate-400 text-right break-all">{{ ip }}</span>
+                    </div>
+                  </div>
+                  <!-- 移动端：名称 + IP 换行堆叠 -->
+                  <div class="sm:hidden">
+                    <div class="font-mono font-semibold text-slate-600">{{ iface.name }}</div>
+                    <div v-for="ip in iface.ips" :key="ip" class="font-mono text-slate-400 break-all mt-0.5">{{ ip }}</div>
+                  </div>
                 </div>
               </template>
             </div>
