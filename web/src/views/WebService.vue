@@ -130,12 +130,24 @@
                 {{ t('listenPortHint') }}
               </p>
             </div>
-            <!-- HTTPS is always required -->
-            <div class="p-3 bg-blue-50 rounded-xl border border-blue-100 flex items-center gap-2 text-xs text-blue-700">
-              <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
-              {{ t('httpsRequired') }}
+            <!-- TLS toggle -->
+            <div class="flex items-center gap-3">
+              <label class="toggle">
+                <input type="checkbox" v-model="svcForm.enable_https" />
+                <div class="toggle-track"></div>
+                <div class="toggle-thumb"></div>
+              </label>
+              <div>
+                <span class="text-sm text-slate-600">{{ t('enableHttps') }}</span>
+                <p class="text-xs text-slate-400 mt-0.5">{{ svcForm.enable_https ? t('httpsHint') : t('httpOnlyHint') }}</p>
+              </div>
             </div>
-            <div>
+            <!-- TLS cert selector, shown only when HTTPS enabled -->
+            <div v-if="svcForm.enable_https">
+              <div class="p-3 bg-blue-50 rounded-xl border border-blue-100 flex items-center gap-2 text-xs text-blue-700 mb-3">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                {{ t('httpsHint') }}
+              </div>
               <label class="input-label">{{ t('tlsCert') }} <span class="text-red-400">*</span></label>
               <select v-model="svcForm.tls_cert_id" class="select">
                 <option value="">{{ t('selectCert') }}</option>
@@ -336,7 +348,7 @@ function openServiceModal(svc = null) {
   editingService.value = !!svc
   svcError.value = ''
   svcForm.value = svc
-    ? { ...svc, enable_https: true }
+    ? { ...svc }
     : { name: '', listen_port: 443, enable_https: true, tls_cert_id: '', enabled: true }
   serviceModal.value = true
 }
