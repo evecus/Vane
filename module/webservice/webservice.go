@@ -174,11 +174,12 @@ type Manager struct {
 }
 
 type managedServer struct {
-	sniff     *sniffListener
-	httpSrv   *http.Server
-	httpsSrv  *http.Server
-	httpLn    *chanListener
-	httpsLn   *chanListener
+	sniff    *sniffListener
+	httpSrv  *http.Server
+	httpsSrv *http.Server
+	httpLn   *chanListener
+	httpsLn  *chanListener
+	certMap  map[string]tls.Certificate // prebuilt at startup, keyed by lowercase domain
 }
 
 func (ms *managedServer) close() {
@@ -296,6 +297,7 @@ func (m *Manager) Start(id string) error {
 		sniff:   sl,
 		httpLn:  httpLn,
 		httpsLn: httpsLn,
+		certMap: certMap,
 	}
 
 	httpsPort := svc.ListenPort
@@ -326,28 +328,25 @@ func (m *Manager) Start(id string) error {
 		}
 	}()
 
-	// HTTPS server：SNI 动态选证书
+	// HTTPS server：查预构建的 certMap，O(1)
 	router := m.buildRouter(svc)
-	svcID := svc.ID
 	tlsCfg := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			cm := m.buildCertMap(m.getService(svcID))
-			// 精确或通配符匹配
 			serverName := strings.ToLower(hello.ServerName)
-			if c, ok := cm[serverName]; ok {
+			if c, ok := ms.certMap[serverName]; ok {
 				return &c, nil
 			}
 			// 通配符回退
 			parts := strings.SplitN(serverName, ".", 2)
 			if len(parts) == 2 {
 				wildcard := "*." + parts[1]
-				if c, ok := cm[wildcard]; ok {
+				if c, ok := ms.certMap[wildcard]; ok {
 					return &c, nil
 				}
 			}
 			// 兜底取第一个
-			for _, c := range cm {
+			for _, c := range ms.certMap {
 				cc := c
 				return &cc, nil
 			}
@@ -479,7 +478,7 @@ func (m *Manager) getService(id string) *config.WebService {
 }
 
 // buildCertMap builds a map of domain → tls.Certificate for all enabled routes
-// that have a matched cert. Used by the SNI GetCertificate callback.
+// that have a matched cert. Called once at service startup; result cached in managedServer.
 func (m *Manager) buildCertMap(svc *config.WebService) map[string]tls.Certificate {
 	if svc == nil {
 		return nil
