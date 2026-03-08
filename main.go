@@ -70,7 +70,7 @@ func main() {
 		AllowCredentials: false,
 	}))
 
-	apiHandler := api.NewHandler(cfg, pfManager, ddnsManager, wsManager, tlsManager)
+	apiHandler := api.NewHandler(cfg, pfManager, ddnsManager, wsManager, tlsManager, Version)
 	apiHandler.Register(r)
 
 	r.Use(api.SafeEntryMiddleware(cfg))
