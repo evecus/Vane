@@ -368,6 +368,7 @@ func (h *Handler) updateSettings(c *gin.Context) {
 		return
 	}
 	h.cfg.Lock()
+	oldPort := h.cfg.Admin.Port
 	// Require current password confirmation before changing credentials
 	if req.NewPassword != "" {
 		if !h.cfg.Admin.CheckPassword(req.CurrentPassword) {
@@ -399,7 +400,39 @@ func (h *Handler) updateSettings(c *gin.Context) {
 		c.JSON(500, gin.H{"error": "保存配置失败: " + err.Error()})
 		return
 	}
-	c.JSON(200, gin.H{"ok": true})
+
+	// If port changed, respond first then restart the process so it binds the new port.
+	portChanged := req.Port > 0 && req.Port != oldPort
+	c.JSON(200, gin.H{"ok": true, "restart": portChanged})
+
+	if portChanged {
+		go func() {
+			// Give the HTTP response time to flush to the client before we exit.
+			time.Sleep(800 * time.Millisecond)
+			restartSelf()
+		}()
+	}
+}
+
+// restartSelf re-executes the current binary with the same arguments and
+// environment, effectively restarting the server on the newly configured port.
+// If exec fails (e.g. binary path unavailable) we fall back to os.Exit so that
+// a process supervisor (systemd, Docker restart policy, etc.) will relaunch us.
+func restartSelf() {
+	exe, err := os.Executable()
+	if err != nil {
+		log.Printf("restart: os.Executable error: %v — falling back to os.Exit", err)
+		os.Exit(0)
+	}
+	// Resolve symlinks so syscall.Exec gets the real binary path.
+	if real, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = real
+	}
+	log.Printf("restart: re-executing %s %v", exe, os.Args[1:])
+	if err := syscall.Exec(exe, os.Args, os.Environ()); err != nil {
+		log.Printf("restart: syscall.Exec error: %v — falling back to os.Exit", err)
+		os.Exit(0)
+	}
 }
 
 func (h *Handler) backupConfig(c *gin.Context) {
