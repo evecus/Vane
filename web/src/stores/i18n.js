@@ -6,9 +6,9 @@ const messages = {
     // Layout
     main: '主导航', system: '系统',
     dashboard: '仪表盘', portforward: '端口转发',
-    ddns: '动态域名', webservice: 'Web 服务',
-    tls: 'SSL 证书', settings: '设置',
-    tlsTitle: 'SSL 证书',
+    ddns: '动态域名', webservice: '网页服务',
+    tls: '证书管理', settings: '设置',
+    tlsTitle: '证书管理',
     administrator: '管理员', running: '运行中',
     // Login
     welcomeBack: '欢迎回来', username: '用户名',
@@ -111,7 +111,7 @@ const messages = {
     ipv4Interval: 'IPv4 检测间隔（秒）',
     ipv6Interval: 'IPv6 检测间隔（秒）',
     // ── WebService ───────────────────────────────────────────────────────────
-    wsTitle: 'Web 服务', wsSubtitle: '',
+    wsTitle: '网页服务', wsSubtitle: '',
     accessLogs: '访问日志', addService: '添加服务',
     noServices: '暂无 Web 服务', noServicesHint: '点击「添加服务」绑定一个监听端口',
     unnamedService: '未命名服务',
