@@ -188,16 +188,46 @@
 
     <!-- ── 底部：反馈 + 保存按钮，靠右下 ────────────────────────── -->
     <div class="mt-6 flex flex-col sm:flex-row items-start sm:items-center justify-end gap-3">
-      <div v-if="saved" class="flex items-center gap-2 text-emerald-700 bg-emerald-50 px-4 py-2.5 rounded-xl border border-emerald-200 text-sm">
-        <CheckCircle :size="15" /> {{ i18n.t('settingsSaved') }}
-      </div>
       <div v-if="saveError" class="flex items-center gap-2 text-red-600 bg-red-50 px-4 py-2.5 rounded-xl border border-red-200 text-sm">
         <AlertCircle :size="15" /> {{ saveError }}
       </div>
-      <button class="btn-primary" @click="save" :disabled="saving">
+      <button class="btn-primary" @click="confirmSave" :disabled="saving">
         <Save :size="15" /> {{ saving ? i18n.t('saving') : i18n.t('saveSettings') }}
       </button>
     </div>
+
+    <!-- ── 重启确认弹窗 ────────────────────────────────────────── -->
+    <Teleport to="body">
+      <Transition name="modal">
+        <div v-if="showRestartModal"
+             class="fixed inset-0 z-50 flex items-center justify-center p-4"
+             style="background: rgba(0,0,0,0.45); backdrop-filter: blur(4px);">
+          <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+            <div class="flex items-center justify-center w-12 h-12 rounded-2xl bg-amber-100 mb-4 mx-auto">
+              <RefreshCw :size="22" class="text-amber-600" />
+            </div>
+            <h3 class="text-base font-bold text-slate-800 text-center mb-2">确认保存并重启</h3>
+            <p class="text-slate-500 text-sm text-center leading-relaxed mb-1">
+              修改了端口或安全访问路径，保存后程序将自动重启。
+            </p>
+            <p class="text-slate-400 text-xs text-center mb-5">
+              重启后将跳转至
+              <code class="bg-slate-100 px-1.5 py-0.5 rounded text-slate-700 font-mono">{{ newUrl }}</code>
+            </p>
+            <div class="flex gap-3">
+              <button @click="showRestartModal = false"
+                      class="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-50 active:scale-[0.98] transition-all">
+                取消
+              </button>
+              <button @click="doSave"
+                      class="flex-1 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-sm font-semibold active:scale-[0.98] transition-all shadow-sm">
+                确认保存
+              </button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
 
   </div>
 </template>
@@ -206,19 +236,38 @@
 import { ref, computed, onMounted } from 'vue'
 import {
   User, Settings2, Save, CheckCircle, AlertCircle,
-  HardDrive, Download, Upload, AlertTriangle, Eye, EyeOff, Info
+  HardDrive, Download, Upload, AlertTriangle, Eye, EyeOff, Info, RefreshCw
 } from 'lucide-vue-next'
 import { api } from '@/stores/auth'
 import { useI18n } from '@/stores/i18n'
 
 const i18n = useI18n()
 const form = ref({ username: '', new_password: '', confirm_password: '', port: 4455, safe_entry: '', version: '' })
-const saved      = ref(false)
-const saveError  = ref('')
-const saving     = ref(false)
-const showPwd    = ref(false)
-const restoreMsg   = ref('')
-const restoreError = ref('')
+const savedPort      = ref(4455)   // port at load time
+const savedEntry     = ref('')     // safe_entry at load time
+const saveError      = ref('')
+const saving         = ref(false)
+const showPwd        = ref(false)
+const restoreMsg     = ref('')
+const restoreError   = ref('')
+const showRestartModal = ref(false)
+
+// 是否修改了端口或安全路径（需要重启）
+const needsRestart = computed(() =>
+  form.value.port !== savedPort.value ||
+  (form.value.safe_entry || '') !== (savedEntry.value || '')
+)
+
+// 重启后应跳转的新 URL
+const newUrl = computed(() => {
+  const { hostname } = window.location
+  const port  = form.value.port || 4455
+  const entry = (form.value.safe_entry || '').trim().replace(/^\/+/, '')
+  const portStr = port === 80 ? '' : `:${port}`
+  return entry
+    ? `${window.location.protocol}//${hostname}${portStr}/${entry}`
+    : `${window.location.protocol}//${hostname}${portStr}`
+})
 
 const pwdStrength = computed(() => {
   const p = form.value.new_password; if (!p) return 0
@@ -238,9 +287,12 @@ async function load() {
   form.value.port       = data.port
   form.value.safe_entry = data.safe_entry || ''
   form.value.version    = data.version || 'dev'
+  savedPort.value  = data.port
+  savedEntry.value = data.safe_entry || ''
 }
 
-async function save() {
+// 点保存按钮：先校验，如需重启则弹确认框，否则直接保存
+function confirmSave() {
   saveError.value = ''
   if (form.value.new_password && form.value.new_password !== form.value.confirm_password) {
     saveError.value = i18n.t('pwdMismatch'); return
@@ -248,16 +300,55 @@ async function save() {
   if (form.value.new_password && form.value.new_password.length < 6) {
     saveError.value = i18n.t('pwdTooShort'); return
   }
+  if (needsRestart.value) {
+    showRestartModal.value = true
+  } else {
+    doSave()
+  }
+}
+
+// 真正执行保存
+async function doSave() {
+  showRestartModal.value = false
   saving.value = true
+  const willRestart = needsRestart.value
+  const targetUrl   = newUrl.value
   try {
     await api.put('/settings', {
-      username: form.value.username, new_password: form.value.new_password || '',
-      port: form.value.port, safe_entry: form.value.safe_entry,
+      username:     form.value.username,
+      new_password: form.value.new_password || '',
+      port:         form.value.port,
+      safe_entry:   form.value.safe_entry,
     })
-    form.value.new_password = ''; form.value.confirm_password = ''
-    saved.value = true; setTimeout(() => saved.value = false, 3000)
-  } catch (e) { saveError.value = e.response?.data?.error || e.message }
-  finally { saving.value = false }
+    form.value.new_password = ''
+    form.value.confirm_password = ''
+    savedPort.value  = form.value.port
+    savedEntry.value = form.value.safe_entry || ''
+
+    if (willRestart) {
+      // 等待后端重启（约 1.5s），然后轮询新 URL 直到可访问，再跳转
+      await new Promise(r => setTimeout(r, 1500))
+      await pollUntilAlive(targetUrl)
+      window.location.href = targetUrl
+    }
+  } catch (e) {
+    saveError.value = e.response?.data?.error || e.message
+  } finally {
+    saving.value = false
+  }
+}
+
+// 轮询新地址直到响应（最多 15s）
+async function pollUntilAlive(url, maxMs = 15000, interval = 600) {
+  const deadline = Date.now() + maxMs
+  while (Date.now() < deadline) {
+    try {
+      await fetch(url, { method: 'HEAD', mode: 'no-cors', cache: 'no-store' })
+      return // 能连上了
+    } catch {
+      await new Promise(r => setTimeout(r, interval))
+    }
+  }
 }
 
 async function backup() {
