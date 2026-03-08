@@ -102,12 +102,17 @@
               <Activity :size="12" class="text-emerald-400" /> 网卡流量
             </div>
             <div v-if="!sysinfo.network?.length" class="text-xs text-slate-300 italic">无数据</div>
-            <div v-else class="space-y-1">
-              <div v-for="n in sysinfo.network" :key="n.iface" class="flex flex-col xs:flex-row text-xs gap-0.5 sm:gap-2">
-                <span class="font-mono text-slate-600 truncate">{{ n.iface }}</span>
-                <span class="text-blue-500">↓{{ fmtBytes(n.rx_bytes) }}</span>
-                <span class="text-emerald-500">↑{{ fmtBytes(n.tx_bytes) }}</span>
-              </div>
+            <div v-else class="space-y-1.5">
+              <template v-for="n in sysinfo.network" :key="n.iface">
+                <div v-if="!isVirtualIface(n.iface) && (n.rx_bytes > 0 || n.tx_bytes > 0)"
+                     class="flex items-center justify-between gap-2 text-xs">
+                  <span class="font-mono text-slate-600 truncate flex-shrink-0">{{ n.iface }}</span>
+                  <span class="flex items-center gap-1.5 flex-shrink-0">
+                    <span class="text-blue-500">↓{{ fmtBytes(n.rx_bytes) }}</span>
+                    <span class="text-emerald-500">↑{{ fmtBytes(n.tx_bytes) }}</span>
+                  </span>
+                </div>
+              </template>
             </div>
           </div>
           <div class="bg-slate-50 rounded-xl px-2.5 py-2.5 sm:px-4 sm:py-3">
@@ -116,10 +121,12 @@
             </div>
             <div v-if="!sysinfo.ifaces?.length" class="text-xs text-slate-300 italic">无数据</div>
             <div v-else class="space-y-1">
-              <div v-for="iface in sysinfo.ifaces" :key="iface.name" class="flex flex-col gap-0.5">
-                <span class="font-mono text-xs font-semibold text-slate-600">{{ iface.name }}</span>
-                <span v-for="ip in iface.ips" :key="ip" class="font-mono text-xs text-slate-400 break-all">{{ ip }}</span>
-              </div>
+              <template v-for="iface in sysinfo.ifaces" :key="iface.name">
+                <div v-if="!isVirtualIface(iface.name)" class="flex flex-col gap-0.5">
+                  <span class="font-mono text-xs font-semibold text-slate-600">{{ iface.name }}</span>
+                  <span v-for="ip in iface.ips" :key="ip" class="font-mono text-xs text-slate-400 break-all">{{ ip }}</span>
+                </div>
+              </template>
             </div>
           </div>
         </div>
@@ -351,6 +358,12 @@ async function goToSettings() {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+// 过滤虚拟网卡：docker、veth、br-、virbr、lo、tun、tap 等
+function isVirtualIface(name) {
+  return /^(docker|veth|br-|virbr|lo|tun|tap|dummy|bond|vlan|ovs|flannel|cali|cilium)/i.test(name)
+}
+
 function fmtBytes(bytes) {
   if (!bytes || bytes === 0) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
