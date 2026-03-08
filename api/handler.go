@@ -1491,7 +1491,59 @@ func readSysinfoDisk(mountPoint string) map[string]interface{} {
 	}
 }
 
-// readSysinfoNetworkTraffic reads cumulative RX/TX bytes from /proc/net/dev.
+// isVirtualIface detects virtual/software-only interfaces via /sys/class/net attributes.
+// This is OS-agnostic and does not rely on interface naming conventions.
+//
+// Logic:
+//  1. type == 772 (ARPHRD_LOOPBACK) → skip
+//  2. tun_flags file exists → TUN/TAP → skip
+//  3. device/ symlink exists → bound to a real hardware driver → keep
+//  4. bridge/ or bonding/ dir exists → software bridge/bond but carries real traffic → keep
+//  5. ifindex != iflink → veth pair (peer lives in another netns) → skip
+//  6. Everything else has no hardware device → skip (dummy, sit, ip6tnl, macvlan, etc.)
+func isVirtualIface(name string) bool {
+	base := "/sys/class/net/" + name
+
+	// 1. Loopback type (ARPHRD_LOOPBACK = 772)
+	if data, err := os.ReadFile(base + "/type"); err == nil {
+		if strings.TrimSpace(string(data)) == "772" {
+			return true
+		}
+	}
+
+	// 2. TUN/TAP: tun_flags exists
+	if _, err := os.Stat(base + "/tun_flags"); err == nil {
+		return true
+	}
+
+	// 3. Hardware device symlink → physical NIC
+	if _, err := os.Stat(base + "/device"); err == nil {
+		return false
+	}
+
+	// 4. Software bridge or bonding master → keep (carries real traffic)
+	if _, err := os.Stat(base + "/bridge"); err == nil {
+		return false
+	}
+	if _, err := os.Stat(base + "/bonding"); err == nil {
+		return false
+	}
+
+	// 5. veth pair: iflink points to peer in another netns, so ifindex != iflink
+	ifidxData, err1 := os.ReadFile(base + "/ifindex")
+	iflinkData, err2 := os.ReadFile(base + "/iflink")
+	if err1 == nil && err2 == nil {
+		if strings.TrimSpace(string(ifidxData)) != strings.TrimSpace(string(iflinkData)) {
+			return true
+		}
+	}
+
+	// 6. No hardware device, not a bridge/bond → software-only
+	return true
+}
+
+// readSysinfoNetworkTraffic reads cumulative RX/TX bytes from /proc/net/dev,
+// showing only physical/bridge interfaces.
 func readSysinfoNetworkTraffic() []map[string]interface{} {
 	data, err := os.ReadFile("/proc/net/dev")
 	if err != nil {
@@ -1509,7 +1561,7 @@ func readSysinfoNetworkTraffic() []map[string]interface{} {
 			continue
 		}
 		iface := strings.TrimSpace(line[:colonIdx])
-		if iface == "lo" {
+		if isVirtualIface(iface) {
 			continue
 		}
 		fields := strings.Fields(line[colonIdx+1:])
@@ -1528,15 +1580,18 @@ func readSysinfoNetworkTraffic() []map[string]interface{} {
 	return result
 }
 
-// readSysinfoIfaces reads IP addresses from /proc/net/if_inet6 and /proc/net/fib_trie (IPv4).
+// readSysinfoIfaces returns IPs for physical interfaces only,
+// filtering out link-local IPv6 (fe80::) and keeping public + private IPs.
 func readSysinfoIfaces() []map[string]interface{} {
-	// Collect IPv4 from /proc/net/fib_trie by parsing interface IPs via net package
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return nil
 	}
 	var result []map[string]interface{}
 	for _, iface := range ifaces {
+		if isVirtualIface(iface.Name) {
+			continue
+		}
 		if iface.Flags&net.FlagLoopback != 0 {
 			continue
 		}
@@ -1546,7 +1601,16 @@ func readSysinfoIfaces() []map[string]interface{} {
 		}
 		var ips []string
 		for _, addr := range addrs {
-			ips = append(ips, addr.String())
+			s := addr.String()
+			// Skip link-local IPv6 fe80::/10
+			ip, _, _ := net.ParseCIDR(s)
+			if ip == nil {
+				ip = net.ParseIP(s)
+			}
+			if ip != nil && ip.IsLinkLocalUnicast() {
+				continue
+			}
+			ips = append(ips, s)
 		}
 		if len(ips) > 0 {
 			result = append(result, map[string]interface{}{
