@@ -8,7 +8,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -1438,6 +1440,7 @@ func (h *Handler) getSysinfo(c *gin.Context) {
 	c.JSON(200, gin.H{
 		"os":      readSysinfoOS(),
 		"kernel":  readSysinfoKernel(),
+		"arch":    readSysinfoArch(),
 		"uptime":  readSysinfoUptime(),
 		"memory":  readSysinfoMemory(),
 		"disk":    readSysinfoDisk("/"),
@@ -1464,6 +1467,14 @@ func readSysinfoOS() string {
 		}
 	}
 	return "Unknown"
+}
+
+// readSysinfoArch returns the CPU architecture from uname or runtime.
+func readSysinfoArch() string {
+	if out, err := exec.Command("uname", "-m").Output(); err == nil {
+		return strings.TrimSpace(string(out))
+	}
+	return runtime.GOARCH
 }
 
 // readSysinfoKernel returns the kernel version from /proc/version.
