@@ -277,13 +277,10 @@ func (m *Manager) Start(id string) error {
 	}
 
 	// ── HTTPS 模式（含 HTTP→HTTPS 重定向）────────────────────────────────────
-	certPEM, keyPEM := m.getCertPEM(svc.TLSCertID, svc.Routes)
-	if certPEM == "" || keyPEM == "" {
-		return fmt.Errorf("service %q: TLS enabled but no matching certificate found (configure a certificate in TLS settings first)", svc.Name)
-	}
-	tlsCert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
-	if err != nil {
-		return fmt.Errorf("invalid TLS certificate for service %q: %w", svc.Name, err)
+	// 收集所有有匹配证书的路由，至少要有一个才能启动
+	certMap := m.buildCertMap(svc)
+	if len(certMap) == 0 {
+		return fmt.Errorf("service %q: TLS enabled but no routes have a matched certificate", svc.Name)
 	}
 
 	ln, err := net.Listen("tcp", addr)
@@ -329,11 +326,33 @@ func (m *Manager) Start(id string) error {
 		}
 	}()
 
-	// HTTPS server：TLS 连接，正常反代
+	// HTTPS server：SNI 动态选证书
 	router := m.buildRouter(svc)
+	svcID := svc.ID
 	tlsCfg := &tls.Config{
-		Certificates: []tls.Certificate{tlsCert},
-		MinVersion:   tls.VersionTLS12,
+		MinVersion: tls.VersionTLS12,
+		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			cm := m.buildCertMap(m.getService(svcID))
+			// 精确或通配符匹配
+			serverName := strings.ToLower(hello.ServerName)
+			if c, ok := cm[serverName]; ok {
+				return &c, nil
+			}
+			// 通配符回退
+			parts := strings.SplitN(serverName, ".", 2)
+			if len(parts) == 2 {
+				wildcard := "*." + parts[1]
+				if c, ok := cm[wildcard]; ok {
+					return &c, nil
+				}
+			}
+			// 兜底取第一个
+			for _, c := range cm {
+				cc := c
+				return &cc, nil
+			}
+			return nil, fmt.Errorf("no certificate available for %q", hello.ServerName)
+		},
 	}
 	ms.httpsSrv = &http.Server{
 		Handler:      router,
@@ -446,73 +465,126 @@ func logAccess(svcID, routeID, domain string, r *http.Request, status int, dur t
 	})
 }
 
-// getCertPEM 返回指定证书的 PEM 内容。
-// 若 certID 非空，精确匹配；若为空，则根据 routes 中的域名自动匹配最合适的活跃证书。
-// 匹配规则：证书的 Domains 列表或 Domain 字段覆盖路由域名（支持泛域名 *.example.com）。
-func (m *Manager) getCertPEM(certID string, routes []config.WebRoute) (cert, key string) {
+// getService returns a copy of the WebService with the given ID, or nil.
+func (m *Manager) getService(id string) *config.WebService {
 	m.cfg.RLock()
 	defer m.cfg.RUnlock()
-
-	// 精确 ID 匹配
-	if certID != "" {
-		for _, c := range m.cfg.TLSCerts {
-			if c.ID == certID {
-				return c.CertPEM, c.KeyPEM
-			}
-		}
-		return "", ""
-	}
-
-	// 自动匹配：收集路由域名
-	routeDomains := make([]string, 0, len(routes))
-	for _, r := range routes {
-		if r.Domain != "" {
-			routeDomains = append(routeDomains, r.Domain)
+	for i := range m.cfg.WebServices {
+		if m.cfg.WebServices[i].ID == id {
+			s := m.cfg.WebServices[i]
+			return &s
 		}
 	}
+	return nil
+}
 
-	// 遍历所有活跃证书，找到覆盖最多路由域名的证书
-	bestCert := (*config.TLSCert)(nil)
-	bestScore := -1
-	for i := range m.cfg.TLSCerts {
-		c := &m.cfg.TLSCerts[i]
-		if c.Status != "active" || c.CertPEM == "" || c.KeyPEM == "" {
+// buildCertMap builds a map of domain → tls.Certificate for all enabled routes
+// that have a matched cert. Used by the SNI GetCertificate callback.
+func (m *Manager) buildCertMap(svc *config.WebService) map[string]tls.Certificate {
+	if svc == nil {
+		return nil
+	}
+	m.cfg.RLock()
+	defer m.cfg.RUnlock()
+	result := map[string]tls.Certificate{}
+	for _, route := range svc.Routes {
+		if !route.Enabled || route.MatchedCertID == "" {
 			continue
 		}
-		// 如果没有路由域名，直接取第一个活跃证书
-		if len(routeDomains) == 0 {
-			return c.CertPEM, c.KeyPEM
+		for _, cert := range m.cfg.TLSCerts {
+			if cert.ID == route.MatchedCertID && cert.CertPEM != "" && cert.KeyPEM != "" {
+				tlsCert, err := tls.X509KeyPair([]byte(cert.CertPEM), []byte(cert.KeyPEM))
+				if err != nil {
+					continue
+				}
+				result[strings.ToLower(route.Domain)] = tlsCert
+				break
+			}
 		}
-		// 计算该证书覆盖了多少路由域名
-		score := 0
-		certDomains := append([]string{}, c.Domains...)
-		if c.Domain != "" {
-			certDomains = append(certDomains, c.Domain)
+	}
+	return result
+}
+
+// MatchRouteCert finds the best matching active certificate for a single route
+// and updates the route's MatchedCertID and CertStatus in-memory and in DB.
+// svcID is needed to persist the route.
+func (m *Manager) MatchRouteCert(svcID string, route *config.WebRoute) {
+	m.cfg.RLock()
+	certs := make([]config.TLSCert, len(m.cfg.TLSCerts))
+	copy(certs, m.cfg.TLSCerts)
+	m.cfg.RUnlock()
+
+	bestID := ""
+	bestStatus := "no_cert"
+
+	for _, cert := range certs {
+		if cert.CertPEM == "" || cert.KeyPEM == "" {
+			continue
 		}
-		for _, rd := range routeDomains {
-			for _, cd := range certDomains {
-				if certDomainMatches(cd, rd) {
-					score++
+		certDomains := append([]string{}, cert.Domains...)
+		if cert.Domain != "" {
+			certDomains = append(certDomains, cert.Domain)
+		}
+		matched := false
+		for _, cd := range certDomains {
+			if certDomainMatches(cd, route.Domain) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		// Found a matching cert — prefer active
+		if cert.Status == "active" {
+			bestID = cert.ID
+			bestStatus = "ok"
+			break
+		} else if bestID == "" {
+			// Keep as fallback (inactive match)
+			bestID = cert.ID
+			bestStatus = "cert_inactive"
+		}
+	}
+
+	m.cfg.Lock()
+	for i := range m.cfg.WebServices {
+		if m.cfg.WebServices[i].ID == svcID {
+			for j := range m.cfg.WebServices[i].Routes {
+				if m.cfg.WebServices[i].Routes[j].ID == route.ID {
+					m.cfg.WebServices[i].Routes[j].MatchedCertID = bestID
+					m.cfg.WebServices[i].Routes[j].CertStatus = bestStatus
+					*route = m.cfg.WebServices[i].Routes[j]
 					break
 				}
 			}
-		}
-		if score > bestScore {
-			bestScore = score
-			bestCert = c
+			break
 		}
 	}
-	if bestCert != nil && bestScore > 0 {
-		return bestCert.CertPEM, bestCert.KeyPEM
+	m.cfg.Unlock()
+	_ = m.cfg.SaveWebRoute(svcID, *route)
+}
+
+// RematchAllRoutes re-runs cert matching for every route across all services.
+// Called when a certificate is added, updated, or deleted.
+func (m *Manager) RematchAllRoutes() {
+	m.cfg.RLock()
+	type svcRoute struct {
+		svcID string
+		route config.WebRoute
 	}
-	// 最后兜底：取第一个活跃证书（覆盖0个域名也用）
-	for i := range m.cfg.TLSCerts {
-		c := &m.cfg.TLSCerts[i]
-		if c.Status == "active" && c.CertPEM != "" && c.KeyPEM != "" {
-			return c.CertPEM, c.KeyPEM
+	var pairs []svcRoute
+	for _, svc := range m.cfg.WebServices {
+		for _, route := range svc.Routes {
+			pairs = append(pairs, svcRoute{svcID: svc.ID, route: route})
 		}
 	}
-	return "", ""
+	m.cfg.RUnlock()
+
+	for i := range pairs {
+		r := pairs[i].route
+		m.MatchRouteCert(pairs[i].svcID, &r)
+	}
 }
 
 // certDomainMatches 判断证书域名（支持泛域名 *.example.com）是否覆盖请求域名。
