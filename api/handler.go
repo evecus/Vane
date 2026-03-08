@@ -130,14 +130,28 @@ func SafeEntryMiddleware(cfg *config.Config) gin.HandlerFunc {
 		cfg.RUnlock()
 
 		path := c.Request.URL.Path
+
+		// Always allow API routes
 		if strings.HasPrefix(path, "/api/") {
 			c.Next()
 			return
 		}
+
+		// Always allow static assets (JS/CSS/fonts/images embedded in index.html)
+		// These use absolute paths like /assets/index-xxx.js regardless of safe_entry.
+		if strings.HasPrefix(path, "/assets/") ||
+			path == "/favicon.svg" || path == "/favicon.ico" ||
+			path == "/favicon.png" || path == "/robots.txt" {
+			c.Next()
+			return
+		}
+
+		// No safe entry configured → allow everything
 		if entry == "" {
 			c.Next()
 			return
 		}
+
 		prefix := "/" + strings.Trim(entry, "/")
 		if strings.HasPrefix(path, prefix) {
 			c.Next()
