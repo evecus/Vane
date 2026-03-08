@@ -76,6 +76,118 @@ func (m *Manager) Stop(id string) {
 	}
 }
 
+// SyncResult holds the outcome of a single on-demand sync.
+type SyncResult struct {
+	IP      string            `json:"ip"`
+	IPErr   string            `json:"ip_err,omitempty"`
+	Domains map[string]string `json:"domains"` // fqdn → "" (ok) or error message
+}
+
+// TriggerNow performs an immediate sync for the given rule ID and returns the result.
+func (m *Manager) TriggerNow(id string) (*SyncResult, error) {
+	m.cfg.RLock()
+	var rule *config.DDNSRule
+	for i := range m.cfg.DDNS {
+		if m.cfg.DDNS[i].ID == id {
+			r := m.cfg.DDNS[i]
+			rule = &r
+			break
+		}
+	}
+	m.cfg.RUnlock()
+	if rule == nil {
+		return nil, fmt.Errorf("rule not found")
+	}
+
+	res := &SyncResult{Domains: map[string]string{}}
+
+	ip, err := getPublicIP(rule.IPVersion, rule.IPDetectMode, rule.IPInterface, rule.IPIndex)
+	if err != nil {
+		res.IPErr = err.Error()
+		// write failed sync status
+		m.writeSyncStatus(id, false, "IP获取失败: "+err.Error())
+		return res, nil
+	}
+	res.IP = ip
+
+	domains := rule.Domains
+	if len(domains) == 0 && rule.Domain != "" {
+		fqdn := rule.Domain
+		if rule.SubDomain != "" && rule.SubDomain != "@" {
+			fqdn = rule.SubDomain + "." + rule.Domain
+		}
+		domains = []string{fqdn}
+	}
+
+	var firstErr string
+	allOK := true
+	for _, fqdn := range domains {
+		var updateErr error
+		switch rule.Provider {
+		case "cloudflare":
+			updateErr = updateCloudflareRecord(*rule, fqdn, ip)
+		case "alidns":
+			updateErr = updateAliDNSRecord(*rule, fqdn, ip)
+		case "dnspod", "tencentcloud":
+			updateErr = updateDNSPodRecord(*rule, fqdn, ip)
+		default:
+			updateErr = fmt.Errorf("未知的 DNS 服务商: %s", rule.Provider)
+		}
+		if updateErr != nil {
+			res.Domains[fqdn] = updateErr.Error()
+			if firstErr == "" {
+				firstErr = fqdn + ": " + updateErr.Error()
+			}
+			allOK = false
+		} else {
+			res.Domains[fqdn] = ""
+		}
+	}
+
+	// Persist IP + sync status
+	now := config.Now()
+	m.cfg.Lock()
+	for i := range m.cfg.DDNS {
+		if m.cfg.DDNS[i].ID == id {
+			m.cfg.DDNS[i].LastIP = ip
+			m.cfg.DDNS[i].LastUpdated = now
+			m.cfg.DDNS[i].LastSyncAt = now
+			ok := allOK
+			m.cfg.DDNS[i].LastSyncOK = &ok
+			if allOK {
+				m.cfg.DDNS[i].LastSyncErr = ""
+			} else {
+				m.cfg.DDNS[i].LastSyncErr = firstErr
+			}
+			m.cfg.DDNS[i].IPHistory = append(m.cfg.DDNS[i].IPHistory, config.IPRecord{
+				IP: ip, Timestamp: now,
+			})
+			if len(m.cfg.DDNS[i].IPHistory) > 100 {
+				m.cfg.DDNS[i].IPHistory = m.cfg.DDNS[i].IPHistory[len(m.cfg.DDNS[i].IPHistory)-100:]
+			}
+			break
+		}
+	}
+	m.cfg.Unlock()
+	_ = m.cfg.Save()
+
+	return res, nil
+}
+
+func (m *Manager) writeSyncStatus(id string, ok bool, errMsg string) {
+	now := config.Now()
+	m.cfg.Lock()
+	for i := range m.cfg.DDNS {
+		if m.cfg.DDNS[i].ID == id {
+			m.cfg.DDNS[i].LastSyncOK = &ok
+			m.cfg.DDNS[i].LastSyncErr = errMsg
+			m.cfg.DDNS[i].LastSyncAt = now
+			break
+		}
+	}
+	m.cfg.Unlock()
+}
+
 // ─── Worker ───────────────────────────────────────────────────────────────────
 
 type Worker struct {
