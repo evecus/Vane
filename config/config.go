@@ -311,6 +311,10 @@ type DDNSRule struct {
 	LastUpdated  string       `json:"last_updated"`
 	IPHistory    []IPRecord   `json:"ip_history"`
 	CreatedAt    string       `json:"created_at"`
+	// DNS 同步状态（运行时，不持久化）
+	LastSyncOK  *bool  `json:"last_sync_ok,omitempty"`
+	LastSyncErr string `json:"last_sync_err,omitempty"`
+	LastSyncAt  string `json:"last_sync_at,omitempty"`
 }
 
 type ProviderConf struct {
