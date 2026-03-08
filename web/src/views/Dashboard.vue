@@ -31,7 +31,7 @@
     </Teleport>
 
     <!-- ══ 系统信息（顶部，最大） ══════════════════════════════════════ -->
-    <div class="glass-card p-3 sm:p-6">
+    <div v-if="!sysinfo?.disabled" class="glass-card p-3 sm:p-6">
       <div class="flex items-center justify-between mb-3 sm:mb-5">
         <div>
           <h2 class="font-bold text-slate-800 text-sm sm:text-lg">系统信息</h2>
@@ -438,7 +438,10 @@ let sysinfoTimer
 onMounted(() => {
   load()
   sysinfoTimer = setInterval(async () => {
-    try { sysinfo.value = (await api.get('/sysinfo')).data } catch {}
+    try {
+      const res = (await api.get('/sysinfo')).data
+      if (!res.disabled) sysinfo.value = res
+    } catch {}
   }, 10000)
 })
 onUnmounted(() => clearInterval(sysinfoTimer))
