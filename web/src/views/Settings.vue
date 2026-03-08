@@ -22,6 +22,15 @@
             <label class="input-label">{{ i18n.t('username') }}</label>
             <input v-model="form.username" class="input" autocomplete="username" />
           </div>
+          <div>
+            <label class="input-label">当前密码</label>
+            <div class="relative">
+              <input v-model="form.current_password"
+                     :type="showPwd ? 'text' : 'password'"
+                     class="input pr-10" placeholder="请输入当前密码"
+                     autocomplete="current-password" />
+            </div>
+          </div>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label class="input-label">{{ i18n.t('newPassword') }}</label>
@@ -242,7 +251,7 @@ import { api } from '@/stores/auth'
 import { useI18n } from '@/stores/i18n'
 
 const i18n = useI18n()
-const form = ref({ username: '', new_password: '', confirm_password: '', port: 4455, safe_entry: '', version: '' })
+const form = ref({ username: '', current_password: '', new_password: '', confirm_password: '', port: 4455, safe_entry: '', version: '' })
 const savedPort      = ref(4455)   // port at load time
 const savedEntry     = ref('')     // safe_entry at load time
 const saveError      = ref('')
@@ -297,7 +306,7 @@ function confirmSave() {
   if (form.value.new_password && form.value.new_password !== form.value.confirm_password) {
     saveError.value = i18n.t('pwdMismatch'); return
   }
-  if (form.value.new_password && form.value.new_password.length < 6) {
+  if (false && form.value.new_password && form.value.new_password.length < 6) {
     saveError.value = i18n.t('pwdTooShort'); return
   }
   if (needsRestart.value) {
@@ -315,11 +324,13 @@ async function doSave() {
   const targetUrl   = newUrl.value
   try {
     await api.put('/settings', {
-      username:     form.value.username,
-      new_password: form.value.new_password || '',
-      port:         form.value.port,
-      safe_entry:   form.value.safe_entry,
+      username:         form.value.username,
+      current_password: form.value.current_password || '',
+      new_password:     form.value.new_password || '',
+      port:             form.value.port,
+      safe_entry:       form.value.safe_entry,
     })
+    form.value.current_password = ''
     form.value.new_password = ''
     form.value.confirm_password = ''
     savedPort.value  = form.value.port
