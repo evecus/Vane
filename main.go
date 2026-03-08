@@ -40,7 +40,9 @@ func main() {
 		}
 	}
 	disableSysinfo := disabled["systeminfo"]
+
 	// ── 1. Init encrypted SQLite data directory ────────────────────────────
+	dd, err := config.NewDataDir()
 	if err != nil {
 		log.Fatalf("Failed to init data directory: %v", err)
 	}
