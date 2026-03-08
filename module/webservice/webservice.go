@@ -277,9 +277,9 @@ func (m *Manager) Start(id string) error {
 	}
 
 	// ── HTTPS 模式（含 HTTP→HTTPS 重定向）────────────────────────────────────
-	certPEM, keyPEM := m.getCertPEM(svc.TLSCertID)
+	certPEM, keyPEM := m.getCertPEM(svc.TLSCertID, svc.Routes)
 	if certPEM == "" || keyPEM == "" {
-		return fmt.Errorf("service %q requires a TLS certificate but none is configured or issued yet", svc.Name)
+		return fmt.Errorf("service %q: TLS enabled but no matching certificate found (configure a certificate in TLS settings first)", svc.Name)
 	}
 	tlsCert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
 	if err != nil {
@@ -446,13 +446,92 @@ func logAccess(svcID, routeID, domain string, r *http.Request, status int, dur t
 	})
 }
 
-func (m *Manager) getCertPEM(certID string) (cert, key string) {
+// getCertPEM 返回指定证书的 PEM 内容。
+// 若 certID 非空，精确匹配；若为空，则根据 routes 中的域名自动匹配最合适的活跃证书。
+// 匹配规则：证书的 Domains 列表或 Domain 字段覆盖路由域名（支持泛域名 *.example.com）。
+func (m *Manager) getCertPEM(certID string, routes []config.WebRoute) (cert, key string) {
 	m.cfg.RLock()
 	defer m.cfg.RUnlock()
-	for _, c := range m.cfg.TLSCerts {
-		if c.ID == certID {
+
+	// 精确 ID 匹配
+	if certID != "" {
+		for _, c := range m.cfg.TLSCerts {
+			if c.ID == certID {
+				return c.CertPEM, c.KeyPEM
+			}
+		}
+		return "", ""
+	}
+
+	// 自动匹配：收集路由域名
+	routeDomains := make([]string, 0, len(routes))
+	for _, r := range routes {
+		if r.Domain != "" {
+			routeDomains = append(routeDomains, r.Domain)
+		}
+	}
+
+	// 遍历所有活跃证书，找到覆盖最多路由域名的证书
+	bestCert := (*config.TLSCert)(nil)
+	bestScore := -1
+	for i := range m.cfg.TLSCerts {
+		c := &m.cfg.TLSCerts[i]
+		if c.Status != "active" || c.CertPEM == "" || c.KeyPEM == "" {
+			continue
+		}
+		// 如果没有路由域名，直接取第一个活跃证书
+		if len(routeDomains) == 0 {
+			return c.CertPEM, c.KeyPEM
+		}
+		// 计算该证书覆盖了多少路由域名
+		score := 0
+		certDomains := append([]string{}, c.Domains...)
+		if c.Domain != "" {
+			certDomains = append(certDomains, c.Domain)
+		}
+		for _, rd := range routeDomains {
+			for _, cd := range certDomains {
+				if certDomainMatches(cd, rd) {
+					score++
+					break
+				}
+			}
+		}
+		if score > bestScore {
+			bestScore = score
+			bestCert = c
+		}
+	}
+	if bestCert != nil && bestScore > 0 {
+		return bestCert.CertPEM, bestCert.KeyPEM
+	}
+	// 最后兜底：取第一个活跃证书（覆盖0个域名也用）
+	for i := range m.cfg.TLSCerts {
+		c := &m.cfg.TLSCerts[i]
+		if c.Status == "active" && c.CertPEM != "" && c.KeyPEM != "" {
 			return c.CertPEM, c.KeyPEM
 		}
 	}
 	return "", ""
+}
+
+// certDomainMatches 判断证书域名（支持泛域名 *.example.com）是否覆盖请求域名。
+func certDomainMatches(certDomain, reqDomain string) bool {
+	certDomain = strings.ToLower(strings.TrimSpace(certDomain))
+	reqDomain = strings.ToLower(strings.TrimSpace(reqDomain))
+	if certDomain == reqDomain {
+		return true
+	}
+	// 泛域名匹配：*.example.com 覆盖 foo.example.com
+	if strings.HasPrefix(certDomain, "*.") {
+		suffix := certDomain[1:] // .example.com
+		if strings.HasSuffix(reqDomain, suffix) {
+			// 确保只匹配一级，如 *.a.com 不匹配 b.c.a.com
+			host := reqDomain[:len(reqDomain)-len(suffix)]
+			if !strings.Contains(host, ".") {
+				return true
+			}
+		}
+	}
+	return false
 }
