@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"flag"
 	"fmt"
 	"log"
 	"mime"
@@ -26,8 +27,20 @@ var embeddedFiles embed.FS
 var Version = "dev"
 
 func main() {
+	// ── 0. Parse CLI flags ─────────────────────────────────────────────────
+	var disableFlag string
+	flag.StringVar(&disableFlag, "disable", "", "Comma-separated features to disable (e.g. systeminfo)")
+	flag.Parse()
+
+	disabled := map[string]bool{}
+	for _, f := range strings.Split(disableFlag, ",") {
+		f = strings.TrimSpace(strings.ToLower(f))
+		if f != "" {
+			disabled[f] = true
+		}
+	}
+	disableSysinfo := disabled["systeminfo"]
 	// ── 1. Init encrypted SQLite data directory ────────────────────────────
-	dd, err := config.NewDataDir()
 	if err != nil {
 		log.Fatalf("Failed to init data directory: %v", err)
 	}
@@ -70,7 +83,7 @@ func main() {
 		AllowCredentials: false,
 	}))
 
-	apiHandler := api.NewHandler(cfg, pfManager, ddnsManager, wsManager, tlsManager, Version)
+	apiHandler := api.NewHandler(cfg, pfManager, ddnsManager, wsManager, tlsManager, Version, disableSysinfo)
 	apiHandler.Register(r)
 
 	r.Use(api.SafeEntryMiddleware(cfg))
