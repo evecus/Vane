@@ -45,8 +45,8 @@
       </div>
 
       <div v-else class="space-y-2 sm:space-y-4">
-        <!-- OS / Kernel / Uptime -->
-        <div class="grid grid-cols-3 gap-1.5 sm:gap-3">
+        <!-- OS / Kernel / Uptime / Arch -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5 sm:gap-3">
           <div class="bg-slate-50 rounded-xl px-2 py-2 sm:px-3 sm:py-2.5">
             <div class="text-xs text-slate-400 mb-0.5">操作系统</div>
             <div class="text-xs font-medium text-slate-700 truncate leading-snug" :title="sysinfo.os">{{ sysinfo.os || '—' }}</div>
@@ -58,6 +58,10 @@
           <div class="bg-slate-50 rounded-xl px-2 py-2 sm:px-3 sm:py-2.5">
             <div class="text-xs text-slate-400 mb-0.5">运行时间</div>
             <div class="text-xs font-medium text-slate-700 truncate">{{ sysinfo.uptime?.human || '—' }}</div>
+          </div>
+          <div class="bg-slate-50 rounded-xl px-2 py-2 sm:px-3 sm:py-2.5">
+            <div class="text-xs text-slate-400 mb-0.5">CPU 架构</div>
+            <div class="text-xs font-mono font-medium text-slate-700 truncate">{{ sysinfo.arch || '—' }}</div>
           </div>
         </div>
 
