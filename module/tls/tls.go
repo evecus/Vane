@@ -181,9 +181,12 @@ func (m *Manager) IssueCert(certID string) error {
 		})
 	} else {
 		if cert.CAProvider == "zerossl" {
-			log.Printf("[tls] WARNING: ZeroSSL selected but EAB credentials (zerossl_api_key / zerossl_key_id) are missing; falling back to standard registration")
+			log.Printf("[tls] WARNING: ZeroSSL selected but EAB credentials missing; falling back to standard registration")
 		}
 		reg, err = client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+	}
+	if err != nil {
+		return fmt.Errorf("register ACME account: %w", err)
 	}
 	if err != nil {
 		return fmt.Errorf("register ACME account: %w", err)
