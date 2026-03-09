@@ -35,7 +35,15 @@ var globalLogs = &LogStore{}
 func (s *LogStore) Add(l config.WebAccessLog) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.logs = append(s.logs, l)
+	// Auto-clear logs from previous days — keep only today's entries
+	today := time.Now().Format("2006-01-02")
+	filtered := s.logs[:0]
+	for _, existing := range s.logs {
+		if len(existing.Time) >= 10 && existing.Time[:10] == today {
+			filtered = append(filtered, existing)
+		}
+	}
+	s.logs = append(filtered, l)
 	if len(s.logs) > maxLogs {
 		s.logs = s.logs[len(s.logs)-maxLogs:]
 	}
@@ -443,7 +451,7 @@ func (m *Manager) buildRouter(svc *config.WebService) http.Handler {
 						if !ok || user != e.route.AuthUser || bcrypt.CompareHashAndPassword([]byte(e.route.AuthPassHash), []byte(pass)) != nil {
 							w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
 							http.Error(w, "Unauthorized", http.StatusUnauthorized)
-							logAccess(svcID, e.route.ID, e.route.Domain, r, http.StatusUnauthorized, time.Since(start))
+							logAccess(svcID, e.route.ID, e.route.Name, e.route.Domain, r)
 							return
 						}
 						// Credentials valid — set session cookie (7 days)
@@ -459,39 +467,78 @@ func (m *Manager) buildRouter(svc *config.WebService) http.Handler {
 					}
 				}
 				e.proxy.ServeHTTP(rr, r)
-				logAccess(svcID, e.route.ID, e.route.Domain, r, rr.status, time.Since(start))
+				logAccess(svcID, e.route.ID, e.route.Name, e.route.Domain, r)
 				return
 			}
 		}
 
 		http.Error(w, "No matching route for host: "+host, http.StatusBadGateway)
-		logAccess(svcID, "", host, r, http.StatusBadGateway, time.Since(start))
+		logAccess(svcID, "", "", host, r)
 	})
 }
 
-func logAccess(svcID, routeID, domain string, r *http.Request, status int, dur time.Duration) {
+func logAccess(svcID, routeID, routeName, domain string, r *http.Request) {
 	clientIP := r.RemoteAddr
 	if ip, _, err := net.SplitHostPort(clientIP); err == nil {
 		clientIP = ip
 	}
-	path := r.URL.Path
-	if r.URL.RawQuery != "" {
-		path = path + "?" + r.URL.RawQuery
+	ua := r.UserAgent()
+	browser := parseBrowser(ua)
+
+	// Deduplicate: only record if no existing entry today with same IP + UA + routeID
+	globalLogs.mu.Lock()
+	today := time.Now().Format("2006-01-02")
+	for i := len(globalLogs.logs) - 1; i >= 0; i-- {
+		l := globalLogs.logs[i]
+		if len(l.Time) < 10 {
+			continue
+		}
+		if l.Time[:10] < today {
+			break
+		}
+		if l.RouteID == routeID && l.ClientIP == clientIP && l.UserAgent == ua {
+			globalLogs.mu.Unlock()
+			return
+		}
 	}
+	globalLogs.mu.Unlock()
 	globalLogs.Add(config.WebAccessLog{
-		ID:         config.NewID(),
-		ServiceID:  svcID,
-		RouteID:    routeID,
-		Domain:     domain,
-		Method:     r.Method,
-		Path:       path,
-		StatusCode: status,
-		DurationMs: dur.Milliseconds(),
-		ClientIP:   clientIP,
-		UserAgent:  r.UserAgent(),
-		Referer:    r.Referer(),
-		Time:       config.Now(),
+		ID:        config.NewID(),
+		ServiceID: svcID,
+		RouteID:   routeID,
+		RouteName: routeName,
+		Domain:    domain,
+		ClientIP:  clientIP,
+		UserAgent: browser,
+		Time:      config.Now(),
 	})
+}
+
+// parseBrowser extracts a short browser/OS label from a User-Agent string.
+func parseBrowser(ua string) string {
+	ua = strings.ToLower(ua)
+	switch {
+	case strings.Contains(ua, "edg/") || strings.Contains(ua, "edge/"):
+		return "Edge"
+	case strings.Contains(ua, "chrome") && strings.Contains(ua, "mobile"):
+		return "Chrome/Android"
+	case strings.Contains(ua, "chrome"):
+		return "Chrome"
+	case strings.Contains(ua, "firefox"):
+		return "Firefox"
+	case strings.Contains(ua, "safari") && strings.Contains(ua, "mobile"):
+		return "Safari/iOS"
+	case strings.Contains(ua, "safari"):
+		return "Safari"
+	case strings.Contains(ua, "curl"):
+		return "curl"
+	case strings.Contains(ua, "wget"):
+		return "wget"
+	case ua == "":
+		return "—"
+	default:
+		return "Other"
+	}
 }
 
 // getService returns a copy of the WebService with the given ID, or nil.
