@@ -433,7 +433,6 @@ func (m *Manager) buildRouter(svc *config.WebService) http.Handler {
 			host = h
 		}
 
-		start := time.Now()
 		rr := &responseRecorder{ResponseWriter: w, status: 200}
 
 		for _, e := range entries {
