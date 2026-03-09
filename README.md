@@ -6,8 +6,6 @@
 <br>
 <img width="200" src="https://raw.githubusercontent.com/evecus/Vane/master/web/public/icon-512.png" alt="Vane">
 <br>
-<br>
-<h2 align="center">Vane<h2>
 </div>
 
 ## ✨ 功能特性
