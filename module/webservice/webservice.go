@@ -2,7 +2,10 @@ package webservice
 
 import (
 	"bufio"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -429,14 +432,30 @@ func (m *Manager) buildRouter(svc *config.WebService) http.Handler {
 			routeDomain := strings.TrimPrefix(e.route.Domain, "www.")
 			reqDomain := strings.TrimPrefix(host, "www.")
 			if strings.EqualFold(routeDomain, reqDomain) {
-				// Basic Auth check
+				// Basic Auth check with session cookie to avoid repeated prompts
 				if e.route.AuthEnabled && e.route.AuthPassHash != "" {
-					user, pass, ok := r.BasicAuth()
-					if !ok || user != e.route.AuthUser || bcrypt.CompareHashAndPassword([]byte(e.route.AuthPassHash), []byte(pass)) != nil {
-						w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
-						http.Error(w, "Unauthorized", http.StatusUnauthorized)
-						logAccess(svcID, e.route.ID, e.route.Domain, r, http.StatusUnauthorized, time.Since(start))
-						return
+					cookieName := "vane_auth_" + e.route.ID[:8]
+					sessionToken := authSessionToken(e.route.ID, e.route.AuthPassHash)
+					// Check if valid session cookie already exists
+					if cookie, err := r.Cookie(cookieName); err != nil || cookie.Value != sessionToken {
+						// No valid cookie — check Basic Auth credentials
+						user, pass, ok := r.BasicAuth()
+						if !ok || user != e.route.AuthUser || bcrypt.CompareHashAndPassword([]byte(e.route.AuthPassHash), []byte(pass)) != nil {
+							w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
+							http.Error(w, "Unauthorized", http.StatusUnauthorized)
+							logAccess(svcID, e.route.ID, e.route.Domain, r, http.StatusUnauthorized, time.Since(start))
+							return
+						}
+						// Credentials valid — set session cookie (7 days)
+						http.SetCookie(w, &http.Cookie{
+							Name:     cookieName,
+							Value:    sessionToken,
+							Path:     "/",
+							MaxAge:   7 * 24 * 3600,
+							HttpOnly: true,
+							Secure:   true,
+							SameSite: http.SameSiteLaxMode,
+						})
 					}
 				}
 				e.proxy.ServeHTTP(rr, r)
@@ -616,4 +635,12 @@ func certDomainMatches(certDomain, reqDomain string) bool {
 		}
 	}
 	return false
+}
+
+// authSessionToken generates a deterministic session token from the route ID and password hash.
+// Changing the password invalidates all existing sessions automatically.
+func authSessionToken(routeID, passHash string) string {
+	mac := hmac.New(sha256.New, []byte(passHash))
+	mac.Write([]byte(routeID))
+	return hex.EncodeToString(mac.Sum(nil))
 }
