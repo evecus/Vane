@@ -856,8 +856,7 @@ func (h *Handler) createWebService(c *gin.Context) {
 	}
 	if svc.Enabled {
 		if err := h.ws.Start(svc.ID); err != nil {
-			c.JSON(500, gin.H{"error": "服务启动失败: " + err.Error()})
-			return
+			log.Printf("[webservice] start %s failed: %v", svc.ID, err)
 		}
 	}
 	c.JSON(201, svc)
@@ -901,8 +900,7 @@ func (h *Handler) updateWebService(c *gin.Context) {
 	}
 	if req.Enabled {
 		if err := h.ws.Start(id); err != nil {
-			c.JSON(500, gin.H{"error": "服务启动失败: " + err.Error()})
-			return
+			log.Printf("[webservice] start %s failed: %v", id, err)
 		}
 	}
 	c.JSON(200, req)
@@ -990,7 +988,11 @@ func (h *Handler) toggleWebService(c *gin.Context) {
 			}
 			h.cfg.RUnlock()
 			_ = h.cfg.SaveWebService(svc)
-			c.JSON(500, gin.H{"error": "服务启动失败: " + err.Error()})
+			errMsg := err.Error()
+			if strings.Contains(errMsg, "no routes have a matched certificate") {
+				errMsg = "请先添加子规则，证书匹配成功后方可启动"
+			}
+			c.JSON(500, gin.H{"error": "服务启动失败: " + errMsg})
 			return
 		}
 	} else {
