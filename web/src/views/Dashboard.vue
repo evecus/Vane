@@ -157,7 +157,7 @@
     </div>
 
     <!-- ══ 第一行：端口转发 + 动态域名 ══════════════════════════════ -->
-    <div class="grid grid-cols-2 gap-3 sm:gap-4">
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
 
       <!-- 端口转发 -->
       <div class="glass-card p-3 sm:p-5 flex flex-col min-h-[160px] sm:min-h-[220px]">
@@ -243,7 +243,7 @@
     </div>
 
     <!-- ══ 第二行：网页服务 + 证书 ══════════════════════════════════ -->
-    <div class="grid grid-cols-2 gap-3 sm:gap-4">
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
 
       <!-- 网页服务 -->
       <div class="glass-card p-3 sm:p-5 flex flex-col min-h-[160px] sm:min-h-[220px]">
