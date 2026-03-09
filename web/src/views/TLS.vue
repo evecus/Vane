@@ -258,11 +258,6 @@
                   <input v-model="form.provider_conf.api_token" class="input font-mono text-xs"
                          placeholder="CF API Token (DNS:Edit)" autocomplete="off" />
                 </div>
-                <div>
-                  <label class="input-label">Zone ID</label>
-                  <input v-model="form.provider_conf.zone_id" class="input font-mono text-xs"
-                         :placeholder="t('cfZoneIdPlaceholder')" autocomplete="off" />
-                </div>
               </div>
             </template>
 
