@@ -208,6 +208,9 @@ func (dd *DataDir) migrate() error {
 			enabled INTEGER NOT NULL DEFAULT 0,
 			matched_cert_id TEXT NOT NULL DEFAULT '',
 			cert_status TEXT NOT NULL DEFAULT '',
+			auth_enabled INTEGER NOT NULL DEFAULT 0,
+			auth_user TEXT NOT NULL DEFAULT '',
+			auth_pass_hash TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
 			FOREIGN KEY(service_id) REFERENCES web_services(id) ON DELETE CASCADE
 		)`,
@@ -247,6 +250,10 @@ func (dd *DataDir) migrate() error {
 	// Migrate web_routes to add cert matching columns
 	_, _ = dd.db.Exec(`ALTER TABLE web_routes ADD COLUMN matched_cert_id TEXT NOT NULL DEFAULT ''`)
 	_, _ = dd.db.Exec(`ALTER TABLE web_routes ADD COLUMN cert_status TEXT NOT NULL DEFAULT ''`)
+	// Migrate web_routes to add auth columns
+	_, _ = dd.db.Exec(`ALTER TABLE web_routes ADD COLUMN auth_enabled INTEGER NOT NULL DEFAULT 0`)
+	_, _ = dd.db.Exec(`ALTER TABLE web_routes ADD COLUMN auth_user TEXT NOT NULL DEFAULT ''`)
+	_, _ = dd.db.Exec(`ALTER TABLE web_routes ADD COLUMN auth_pass_hash TEXT NOT NULL DEFAULT ''`)
 	// Migrate web_services to drop tls_cert_id (SQLite can't DROP columns, just ignore it on load)
 	return nil
 }
@@ -355,6 +362,9 @@ type WebRoute struct {
 	Enabled       bool   `json:"enabled"`
 	MatchedCertID string `json:"matched_cert_id"`
 	CertStatus    string `json:"cert_status"` // "ok" | "no_cert" | "cert_inactive"
+	AuthEnabled   bool   `json:"auth_enabled"`
+	AuthUser      string `json:"auth_user"`
+	AuthPassHash  string `json:"auth_pass_hash,omitempty"` // bcrypt hash, never sent to frontend
 	CreatedAt     string `json:"created_at"`
 }
 
@@ -506,19 +516,20 @@ func (c *Config) loadFromDB() error {
 		}
 		svc.EnableHTTPS = httpsInt == 1
 		svc.Enabled = enabledInt == 1
-		rrows, err := db.Query(`SELECT id, domain, backend_url_enc, enabled, matched_cert_id, cert_status, created_at FROM web_routes WHERE service_id=? ORDER BY created_at`, svc.ID)
+		rrows, err := db.Query(`SELECT id, domain, backend_url_enc, enabled, matched_cert_id, cert_status, auth_enabled, auth_user, auth_pass_hash, created_at FROM web_routes WHERE service_id=? ORDER BY created_at`, svc.ID)
 		if err != nil {
 			return err
 		}
 		for rrows.Next() {
 			var route WebRoute
-			var renabledInt int
+			var renabledInt, authEnabledInt int
 			var backendEnc string
-			if err := rrows.Scan(&route.ID, &route.Domain, &backendEnc, &renabledInt, &route.MatchedCertID, &route.CertStatus, &route.CreatedAt); err != nil {
+			if err := rrows.Scan(&route.ID, &route.Domain, &backendEnc, &renabledInt, &route.MatchedCertID, &route.CertStatus, &authEnabledInt, &route.AuthUser, &route.AuthPassHash, &route.CreatedAt); err != nil {
 				rrows.Close()
 				return err
 			}
 			route.Enabled = renabledInt == 1
+			route.AuthEnabled = authEnabledInt == 1
 			if backendEnc != "" {
 				route.BackendURL, _ = decryptStr(key, backendEnc)
 			}
@@ -659,9 +670,9 @@ func (c *Config) SaveWebRoute(svcID string, route WebRoute) error {
 		return err
 	}
 	_, err = c.dataDir.db.Exec(
-		`INSERT INTO web_routes(id,service_id,domain,backend_url_enc,enabled,matched_cert_id,cert_status,created_at) VALUES(?,?,?,?,?,?,?,?)
-		 ON CONFLICT(id) DO UPDATE SET domain=excluded.domain, backend_url_enc=excluded.backend_url_enc, enabled=excluded.enabled, matched_cert_id=excluded.matched_cert_id, cert_status=excluded.cert_status`,
-		route.ID, svcID, route.Domain, backendEnc, boolToInt(route.Enabled), route.MatchedCertID, route.CertStatus, route.CreatedAt,
+		`INSERT INTO web_routes(id,service_id,domain,backend_url_enc,enabled,matched_cert_id,cert_status,auth_enabled,auth_user,auth_pass_hash,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+		 ON CONFLICT(id) DO UPDATE SET domain=excluded.domain, backend_url_enc=excluded.backend_url_enc, enabled=excluded.enabled, matched_cert_id=excluded.matched_cert_id, cert_status=excluded.cert_status, auth_enabled=excluded.auth_enabled, auth_user=excluded.auth_user, auth_pass_hash=excluded.auth_pass_hash`,
+		route.ID, svcID, route.Domain, backendEnc, boolToInt(route.Enabled), route.MatchedCertID, route.CertStatus, boolToInt(route.AuthEnabled), route.AuthUser, route.AuthPassHash, route.CreatedAt,
 	)
 	return err
 }
