@@ -495,20 +495,21 @@ func cfDo(client *http.Client, method, url, token, body string) error {
 	return nil
 }
 
-// cfResolveZoneID returns the provided zoneID if non-empty, otherwise
-// queries the Cloudflare API to find the Zone ID for the root domain of fqdn.
+// cfResolveZoneID finds the Cloudflare Zone ID for fqdn by listing all zones
+// accessible to the token and matching against the root domain. This works with
+// tokens that only have DNS:Edit permission (no Zone:Read required).
 func cfResolveZoneID(client *http.Client, token, zoneID, fqdn string) (string, error) {
 	if zoneID != "" {
 		return zoneID, nil
 	}
-	// Extract root domain (last two labels) from fqdn for zone lookup
+	// Extract root domain (last two labels) from fqdn for matching
 	parts := strings.Split(fqdn, ".")
 	rootDomain := fqdn
 	if len(parts) >= 2 {
 		rootDomain = strings.Join(parts[len(parts)-2:], ".")
 	}
-	url := fmt.Sprintf("https://api.cloudflare.com/client/v4/zones?name=%s", rootDomain)
-	req, err := http.NewRequest("GET", url, nil)
+	// List all zones the token can access (works with DNS:Edit only)
+	req, err := http.NewRequest("GET", "https://api.cloudflare.com/client/v4/zones?per_page=100", nil)
 	if err != nil {
 		return "", err
 	}
@@ -520,16 +521,19 @@ func cfResolveZoneID(client *http.Client, token, zoneID, fqdn string) (string, e
 	defer resp.Body.Close()
 	var r struct {
 		Result []struct {
-			ID string `json:"id"`
+			ID   string `json:"id"`
+			Name string `json:"name"`
 		} `json:"result"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
 		return "", err
 	}
-	if len(r.Result) == 0 {
-		return "", fmt.Errorf("cloudflare: no zone found for domain %s", rootDomain)
+	for _, zone := range r.Result {
+		if zone.Name == rootDomain {
+			return zone.ID, nil
+		}
 	}
-	return r.Result[0].ID, nil
+	return "", fmt.Errorf("cloudflare: no zone found for domain %s", rootDomain)
 }
 
 func updateCloudflareRecord(rule config.DDNSRule, fqdn, ip string) error {
