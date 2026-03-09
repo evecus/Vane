@@ -94,6 +94,15 @@ func (m *Manager) renewAll() {
 
 // IssueCert triggers ACME DNS-01 certificate issuance for a cert config.
 // It is safe to call concurrently — duplicate calls for the same ID are de-duplicated.
+
+// builtinZeroSSLAccounts maps email → (kid, hmacKey) for accounts that are managed internally.
+// hmacKey is the raw Base64url string as issued by ZeroSSL.
+var builtinZeroSSLAccounts = map[string][2]string{
+	"76q7n@dollicons.com": {"JhL5gkVe0-zPKoH5G6_Z5A", "L24OuPHmeUS3RyN9wp28eaJqTBrYT7BVBXvHU3BvmNOh85Mpx3nz65sKsiY1Cik4jrAVKNvFVdRFk69tfT0tAQ"},
+	"jamie@gmail.com":     {"RumPLRDS1IaG5YrHKUqG-g", "Opr7ZlT9t1g2Mp3nwMjn1dl9sUC2-yp6pGjf-E2PzGXBJTXoLsp_gPzv35eS0zK4mw6nQPCIDUPJcF5632jalw"},
+	"gings@gmail.com":     {"16nmO6yCbhkm_Ny6sphJuQ", "hPOv1bdSDCNTJmASQvzXqJICcOuPxuBUEOnp7zFVnAzKimJMfSbL9RHGkyY2Pig_bwgcseSWU0XUcsY_OQnEbQ"},
+}
+
 func (m *Manager) IssueCert(certID string) error {
 	// De-duplicate in-flight requests
 	m.inFlightMu.Lock()
@@ -125,6 +134,16 @@ func (m *Manager) IssueCert(certID string) error {
 	}
 
 	log.Printf("[tls] IssueCert start: id=%s ca=%q domains=%v", certID, cert.CAProvider, cert.Domains)
+
+	// Auto-fix: if this cert uses a builtin ZeroSSL account, always use the authoritative EAB values
+	// to recover from any stale/corrupted data that may have been saved to the database.
+	if cert.CAProvider == "zerossl" {
+		if eab, ok := builtinZeroSSLAccounts[cert.Email]; ok {
+			cert.ProviderConf.ZeroSSLKeyID = eab[0]
+			cert.ProviderConf.ZeroSSLAPIKey = eab[1]
+			log.Printf("[tls] IssueCert: refreshed builtin EAB for %s", cert.Email)
+		}
+	}
 
 	// Validate required fields before issuing
 	if cert.Email == "" {
