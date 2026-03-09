@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/yourusername/vane/config"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // ─── Access log store ─────────────────────────────────────────────────────────
@@ -428,6 +429,16 @@ func (m *Manager) buildRouter(svc *config.WebService) http.Handler {
 			routeDomain := strings.TrimPrefix(e.route.Domain, "www.")
 			reqDomain := strings.TrimPrefix(host, "www.")
 			if strings.EqualFold(routeDomain, reqDomain) {
+				// Basic Auth check
+				if e.route.AuthEnabled && e.route.AuthPassHash != "" {
+					user, pass, ok := r.BasicAuth()
+					if !ok || user != e.route.AuthUser || bcrypt.CompareHashAndPassword([]byte(e.route.AuthPassHash), []byte(pass)) != nil {
+						w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
+						http.Error(w, "Unauthorized", http.StatusUnauthorized)
+						logAccess(svcID, e.route.ID, e.route.Domain, r, http.StatusUnauthorized, time.Since(start))
+						return
+					}
+				}
 				e.proxy.ServeHTTP(rr, r)
 				logAccess(svcID, e.route.ID, e.route.Domain, r, rr.status, time.Since(start))
 				return
