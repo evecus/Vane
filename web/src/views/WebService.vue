@@ -84,6 +84,7 @@
 
             <!-- 路由信息：移动端竖排 -->
             <div class="flex-1 flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2 min-w-0">
+              <span v-if="route.name" class="text-xs font-medium text-slate-700 break-all">{{ route.name }}</span>
               <span class="font-mono text-xs sm:text-sm font-semibold text-purple-700 bg-purple-100 px-2 py-0.5 rounded-lg break-all">
                 {{ svc.enable_https ? 'https' : 'http' }}://{{ route.domain }}{{ svc.listen_port !== 443 && svc.listen_port !== 80 ? ':'+svc.listen_port : '' }}
               </span>
@@ -241,6 +242,11 @@
             <div class="p-3 bg-purple-50 rounded-xl border border-purple-100 text-xs text-purple-700 space-y-1">
               <p v-html="t('routeHelp1')"></p>
               <p v-html="t('routeHelp2')"></p>
+            </div>
+
+            <div>
+              <label class="input-label">规则名称</label>
+              <input v-model="routeForm.name" class="input" placeholder="可选，便于识别" />
             </div>
 
             <div>
@@ -539,7 +545,7 @@ function openRouteModal(svcID, route = null) {
     routeScheme.value = parsed.scheme
     routeHostPort.value = parsed.host
   } else {
-    routeForm.value = { domain: '', backend_url: '', enabled: true, auth_enabled: false, auth_user: '' }
+    routeForm.value = { name: '', domain: '', backend_url: '', enabled: true, auth_enabled: false, auth_user: '' }
     routeScheme.value = 'http://'
     routeHostPort.value = ''
   }
