@@ -1215,6 +1215,8 @@ func (h *Handler) createCert(c *gin.Context) {
 	go h.ws.RematchAllRoutes()
 	c.JSON(201, cert)
 }
+
+func (h *Handler) updateCert(c *gin.Context) {
 	id := c.Param("id")
 	var req config.TLSCert
 	if err := c.ShouldBindJSON(&req); err != nil {
