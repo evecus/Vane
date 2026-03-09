@@ -28,6 +28,7 @@ import (
 	"github.com/yourusername/vane/module/ddns"
 	"github.com/yourusername/vane/module/portforward"
 	tlsmod "github.com/yourusername/vane/module/tls"
+	"golang.org/x/crypto/bcrypt"
 	"github.com/yourusername/vane/module/webservice"
 )
 
@@ -823,8 +824,16 @@ func (h *Handler) refreshDDNS(c *gin.Context) {
 
 func (h *Handler) listWebServices(c *gin.Context) {
 	h.cfg.RLock()
-	defer h.cfg.RUnlock()
-	c.JSON(200, h.cfg.WebServices)
+	svcs := make([]config.WebService, len(h.cfg.WebServices))
+	copy(svcs, h.cfg.WebServices)
+	h.cfg.RUnlock()
+	// Never expose password hashes to frontend
+	for i := range svcs {
+		for j := range svcs[i].Routes {
+			svcs[i].Routes[j].AuthPassHash = ""
+		}
+	}
+	c.JSON(200, svcs)
 }
 
 func (h *Handler) createWebService(c *gin.Context) {
@@ -1029,12 +1038,44 @@ func (h *Handler) listRoutes(c *gin.Context) {
 	c.JSON(404, gin.H{"error": "service not found"})
 }
 
+// hashRoutePassword hashes a plain-text password for a WebRoute.
+// If authEnabled is false or password is empty, it returns the existing hash unchanged.
+func hashRoutePassword(plain, existingHash string, authEnabled bool) (string, error) {
+	if !authEnabled || plain == "" {
+		return existingHash, nil
+	}
+	h, err := bcrypt.GenerateFromPassword([]byte(plain), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	return string(h), nil
+}
+
 func (h *Handler) createRoute(c *gin.Context) {
 	id := c.Param("id")
-	var route config.WebRoute
-	if err := c.ShouldBindJSON(&route); err != nil {
+	var req struct {
+		config.WebRoute
+		AuthPass string `json:"auth_pass"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
+	}
+	route := req.WebRoute
+	if route.AuthEnabled {
+		if route.AuthUser == "" || req.AuthPass == "" {
+			c.JSON(400, gin.H{"error": "开启访问验证时，账号和密码不能为空"})
+			return
+		}
+		hash, err := hashRoutePassword(req.AuthPass, "", true)
+		if err != nil {
+			c.JSON(500, gin.H{"error": "密码加密失败"})
+			return
+		}
+		route.AuthPassHash = hash
+	} else {
+		route.AuthUser = ""
+		route.AuthPassHash = ""
 	}
 	route.ID = config.NewID()
 	route.CreatedAt = config.Now()
@@ -1059,15 +1100,29 @@ func (h *Handler) createRoute(c *gin.Context) {
 	h.ws.MatchRouteCert(id, &route)
 	h.ws.Stop(id)
 	_ = h.ws.Start(id)
+	route.AuthPassHash = "" // never expose hash
 	c.JSON(201, route)
 }
 
 func (h *Handler) updateRoute(c *gin.Context) {
 	svcID, rid := c.Param("id"), c.Param("rid")
-	var req config.WebRoute
+	var req struct {
+		config.WebRoute
+		AuthPass string `json:"auth_pass"`
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
+	}
+	route := req.WebRoute
+	if route.AuthEnabled {
+		if route.AuthUser == "" || (req.AuthPass == "" && route.AuthPassHash == "") {
+			c.JSON(400, gin.H{"error": "开启访问验证时，账号和密码不能为空"})
+			return
+		}
+	} else {
+		route.AuthUser = ""
+		route.AuthPassHash = ""
 	}
 	h.cfg.Lock()
 	found := false
@@ -1075,9 +1130,21 @@ func (h *Handler) updateRoute(c *gin.Context) {
 		if h.cfg.WebServices[i].ID == svcID {
 			for j := range h.cfg.WebServices[i].Routes {
 				if h.cfg.WebServices[i].Routes[j].ID == rid {
-					req.ID = rid
-					req.CreatedAt = h.cfg.WebServices[i].Routes[j].CreatedAt
-					h.cfg.WebServices[i].Routes[j] = req
+					route.ID = rid
+					route.CreatedAt = h.cfg.WebServices[i].Routes[j].CreatedAt
+					// Keep existing hash if no new password provided
+					if route.AuthEnabled && req.AuthPass == "" {
+						route.AuthPassHash = h.cfg.WebServices[i].Routes[j].AuthPassHash
+					} else if route.AuthEnabled && req.AuthPass != "" {
+						hash, err := bcrypt.GenerateFromPassword([]byte(req.AuthPass), bcrypt.DefaultCost)
+						if err != nil {
+							h.cfg.Unlock()
+							c.JSON(500, gin.H{"error": "密码加密失败"})
+							return
+						}
+						route.AuthPassHash = string(hash)
+					}
+					h.cfg.WebServices[i].Routes[j] = route
 					found = true
 					break
 				}
@@ -1090,14 +1157,15 @@ func (h *Handler) updateRoute(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "route not found"})
 		return
 	}
-	if err := h.cfg.SaveWebRoute(svcID, req); err != nil {
+	if err := h.cfg.SaveWebRoute(svcID, route); err != nil {
 		c.JSON(500, gin.H{"error": "保存失败"})
 		return
 	}
-	h.ws.MatchRouteCert(svcID, &req)
+	h.ws.MatchRouteCert(svcID, &route)
 	h.ws.Stop(svcID)
 	_ = h.ws.Start(svcID)
-	c.JSON(200, req)
+	route.AuthPassHash = "" // never expose hash
+	c.JSON(200, route)
 }
 
 func (h *Handler) deleteRoute(c *gin.Context) {
