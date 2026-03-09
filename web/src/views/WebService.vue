@@ -109,6 +109,12 @@
                   无匹配证书
                 </span>
               </template>
+              <!-- 访问验证角标 -->
+              <span v-if="route.auth_enabled"
+                    class="inline-flex items-center gap-1 text-xs text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-lg flex-shrink-0">
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+                需验证
+              </span>
             </div>
 
             <!-- 路由操作：移动端始终可见 -->
@@ -181,16 +187,16 @@
               {{ t('httpsHint') }}证书将根据子规则域名自动匹配。
             </div>
 
-            <!-- 错误提示 -->
-            <div v-if="svcError" class="flex items-center gap-2 text-red-600 bg-red-50 px-3 py-2.5 rounded-xl border border-red-100 text-xs">
-              <AlertCircle :size="13" class="flex-shrink-0" /> {{ svcError }}
-            </div>
+            <!-- 错误提示已移至底部 -->
 
           </div>
 
           <!-- 底部操作栏 -->
-          <div class="flex-shrink-0 border-t border-slate-100 px-5 sm:px-6 py-3 sm:py-4">
-            <div class="flex items-center justify-between gap-3">
+          <div class="flex-shrink-0 border-t border-slate-100 px-5 sm:px-6 py-3 sm:py-4 space-y-3">
+            <div v-if="svcError" class="flex items-center gap-2 text-red-600 bg-red-50 px-3 py-2.5 rounded-xl border border-red-100 text-xs">
+              <AlertCircle :size="13" class="flex-shrink-0" /> {{ svcError }}
+            </div>
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div class="flex items-center gap-2">
                 <span class="text-sm text-slate-600">{{ t('enableService') }}</span>
                 <label class="toggle">
@@ -199,9 +205,9 @@
                   <div class="toggle-thumb"></div>
                 </label>
               </div>
-              <div class="flex gap-2">
-                <button class="btn-primary sm:min-w-[80px] justify-center" @click="saveService">{{ t('save') }}</button>
-                <button class="btn-secondary sm:min-w-[80px] justify-center" @click="serviceModal=null">{{ t('cancel') }}</button>
+              <div class="flex gap-2 sm:gap-3">
+                <button class="btn-primary flex-1 sm:flex-none sm:min-w-[80px] justify-center" @click="saveService">{{ t('save') }}</button>
+                <button class="btn-secondary flex-1 sm:flex-none sm:min-w-[80px] justify-center" @click="serviceModal=null">{{ t('cancel') }}</button>
               </div>
             </div>
           </div>
@@ -239,7 +245,12 @@
 
             <div>
               <label class="input-label">{{ t('frontDomain') }}</label>
-              <input v-model="routeForm.domain" class="input font-mono" placeholder="a.com" />
+              <div class="flex gap-0">
+                <span class="inline-flex items-center px-3 bg-slate-100 border border-r-0 border-slate-200 rounded-l-xl text-sm font-mono text-slate-500 flex-shrink-0">
+                  {{ currentSvc?.enable_https ? 'https://' : 'http://' }}
+                </span>
+                <input v-model="routeForm.domain" class="input rounded-l-none font-mono flex-1" placeholder="a.com" />
+              </div>
               <p class="text-xs text-slate-400 mt-1 font-mono">
                 {{ currentSvc?.enable_https ? 'https' : 'http' }}://{{ routeForm.domain || 'a.com' }}{{ currentSvc && currentSvc.listen_port !== 443 ? ':'+currentSvc.listen_port : '' }}
               </p>
@@ -247,7 +258,6 @@
 
             <div>
               <label class="input-label">{{ t('backendAddr') }}</label>
-              <!-- 后端地址：scheme 前缀选择 + 地址输入 -->
               <div class="flex gap-0">
                 <select v-model="routeScheme" class="select rounded-r-none border-r-0 w-28 flex-shrink-0 bg-slate-100 text-slate-700 font-mono text-sm">
                   <option value="http://">http://</option>
@@ -261,16 +271,46 @@
               <p class="text-xs text-slate-400 mt-1">{{ t('backendAddrHint') }}</p>
             </div>
 
-            <!-- 错误提示 -->
-            <div v-if="routeError" class="flex items-center gap-2 text-red-600 bg-red-50 px-3 py-2.5 rounded-xl border border-red-100 text-xs">
-              <AlertCircle :size="13" class="flex-shrink-0" /> {{ routeError }}
+            <!-- 访问验证 -->
+            <div class="border border-slate-200 rounded-xl overflow-hidden">
+              <!-- 开关行 -->
+              <div class="flex items-center justify-between px-4 py-3 bg-slate-50">
+                <div>
+                  <p class="text-sm font-medium text-slate-700">访问验证</p>
+                  <p class="text-xs text-slate-400 mt-0.5">开启后访问此域名需输入账号密码</p>
+                </div>
+                <label class="toggle flex-shrink-0 ml-4">
+                  <input type="checkbox" v-model="routeForm.auth_enabled" />
+                  <div class="toggle-track"></div>
+                  <div class="toggle-thumb"></div>
+                </label>
+              </div>
+              <!-- 账号密码字段 -->
+              <div v-if="routeForm.auth_enabled" class="px-4 py-3 space-y-3 border-t border-slate-200">
+                <div>
+                  <label class="input-label">账号</label>
+                  <input v-model="routeForm.auth_user" class="input font-mono" placeholder="admin" autocomplete="off" />
+                </div>
+                <div>
+                  <label class="input-label">
+                    密码
+                    <span v-if="routeForm.id" class="text-xs font-normal text-slate-400 ml-1 normal-case tracking-normal">留空则保持原密码不变</span>
+                  </label>
+                  <input v-model="routeAuthPass" type="password" class="input font-mono" placeholder="••••••••" autocomplete="new-password" />
+                </div>
+              </div>
             </div>
+
+            <!-- 错误提示已移至底部 -->
 
           </div>
 
           <!-- 底部操作栏 -->
-          <div class="flex-shrink-0 border-t border-slate-100 px-5 sm:px-6 py-3 sm:py-4">
-            <div class="flex items-center justify-between gap-3">
+          <div class="flex-shrink-0 border-t border-slate-100 px-5 sm:px-6 py-3 sm:py-4 space-y-3">
+            <div v-if="routeError" class="flex items-center gap-2 text-red-600 bg-red-50 px-3 py-2.5 rounded-xl border border-red-100 text-xs">
+              <AlertCircle :size="13" class="flex-shrink-0" /> {{ routeError }}
+            </div>
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div class="flex items-center gap-2">
                 <span class="text-sm text-slate-600">{{ t('enableRouteLabel') }}</span>
                 <label class="toggle">
@@ -279,9 +319,9 @@
                   <div class="toggle-thumb"></div>
                 </label>
               </div>
-              <div class="flex gap-2">
-                <button class="btn-primary sm:min-w-[80px] justify-center" @click="saveRoute">{{ t('save') }}</button>
-                <button class="btn-secondary sm:min-w-[80px] justify-center" @click="routeModal=null">{{ t('cancel') }}</button>
+              <div class="flex gap-2 sm:gap-3">
+                <button class="btn-primary flex-1 sm:flex-none sm:min-w-[80px] justify-center" @click="saveRoute">{{ t('save') }}</button>
+                <button class="btn-secondary flex-1 sm:flex-none sm:min-w-[80px] justify-center" @click="routeModal=null">{{ t('cancel') }}</button>
               </div>
             </div>
           </div>
@@ -389,6 +429,7 @@ const routeError = ref('')
 // 后端地址拆分为 scheme + host:port
 const routeScheme = ref('http://')
 const routeHostPort = ref('')
+const routeAuthPass = ref('')
 
 // 同步 routeScheme + routeHostPort → routeForm.backend_url
 watch([routeScheme, routeHostPort], () => {
@@ -472,7 +513,14 @@ async function saveService() {
   }
 }
 
-async function toggleService(id) { await api.post(`/webservice/${id}/toggle`); await load() }
+async function toggleService(id) {
+  try {
+    await api.post(`/webservice/${id}/toggle`)
+    await load()
+  } catch (e) {
+    alert(e.response?.data?.error || e.message)
+  }
+}
 async function delService(id) {
   if (!confirm(t('confirmDelService'))) return
   await api.delete(`/webservice/${id}`)
@@ -484,13 +532,14 @@ function openRouteModal(svcID, route = null) {
   currentSvcID.value = svcID
   editingRoute.value = !!route
   routeError.value = ''
+  routeAuthPass.value = ''
   if (route) {
     routeForm.value = { ...route }
     const parsed = parseBackendUrl(route.backend_url)
     routeScheme.value = parsed.scheme
     routeHostPort.value = parsed.host
   } else {
-    routeForm.value = { domain: '', backend_url: '', enabled: true }
+    routeForm.value = { domain: '', backend_url: '', enabled: true, auth_enabled: false, auth_user: '' }
     routeScheme.value = 'http://'
     routeHostPort.value = ''
   }
@@ -500,12 +549,26 @@ function openRouteModal(svcID, route = null) {
 async function saveRoute() {
   routeError.value = ''
   routeForm.value.backend_url = routeScheme.value + routeHostPort.value
+  // Validate auth fields
+  if (routeForm.value.auth_enabled) {
+    if (!routeForm.value.auth_user) {
+      routeError.value = '开启访问验证时，账号不能为空'
+      return
+    }
+    // New route: password required; edit: only required if no existing hash
+    const isNew = !editingRoute.value
+    if (isNew && !routeAuthPass.value) {
+      routeError.value = '开启访问验证时，密码不能为空'
+      return
+    }
+  }
   const id = currentSvcID.value
+  const payload = { ...routeForm.value, auth_pass: routeAuthPass.value || undefined }
   try {
     if (editingRoute.value) {
-      await api.put(`/webservice/${id}/routes/${routeForm.value.id}`, routeForm.value)
+      await api.put(`/webservice/${id}/routes/${routeForm.value.id}`, payload)
     } else {
-      await api.post(`/webservice/${id}/routes`, routeForm.value)
+      await api.post(`/webservice/${id}/routes`, payload)
     }
     routeModal.value = false
     await load()
