@@ -182,9 +182,9 @@
                   </div>
                 </div>
 
-                <div v-if="form.ip_version === 'ipv6'">
+                <div v-if="form.ip_version === 'ipv6' || form.ip_version === 'ipv4'">
                   <label class="input-label">
-                    {{ t('selectIpv6') }}
+                    {{ form.ip_version === 'ipv6' ? t('selectIpv6') : t('selectIpv4') }}
                     <span v-if="ifaceLoading" class="ml-2 text-xs text-amber-500 inline-flex items-center gap-1">
                       <span class="inline-block w-3 h-3 border-2 border-amber-400 border-t-transparent rounded-full animate-spin"></span>
                       {{ t('loadingIface') }}
@@ -205,9 +205,9 @@
                   </div>
                   <div v-else-if="!ifaceLoading && form.ip_interface"
                        class="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-500">
-                    {{ t('noGlobalIpv6') }}
+                    {{ form.ip_version === 'ipv6' ? t('noGlobalIpv6') : t('noGlobalIpv4') }}
                   </div>
-                  <p class="text-xs text-slate-400 mt-1.5">{{ t('ipv6Hint') }}</p>
+                  <p class="text-xs text-slate-400 mt-1.5">{{ form.ip_version === 'ipv6' ? t('ipv6Hint') : t('ipv4Hint') }}</p>
                 </div>
               </template>
 
@@ -375,12 +375,11 @@
           </div>
 
           <!-- 底部操作栏 -->
-          <div class="flex-shrink-0 border-t border-slate-100 px-5 sm:px-6 py-3 sm:py-4">
-            <!-- 错误提示 -->
-            <div v-if="saveError" class="flex items-center gap-2 text-red-600 bg-red-50 px-3 py-2 rounded-xl border border-red-100 text-xs mb-3">
+          <div class="flex-shrink-0 border-t border-slate-100 px-5 sm:px-6 py-3 sm:py-4 space-y-3">
+            <div v-if="saveError" class="flex items-center gap-2 text-red-600 bg-red-50 px-3 py-2 rounded-xl border border-red-100 text-xs">
               <AlertCircle :size="13" class="flex-shrink-0" /> {{ saveError }}
             </div>
-            <div class="flex items-center justify-between gap-3">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div class="flex items-center gap-2">
                 <span class="text-sm text-slate-600">{{ t('enableAfterCreate') }}</span>
                 <label class="toggle">
@@ -388,9 +387,9 @@
                   <div class="toggle-track"></div><div class="toggle-thumb"></div>
                 </label>
               </div>
-              <div class="flex gap-2">
-                <button class="btn-primary sm:min-w-[80px] justify-center" @click="save">{{ t('save') }}</button>
-                <button class="btn-secondary sm:min-w-[80px] justify-center" @click="modal=null">{{ t('cancel') }}</button>
+              <div class="flex gap-2 sm:gap-3">
+                <button class="btn-primary flex-1 sm:flex-none sm:min-w-[80px] justify-center" @click="save">{{ t('save') }}</button>
+                <button class="btn-secondary flex-1 sm:flex-none sm:min-w-[80px] justify-center" @click="modal=null">{{ t('cancel') }}</button>
               </div>
             </div>
           </div>
@@ -468,7 +467,7 @@ async function loadInterfaces() {
 }
 
 async function loadIfaceIPs(iface, version) {
-  if (!iface || version !== 'ipv6') return
+  if (!iface) return
   ifaceLoading.value = true
   ifaceLoadError.value = ''
   try {
@@ -488,8 +487,8 @@ async function loadIfaceIPs(iface, version) {
 function onIfaceChange() {
   ifaceIPs.value = []
   ifaceLoadError.value = ''
-  if (form.value.ip_detect_mode === 'iface' && form.value.ip_version === 'ipv6' && form.value.ip_interface) {
-    loadIfaceIPs(form.value.ip_interface, 'ipv6')
+  if (form.value.ip_detect_mode === 'iface' && form.value.ip_interface) {
+    loadIfaceIPs(form.value.ip_interface, form.value.ip_version)
   }
 }
 
@@ -510,9 +509,7 @@ async function onDetectModeChange() {
     interfaces.value = data || []
     if (interfaces.value.length) {
       form.value.ip_interface = interfaces.value[0]
-      if (form.value.ip_version === 'ipv6') {
-        loadIfaceIPs(form.value.ip_interface, 'ipv6')
-      }
+      loadIfaceIPs(form.value.ip_interface, form.value.ip_version)
     }
   } catch {}
 }
