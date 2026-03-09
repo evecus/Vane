@@ -498,15 +498,11 @@ func cfDo(client *http.Client, method, url, token, body string) error {
 // cfResolveZoneID finds the Cloudflare Zone ID for fqdn by listing all zones
 // accessible to the token and matching against the root domain. This works with
 // tokens that only have DNS:Edit permission (no Zone:Read required).
+// It tries extracting the root domain starting from 2 labels up to 20 labels
+// to handle public suffixes like us.ci, co.uk, com.cn, etc.
 func cfResolveZoneID(client *http.Client, token, zoneID, fqdn string) (string, error) {
 	if zoneID != "" {
 		return zoneID, nil
-	}
-	// Extract root domain (last two labels) from fqdn for matching
-	parts := strings.Split(fqdn, ".")
-	rootDomain := fqdn
-	if len(parts) >= 2 {
-		rootDomain = strings.Join(parts[len(parts)-2:], ".")
 	}
 	// List all zones the token can access (works with DNS:Edit only)
 	req, err := http.NewRequest("GET", "https://api.cloudflare.com/client/v4/zones?per_page=100", nil)
@@ -528,12 +524,24 @@ func cfResolveZoneID(client *http.Client, token, zoneID, fqdn string) (string, e
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
 		return "", err
 	}
+	// Build a lookup map for fast matching
+	zoneMap := make(map[string]string, len(r.Result))
 	for _, zone := range r.Result {
-		if zone.Name == rootDomain {
-			return zone.ID, nil
+		zoneMap[zone.Name] = zone.ID
+	}
+	// Try from 2 labels up to 20 labels to handle multi-level public suffixes
+	parts := strings.Split(fqdn, ".")
+	maxLabels := len(parts)
+	if maxLabels > 20 {
+		maxLabels = 20
+	}
+	for n := 2; n <= maxLabels; n++ {
+		candidate := strings.Join(parts[len(parts)-n:], ".")
+		if id, ok := zoneMap[candidate]; ok {
+			return id, nil
 		}
 	}
-	return "", fmt.Errorf("cloudflare: no zone found for domain %s", rootDomain)
+	return "", fmt.Errorf("cloudflare: no zone found for domain %s", fqdn)
 }
 
 func updateCloudflareRecord(rule config.DDNSRule, fqdn, ip string) error {
