@@ -624,7 +624,7 @@ async function issue(id) {
   const cert = certs.value.find(c => c.id === id)
   if (cert) cert.status = 'pending'
   // If this is a ZeroSSL cert using a builtin account, refresh EAB before issuing
-  if (cert && cert.ca_provider === 'zerossl' && isBuiltinAccount(cert)) {
+  if (cert && cert.ca_provider === 'zerossl' && BUILTIN_ZS_ACCOUNTS.map(a => a.email).includes(cert.email)) {
     try {
       await tryWithBuiltin(async (idx) => {
         const acc = decodeAccount(BUILTIN_ZS_ACCOUNTS[idx % BUILTIN_ZS_ACCOUNTS.length])
