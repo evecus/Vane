@@ -85,8 +85,10 @@
             <!-- 路由信息：移动端竖排 -->
             <div class="flex-1 flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2 min-w-0">
               <span v-if="route.name" class="text-xs font-medium text-slate-700 break-all">{{ route.name }}</span>
-              <span class="font-mono text-xs sm:text-sm font-semibold text-purple-700 bg-purple-100 px-2 py-0.5 rounded-lg break-all">
-                {{ svc.enable_https ? 'https' : 'http' }}://{{ route.domain }}{{ svc.listen_port !== 443 && svc.listen_port !== 80 ? ':'+svc.listen_port : '' }}
+              <span class="font-mono text-xs sm:text-sm font-semibold text-purple-700 bg-purple-100 px-2 py-0.5 rounded-lg break-all cursor-pointer hover:bg-purple-200 transition-colors select-all"
+                    :title="t('clickToCopy')"
+                    @click="copyUrl(svc, route)">
+                {{ svc.enable_https ? 'https' : 'http' }}://{{ route.domain }}{{ (svc.enable_https && svc.listen_port === 443) || (!svc.enable_https && svc.listen_port === 80) ? '' : ':'+svc.listen_port }}
               </span>
               <ArrowRight :size="12" class="text-slate-300 flex-shrink-0 hidden sm:block" />
               <span class="font-mono text-xs text-slate-600 bg-white border border-slate-100 px-2 py-0.5 rounded-lg break-all">
@@ -366,14 +368,12 @@
 
           <!-- 日志表：移动端横向滚动 -->
           <div class="flex-1 overflow-auto">
-            <table class="w-full text-xs min-w-[600px]">
+            <table class="w-full text-xs min-w-[400px]">
               <thead class="bg-slate-50 sticky top-0">
                 <tr>
                   <th class="text-left px-3 sm:px-4 py-2.5 font-semibold text-slate-500">{{ t('logsTime') }}</th>
+                  <th class="text-left px-3 sm:px-4 py-2.5 font-semibold text-slate-500">{{ t('logsRouteName') }}</th>
                   <th class="text-left px-3 sm:px-4 py-2.5 font-semibold text-slate-500">{{ t('logsDomain') }}</th>
-                  <th class="text-left px-3 sm:px-4 py-2.5 font-semibold text-slate-500">{{ t('logsPath') }}</th>
-                  <th class="text-left px-3 sm:px-4 py-2.5 font-semibold text-slate-500">{{ t('logsStatus') }}</th>
-                  <th class="text-left px-3 sm:px-4 py-2.5 font-semibold text-slate-500">{{ t('logsDuration') }}</th>
                   <th class="text-left px-3 sm:px-4 py-2.5 font-semibold text-slate-500">{{ t('logsSrcIp') }}</th>
                   <th class="text-left px-3 sm:px-4 py-2.5 font-semibold text-slate-500 max-w-[140px]">UA</th>
                 </tr>
@@ -382,23 +382,27 @@
                 <tr v-for="log in filteredLogs" :key="log.id"
                     class="border-t border-slate-50 hover:bg-slate-50 transition-colors">
                   <td class="px-3 sm:px-4 py-2 font-mono text-slate-400 whitespace-nowrap">{{ formatTime(log.time) }}</td>
+                  <td class="px-3 sm:px-4 py-2 text-slate-600">{{ log.route_name || '—' }}</td>
                   <td class="px-3 sm:px-4 py-2 font-mono font-semibold text-slate-700">{{ log.domain }}</td>
-                  <td class="px-3 sm:px-4 py-2 font-mono text-slate-500 max-w-[100px] truncate" :title="log.path">{{ log.method }} {{ log.path }}</td>
-                  <td class="px-3 sm:px-4 py-2">
-                    <span :class="statusClass(log.status_code)" class="badge">{{ log.status_code }}</span>
-                  </td>
-                  <td class="px-3 sm:px-4 py-2 font-mono text-slate-400">{{ log.duration_ms }}ms</td>
                   <td class="px-3 sm:px-4 py-2 font-mono text-slate-600">{{ log.client_ip }}</td>
                   <td class="px-3 sm:px-4 py-2 text-slate-400 max-w-[140px] truncate" :title="log.user_agent">{{ parseUA(log.user_agent) }}</td>
                 </tr>
                 <tr v-if="filteredLogs.length === 0">
-                  <td colspan="7" class="text-center py-10 text-slate-300">{{ t('noLogs') }}</td>
+                  <td colspan="5" class="text-center py-10 text-slate-300">{{ t('noLogs') }}</td>
                 </tr>
               </tbody>
             </table>
           </div>
 
         </div>
+      </div>
+    </Teleport>
+
+    <!-- 复制成功提示 -->
+    <Teleport to="body">
+      <div v-if="copyToast"
+           class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-slate-800 text-white text-sm px-4 py-2 rounded-xl shadow-lg transition-all">
+        {{ t('copied') }}
       </div>
     </Teleport>
   </div>
@@ -413,6 +417,8 @@ import { useI18n } from '@/stores/i18n'
 const { t } = useI18n()
 
 const services = ref([])
+const copyToast = ref(false)
+let copyToastTimer = null
 const certs = ref([])
 const logs = ref([])
 const logSearch = ref('')
@@ -482,7 +488,30 @@ async function loadLogs() {
   logs.value = data
 }
 
-watch(logsModal, v => { if (v) loadLogs() })
+watch(logsModal, v => {
+  if (v) {
+    loadLogs()
+    // Schedule reload at next midnight to clear previous day's logs
+    scheduleDailyLogRefresh()
+  } else {
+    clearDailyLogRefresh()
+  }
+})
+
+let dailyRefreshTimer = null
+function scheduleDailyLogRefresh() {
+  clearDailyLogRefresh()
+  const now = new Date()
+  const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
+  const msUntilMidnight = midnight - now
+  dailyRefreshTimer = setTimeout(() => {
+    if (logsModal.value) loadLogs()
+    scheduleDailyLogRefresh()
+  }, msUntilMidnight)
+}
+function clearDailyLogRefresh() {
+  if (dailyRefreshTimer) { clearTimeout(dailyRefreshTimer); dailyRefreshTimer = null }
+}
 
 function openLogsFor(id) {
   logsServiceID.value = id
@@ -595,6 +624,17 @@ async function delRoute(svcID, rid) {
 }
 
 // ── Helpers ──
+function copyUrl(svc, route) {
+  const isDefaultPort = (svc.enable_https && svc.listen_port === 443) || (!svc.enable_https && svc.listen_port === 80)
+  const port = isDefaultPort ? '' : ':' + svc.listen_port
+  const url = `${svc.enable_https ? 'https' : 'http'}://${route.domain}${port}`
+  navigator.clipboard.writeText(url).then(() => {
+    clearTimeout(copyToastTimer)
+    copyToast.value = true
+    copyToastTimer = setTimeout(() => { copyToast.value = false }, 2000)
+  })
+}
+
 function formatTime(ts) {
   if (!ts) return ''
   return new Date(ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
