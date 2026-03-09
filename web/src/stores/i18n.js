@@ -75,7 +75,7 @@ const messages = {
     enableNow: '创建后立即启用', cancel: '取消', save: '保存', create: '创建',
     confirmDelRule: '确认删除此规则？',
     // ── DDNS ─────────────────────────────────────────────────────────────────
-    ddnsTitle: '动态域名 DDNS', ddnsSubtitle: '',
+    ddnsTitle: '动态域名', ddnsSubtitle: '',
     noDdns: '暂无 DDNS 规则',
     ifaceBadge: '网卡: {iface}', apiMode: '外部 API',
     noHistory: '暂无记录',
