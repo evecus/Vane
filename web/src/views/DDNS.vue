@@ -39,9 +39,6 @@
               </div>
               <!-- 操作按钮：桌面端在右上角hover显示 -->
               <div class="hidden sm:flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button @click="refresh(rule.id)" class="btn-ghost btn-sm text-emerald-500 p-1.5" :title="t('detectNow')">
-                  <RefreshCw :size="14" />
-                </button>
                 <label class="toggle scale-90">
                   <input type="checkbox" :checked="rule.enabled" @change="toggle(rule.id)" />
                   <div class="toggle-track"></div><div class="toggle-thumb"></div>
@@ -88,9 +85,9 @@
               </span>
               <span v-else-if="ipStatus[rule.id] === 'fail' && syncStatus[rule.id]?.ipErr" class="text-red-400 font-medium">{{ t('ipFetchFail') }}：{{ syncStatus[rule.id].ipErr }}</span>
               <span v-else-if="ipStatus[rule.id] === 'fail'" class="text-red-400 font-medium">{{ t('ipFetchFail') }}</span>
-              <span v-else>
+              <span v-else class="flex flex-wrap items-center gap-1">
                 {{ t('currentIp') }}
-                <span class="font-mono" :class="rule.last_ip ? 'text-slate-700' : 'text-slate-400'">{{ rule.last_ip || t('unknown') }}</span>
+                <span class="font-mono break-all" :class="rule.last_ip ? 'text-slate-700' : 'text-slate-400'">{{ rule.last_ip || t('unknown') }}</span>
               </span>
               <span v-if="rule.last_updated" class="hidden sm:inline">
                 {{ t('lastUpdated') }} {{ new Date(rule.last_updated).toLocaleString() }}
@@ -112,9 +109,6 @@
 
             <!-- 操作按钮：移动端底部单独一行 -->
             <div class="flex sm:hidden items-center justify-end gap-2 mt-3 pt-3 border-t border-slate-100">
-              <button @click="refresh(rule.id)" class="btn-ghost btn-sm text-emerald-500 px-3 py-1.5 text-xs gap-1">
-                <RefreshCw :size="12" /> 立即检测
-              </button>
               <label class="toggle scale-90">
                 <input type="checkbox" :checked="rule.enabled" @change="toggle(rule.id)" />
                 <div class="toggle-track"></div><div class="toggle-thumb"></div>
@@ -367,13 +361,6 @@
                   <label class="input-label">{{ t('cfApiToken') }} <span class="text-red-400">*</span></label>
                   <input v-model="form.provider_conf.api_token" class="input font-mono text-xs" placeholder="API Token (DNS:Edit)" />
                 </div>
-                <div>
-                  <label class="input-label">
-                    {{ t('cfZoneId') }}
-                    <span class="text-xs font-normal text-slate-400 ml-1 normal-case tracking-normal">{{ t('cfZoneIdHint') }}</span>
-                  </label>
-                  <input v-model="form.provider_conf.zone_id" class="input font-mono text-xs" :placeholder="t('cfZonePlaceholder')" />
-                </div>
               </div>
             </template>
 
@@ -614,6 +601,7 @@ async function save() {
     }
     modal.value = null
     await load()
+    if (payload.enabled !== false) triggerRefreshWithStatus(savedId)
   } catch (e) {
     saveError.value = e.response?.data?.error || e.message
   }
