@@ -2,8 +2,13 @@
 
 > 轻量级网络服务管理工具 — 端口转发 · DDNS · Web服务 · TLS证书
 
-[![Build](https://github.com/yourusername/vane/actions/workflows/build.yml/badge.svg)](https://github.com/yourusername/vane/actions)
-
+<div align="center">
+<br>
+<img width="200" src="https://raw.githubusercontent.com/evecus/Vane/master/web/public/icon-512.png" alt="Vane">
+<br>
+<br>
+<h2 align="center">Vane<h2>
+</div>
 ---
 
 ## ✨ 功能特性
