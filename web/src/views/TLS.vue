@@ -102,13 +102,10 @@
             </button>
           </div>
 
-          <!-- 移动端：精简操作按钮（右上角） -->
-          <div class="flex sm:hidden items-center gap-0.5 flex-shrink-0 -mt-0.5">
+          <!-- 移动端：右上角仅编辑按钮 -->
+          <div class="flex sm:hidden items-center flex-shrink-0 -mt-0.5">
             <button @click="openEdit(cert)" class="btn-ghost p-1.5 text-slate-400">
               <Pencil :size="14" />
-            </button>
-            <button @click="del(cert.id)" class="btn-ghost p-1.5 text-red-400">
-              <Trash2 :size="14" />
             </button>
           </div>
         </div>
@@ -127,6 +124,9 @@
                   class="btn-secondary btn-sm flex-1 justify-center" :disabled="cert.status === 'pending'">
             <RefreshCw :size="13" :class="cert.status === 'pending' ? 'animate-spin' : ''" />
             <span class="text-xs">{{ cert.status === 'pending' ? t('applying') : t('reApply') }}</span>
+          </button>
+          <button @click="del(cert.id)" class="btn-ghost btn-sm flex-1 justify-center text-red-400 hover:bg-red-50 gap-1.5">
+            <Trash2 :size="13" /> <span class="text-xs">删除</span>
           </button>
         </div>
 
@@ -274,7 +274,7 @@
 
           <!-- 底部操作栏 -->
           <div class="flex-shrink-0 border-t border-slate-100 px-5 sm:px-6 py-3 sm:py-4">
-            <div class="flex items-center justify-between gap-3">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div class="flex items-center gap-2">
                 <span class="text-sm text-slate-600">{{ t('autoRenewHint') }}</span>
                 <label class="toggle">
@@ -283,13 +283,13 @@
                   <div class="toggle-thumb"></div>
                 </label>
               </div>
-              <div class="flex gap-2">
-                <button class="btn-primary sm:min-w-[120px] justify-center"
+              <div class="flex gap-2 sm:gap-3">
+                <button class="btn-primary flex-1 sm:flex-none sm:min-w-[120px] justify-center"
                         @click="editId ? updateCert() : createAndIssue()" :disabled="saving">
                   <Shield :size="14" />
                   <span>{{ editId ? t('saveReApply') : t('createApply') }}</span>
                 </button>
-                <button class="btn-secondary sm:min-w-[80px] justify-center" @click="modal=null">
+                <button class="btn-secondary flex-1 sm:flex-none sm:min-w-[80px] justify-center" @click="modal=null">
                   {{ t('cancel') }}
                 </button>
               </div>
@@ -342,7 +342,7 @@
           </div>
 
           <div class="flex-shrink-0 border-t border-slate-100 px-5 sm:px-6 py-3 sm:py-4">
-            <div class="flex gap-2">
+            <div class="flex gap-2 sm:gap-3 justify-end">
               <button class="btn-primary flex-1 sm:flex-none sm:min-w-[100px] justify-center" @click="upload">
                 <Upload :size="14" /> {{ t('upload') }}
               </button>
@@ -431,18 +431,18 @@ const { t } = useI18n()
 const BUILTIN_ZS_ACCOUNTS = [
   {
     email: '76q7n@dollicons.com',
-    _kid: 'SmhMNWdrVmUwLXpQS29INUc2X1o1QQ==',
-    _hmac: 'TDI0T3VQSHRtZVVTM1J5Tjl3cDI4ZWFKcVRCcllUN0JWQlh2SFUzQnZtTk9oODVNcHgzbnpLM2tzaVkxQ2lrNGpyQVZLTnZGVmRSRms2OXRmVDB0QVE=',
+    _kid:  'SmhMNWdrVmUwLXpQS29INUc2X1o1QQ==',
+    _hmac: 'TDI0T3VQSG1lVVMzUnlOOXdwMjhlYUpxVEJyWVQ3QlZCWHZIVTNCdm1OT2g4NU1weDNuejY1c0tzaVkxQ2lrNGpyQVZLTnZGVmRSRms2OXRmVDB0QVE=',
   },
   {
     email: 'jamie@gmail.com',
-    _kid: 'UnVtUExSRFMxSWFHNVlyS1VxRy1n',
-    _hmac: 'T3ByN1psVDl0MWcyTXAzbnhNam4xZGw5c1VDMi15cDZwR2pmLUUyUHpHWEJKVFhvTHNwX2dQenYzNWVTMHpLNG13Nm5RUENJRFVQamNGNTYzMmphdw==',
+    _kid:  'UnVtUExSRFMxSWFHNVlySEtVcUctZw==',
+    _hmac: 'T3ByN1psVDl0MWcyTXAzbndNam4xZGw5c1VDMi15cDZwR2pmLUUyUHpHWEJKVFhvTHNwX2dQenYzNWVTMHpLNG13Tm5RUENJRFVQSmNGNTYzMmphbHc=',
   },
   {
     email: 'gings@gmail.com',
-    _kid: 'MTZubU82eUNiaGttX055NnNwaEp1UQ==',
-    _hmac: 'aFBPdjFiZFNEQ05USm1BU1F2elgkcUpJQ2NPdVB4dUJVRU9ucDdaRlZuQXpLaW1KTWZTYkw5UkhHa3lZMlBpZ19id2djc2VTVzBYVWNzWV9PUW5FYlE=',
+    _kid:  'MTZubU82eUNiaGttX055NnNwaEp1UQ==',
+    _hmac: 'aFBPdjFiZFNEQ05USm1BU1F2elhxSklDY091UHh1QlVFT25wN3pGVm5BektpbUpNZlNiTDlSSEdreVkyUGlnX2J3Z2NzZVNXVTBYVWNzWV9PUW5FYlE=',
   },
 ]
 
