@@ -628,6 +628,19 @@ function pollUntilDone(id) {
 async function issue(id) {
   const cert = certs.value.find(c => c.id === id)
   if (cert) cert.status = 'pending'
+  // If this is a ZeroSSL cert using a builtin account, refresh EAB before issuing
+  if (cert && cert.ca_provider === 'zerossl' && isBuiltinAccount(cert)) {
+    try {
+      await tryWithBuiltin(async (idx) => {
+        const acc = decodeAccount(BUILTIN_ZS_ACCOUNTS[idx % BUILTIN_ZS_ACCOUNTS.length])
+        await api.put(`/tls/${id}`, {
+          ...cert,
+          email: acc.email,
+          provider_conf: { ...cert.provider_conf, zerossl_key_id: acc.zerossl_key_id, zerossl_api_key: acc.zerossl_api_key }
+        })
+      })
+    } catch (e) { /* proceed anyway */ }
+  }
   api.post(`/tls/${id}/issue`).catch(() => {})
   pollUntilDone(id)
 }
