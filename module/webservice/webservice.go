@@ -186,12 +186,13 @@ type Manager struct {
 }
 
 type managedServer struct {
-	sniff    *sniffListener
-	httpSrv  *http.Server
-	httpsSrv *http.Server
-	httpLn   *chanListener
-	httpsLn  *chanListener
-	certMap  map[string]tls.Certificate // prebuilt at startup, keyed by lowercase domain
+	sniff     *sniffListener
+	httpSrv   *http.Server
+	httpsSrv  *http.Server
+	http80Srv *http.Server // optional :80 → HTTPS redirect server
+	httpLn    *chanListener
+	httpsLn   *chanListener
+	certMap   map[string]tls.Certificate // prebuilt at startup, keyed by lowercase domain
 }
 
 func (ms *managedServer) close() {
@@ -200,6 +201,9 @@ func (ms *managedServer) close() {
 	}
 	if ms.httpsSrv != nil {
 		_ = ms.httpsSrv.Close()
+	}
+	if ms.http80Srv != nil {
+		_ = ms.http80Srv.Close()
 	}
 	if ms.httpLn != nil {
 		_ = ms.httpLn.Close()
@@ -383,6 +387,34 @@ func (m *Manager) Start(id string) error {
 	m.mu.Lock()
 	m.servers[id] = ms
 	m.mu.Unlock()
+
+	// 监听 :80 自动跳转 HTTPS（仅 443 端口时生效）
+	if httpsPort == 443 {
+		ln80, err := net.Listen("tcp", "0.0.0.0:80")
+		if err != nil {
+			log.Printf("[webservice] :80 redirect unavailable (port busy): %v", err)
+		} else {
+			srv80 := &http.Server{
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					host := r.Host
+					if h, _, err := net.SplitHostPort(host); err == nil {
+						host = h
+					}
+					http.Redirect(w, r, "https://"+host+r.RequestURI, http.StatusMovedPermanently)
+				}),
+				ReadTimeout:  10 * time.Second,
+				WriteTimeout: 10 * time.Second,
+			}
+			ms.http80Srv = srv80
+			go func() {
+				log.Printf("[webservice] :80 → :443 HTTPS redirect  (service %q)", svc.Name)
+				if err := srv80.Serve(ln80); err != nil && err != http.ErrServerClosed {
+					log.Printf("[webservice] :80 redirect error: %v", err)
+				}
+			}()
+		}
+	}
+
 	return nil
 }
 
