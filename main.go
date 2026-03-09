@@ -4,6 +4,7 @@ import (
 	"embed"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"mime"
 	"net/http"
@@ -66,12 +67,12 @@ func main() {
 	tlsManager.StartAutoRenew()
 
 	// ── 3. HTTP admin server ───────────────────────────────────────────────
-	if os.Getenv("VANE_DEBUG") == "" {
-		gin.SetMode(gin.ReleaseMode)
-	}
+	gin.SetMode(gin.ReleaseMode)
+	gin.DefaultWriter = io.Discard
+	gin.DefaultErrorWriter = io.Discard
 
 	r := gin.New()
-	r.Use(gin.Logger(), gin.Recovery())
+	r.Use(gin.Recovery())
 
 	// CORS: restrict to same host by default
 	allowedOrigin := os.Getenv("VANE_CORS_ORIGIN")
@@ -132,7 +133,6 @@ func main() {
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Admin.Port)
 	log.Printf("🌀 Vane %s  →  http://%s", Version, addr)
-	log.Printf("📁 Data    →  %s/vane.db  (AES-256-GCM encrypted)", dd.Root)
 	if err := r.Run(addr); err != nil {
 		log.Fatalf("Server error: %v", err)
 	}
