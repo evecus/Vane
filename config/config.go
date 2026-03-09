@@ -203,6 +203,7 @@ func (dd *DataDir) migrate() error {
 		`CREATE TABLE IF NOT EXISTS web_routes (
 			id TEXT PRIMARY KEY,
 			service_id TEXT NOT NULL,
+			name TEXT NOT NULL DEFAULT '',
 			domain TEXT NOT NULL DEFAULT '',
 			backend_url_enc TEXT NOT NULL DEFAULT '',
 			enabled INTEGER NOT NULL DEFAULT 0,
@@ -254,6 +255,8 @@ func (dd *DataDir) migrate() error {
 	_, _ = dd.db.Exec(`ALTER TABLE web_routes ADD COLUMN auth_enabled INTEGER NOT NULL DEFAULT 0`)
 	_, _ = dd.db.Exec(`ALTER TABLE web_routes ADD COLUMN auth_user TEXT NOT NULL DEFAULT ''`)
 	_, _ = dd.db.Exec(`ALTER TABLE web_routes ADD COLUMN auth_pass_hash TEXT NOT NULL DEFAULT ''`)
+	// Migrate web_routes to add name column
+	_, _ = dd.db.Exec(`ALTER TABLE web_routes ADD COLUMN name TEXT NOT NULL DEFAULT ''`)
 	// Migrate web_services to drop tls_cert_id (SQLite can't DROP columns, just ignore it on load)
 	return nil
 }
@@ -357,6 +360,7 @@ type WebService struct {
 
 type WebRoute struct {
 	ID            string `json:"id"`
+	Name          string `json:"name"`
 	Domain        string `json:"domain"`
 	BackendURL    string `json:"backend_url"`
 	Enabled       bool   `json:"enabled"`
@@ -516,7 +520,7 @@ func (c *Config) loadFromDB() error {
 		}
 		svc.EnableHTTPS = httpsInt == 1
 		svc.Enabled = enabledInt == 1
-		rrows, err := db.Query(`SELECT id, domain, backend_url_enc, enabled, matched_cert_id, cert_status, auth_enabled, auth_user, auth_pass_hash, created_at FROM web_routes WHERE service_id=? ORDER BY created_at`, svc.ID)
+		rrows, err := db.Query(`SELECT id, name, domain, backend_url_enc, enabled, matched_cert_id, cert_status, auth_enabled, auth_user, auth_pass_hash, created_at FROM web_routes WHERE service_id=? ORDER BY created_at`, svc.ID)
 		if err != nil {
 			return err
 		}
@@ -524,7 +528,7 @@ func (c *Config) loadFromDB() error {
 			var route WebRoute
 			var renabledInt, authEnabledInt int
 			var backendEnc string
-			if err := rrows.Scan(&route.ID, &route.Domain, &backendEnc, &renabledInt, &route.MatchedCertID, &route.CertStatus, &authEnabledInt, &route.AuthUser, &route.AuthPassHash, &route.CreatedAt); err != nil {
+			if err := rrows.Scan(&route.ID, &route.Name, &route.Domain, &backendEnc, &renabledInt, &route.MatchedCertID, &route.CertStatus, &authEnabledInt, &route.AuthUser, &route.AuthPassHash, &route.CreatedAt); err != nil {
 				rrows.Close()
 				return err
 			}
@@ -670,9 +674,9 @@ func (c *Config) SaveWebRoute(svcID string, route WebRoute) error {
 		return err
 	}
 	_, err = c.dataDir.db.Exec(
-		`INSERT INTO web_routes(id,service_id,domain,backend_url_enc,enabled,matched_cert_id,cert_status,auth_enabled,auth_user,auth_pass_hash,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)
-		 ON CONFLICT(id) DO UPDATE SET domain=excluded.domain, backend_url_enc=excluded.backend_url_enc, enabled=excluded.enabled, matched_cert_id=excluded.matched_cert_id, cert_status=excluded.cert_status, auth_enabled=excluded.auth_enabled, auth_user=excluded.auth_user, auth_pass_hash=excluded.auth_pass_hash`,
-		route.ID, svcID, route.Domain, backendEnc, boolToInt(route.Enabled), route.MatchedCertID, route.CertStatus, boolToInt(route.AuthEnabled), route.AuthUser, route.AuthPassHash, route.CreatedAt,
+		`INSERT INTO web_routes(id,service_id,name,domain,backend_url_enc,enabled,matched_cert_id,cert_status,auth_enabled,auth_user,auth_pass_hash,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+		 ON CONFLICT(id) DO UPDATE SET name=excluded.name, domain=excluded.domain, backend_url_enc=excluded.backend_url_enc, enabled=excluded.enabled, matched_cert_id=excluded.matched_cert_id, cert_status=excluded.cert_status, auth_enabled=excluded.auth_enabled, auth_user=excluded.auth_user, auth_pass_hash=excluded.auth_pass_hash`,
+		route.ID, svcID, route.Name, route.Domain, backendEnc, boolToInt(route.Enabled), route.MatchedCertID, route.CertStatus, boolToInt(route.AuthEnabled), route.AuthUser, route.AuthPassHash, route.CreatedAt,
 	)
 	return err
 }
