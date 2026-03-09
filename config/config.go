@@ -376,14 +376,12 @@ type WebAccessLog struct {
 	ID         string `json:"id"`
 	ServiceID  string `json:"service_id"`
 	RouteID    string `json:"route_id"`
+	RouteName  string `json:"route_name"`
 	Domain     string `json:"domain"`
-	Method     string `json:"method"`
-	Path       string `json:"path"`
 	StatusCode int    `json:"status_code"`
-	DurationMs int64  `json:"duration_ms"`
 	ClientIP   string `json:"client_ip"`
 	UserAgent  string `json:"user_agent"`
-	Referer    string `json:"referer"`
+	AuthResult string `json:"auth_result,omitempty"` // "ok" | "fail" | ""
 	Time       string `json:"time"`
 }
 
