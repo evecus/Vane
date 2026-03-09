@@ -31,10 +31,32 @@
 
           <!-- 内容区 -->
           <div class="flex-1 min-w-0">
-            <!-- 名称 + 状态标签行 -->
-            <div class="flex items-center gap-1.5 mb-1.5 flex-wrap">
-              <span class="font-semibold text-slate-900 text-sm sm:text-base leading-tight">{{ rule.name || t('unnamed') }}</span>
-              <span class="status-dot flex-shrink-0" :class="rule.enabled ? 'active' : 'inactive'"></span>
+            <!-- 名称 + 状态点 -->
+            <div class="flex items-center justify-between gap-2 mb-1.5">
+              <div class="flex items-center gap-1.5 min-w-0">
+                <span class="font-semibold text-slate-900 text-sm sm:text-base leading-tight truncate">{{ rule.name || t('unnamed') }}</span>
+                <span class="status-dot flex-shrink-0" :class="rule.enabled ? 'active' : 'inactive'"></span>
+              </div>
+              <!-- 操作按钮：桌面端在右上角hover显示 -->
+              <div class="hidden sm:flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button @click="refresh(rule.id)" class="btn-ghost btn-sm text-emerald-500 p-1.5" :title="t('detectNow')">
+                  <RefreshCw :size="14" />
+                </button>
+                <label class="toggle scale-90">
+                  <input type="checkbox" :checked="rule.enabled" @change="toggle(rule.id)" />
+                  <div class="toggle-track"></div><div class="toggle-thumb"></div>
+                </label>
+                <button @click="openModal(rule)" class="btn-ghost btn-sm p-1.5">
+                  <Pencil :size="14" />
+                </button>
+                <button @click="del(rule.id)" class="btn-ghost btn-sm text-red-400 hover:bg-red-50 p-1.5">
+                  <Trash2 :size="14" />
+                </button>
+              </div>
+            </div>
+
+            <!-- 标签行 -->
+            <div class="flex flex-wrap gap-1.5 mb-2">
               <ProviderBadge :provider="rule.provider" />
               <span class="badge badge-slate text-xs">{{ ipVersionLabel(rule.ip_version) }}</span>
               <span v-if="rule.ip_detect_mode === 'iface'" class="badge text-xs" style="background:#f0f9ff;color:#0369a1;border:1px solid #bae6fd">
@@ -87,24 +109,23 @@
                 <span v-else class="text-red-400 break-all">{{ errMsg }}</span>
               </div>
             </div>
-          </div>
 
-          <!-- 操作按钮区（移动端始终可见，桌面hover显示编辑/删除） -->
-          <div class="flex items-center gap-1 flex-shrink-0">
-            <button @click="refresh(rule.id)" class="btn-ghost btn-sm text-emerald-500 p-1.5" :title="t('detectNow')">
-              <RefreshCw :size="14" />
-            </button>
-            <label class="toggle scale-90 sm:scale-100">
-              <input type="checkbox" :checked="rule.enabled" @change="toggle(rule.id)" />
-              <div class="toggle-track"></div><div class="toggle-thumb"></div>
-            </label>
-            <!-- 编辑/删除：移动端始终显示，桌面hover显示 -->
-            <button @click="openModal(rule)" class="btn-ghost btn-sm p-1.5 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
-              <Pencil :size="14" />
-            </button>
-            <button @click="del(rule.id)" class="btn-ghost btn-sm text-red-400 hover:bg-red-50 p-1.5 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
-              <Trash2 :size="14" />
-            </button>
+            <!-- 操作按钮：移动端底部单独一行 -->
+            <div class="flex sm:hidden items-center justify-end gap-2 mt-3 pt-3 border-t border-slate-100">
+              <button @click="refresh(rule.id)" class="btn-ghost btn-sm text-emerald-500 px-3 py-1.5 text-xs gap-1">
+                <RefreshCw :size="12" /> 立即检测
+              </button>
+              <label class="toggle scale-90">
+                <input type="checkbox" :checked="rule.enabled" @change="toggle(rule.id)" />
+                <div class="toggle-track"></div><div class="toggle-thumb"></div>
+              </label>
+              <button @click="openModal(rule)" class="btn-ghost btn-sm p-1.5">
+                <Pencil :size="14" />
+              </button>
+              <button @click="del(rule.id)" class="btn-ghost btn-sm text-red-400 hover:bg-red-50 p-1.5">
+                <Trash2 :size="14" />
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -572,14 +593,12 @@ async function save() {
       const payloadV6 = { ...base, ip_version: 'ipv6', ip_detect_mode: form.value.ipv6_detect_mode, ip_interface: form.value.ipv6_interface, ip_index: form.value.ipv6_ip_index ?? 0, domains: v6domains, interval: form.value.ipv6_interval || 60 }
       if (editing.value) {
         await api.put(`/ddns/${form.value.id}`, payloadV4)
-        const { data: nv6 } = await api.post('/ddns', payloadV6)
+        await api.post('/ddns', payloadV6)
         modal.value = null; await load()
-        triggerRefreshWithStatus(form.value.id); triggerRefreshWithStatus(nv6.id)
       } else {
-        const { data: r4 } = await api.post('/ddns', payloadV4)
-        const { data: r6 } = await api.post('/ddns', payloadV6)
+        await api.post('/ddns', payloadV4)
+        await api.post('/ddns', payloadV6)
         modal.value = null; await load()
-        triggerRefreshWithStatus(r4.id); triggerRefreshWithStatus(r6.id)
       }
       return
     }
@@ -595,7 +614,6 @@ async function save() {
     }
     modal.value = null
     await load()
-    triggerRefreshWithStatus(savedId)
   } catch (e) {
     saveError.value = e.response?.data?.error || e.message
   }
