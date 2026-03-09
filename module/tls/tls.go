@@ -190,22 +190,17 @@ func (m *Manager) IssueCert(certID string) error {
 	var reg *registration.Resource
 	if cert.CAProvider == "zerossl" && cert.ProviderConf.ZeroSSLAPIKey != "" && cert.ProviderConf.ZeroSSLKeyID != "" {
 		log.Printf("[tls] registering ZeroSSL EAB account for cert %s", certID)
-		// ZeroSSL 返回的 HMAC Key 是 Base64url 无 padding 格式。
-		// lego 的 HmacEncoded 字段内部用标准 Base64 解码，需先做格式转换。
-		hmac := normalizeBase64(cert.ProviderConf.ZeroSSLAPIKey)
+		// lego's HmacEncoded field expects the raw Base64url string as-is from ZeroSSL.
 		reg, err = client.Registration.RegisterWithExternalAccountBinding(registration.RegisterEABOptions{
 			TermsOfServiceAgreed: true,
 			Kid:                  cert.ProviderConf.ZeroSSLKeyID,
-			HmacEncoded:          hmac,
+			HmacEncoded:          cert.ProviderConf.ZeroSSLAPIKey,
 		})
 	} else {
 		if cert.CAProvider == "zerossl" {
 			log.Printf("[tls] WARNING: ZeroSSL selected but EAB credentials missing; falling back to standard registration")
 		}
 		reg, err = client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
-	}
-	if err != nil {
-		return fmt.Errorf("register ACME account: %w", err)
 	}
 	if err != nil {
 		return fmt.Errorf("register ACME account: %w", err)
