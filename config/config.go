@@ -822,20 +822,102 @@ func (c *Config) Import(data []byte) error {
 	c.WebServices = snap.WebServices
 	c.TLSCerts = snap.TLSCerts
 	c.mu.Unlock()
-	return c.Save()
+
+	if err := c.Save(); err != nil {
+		return err
+	}
+	return c.pruneStaleRecords()
+}
+
+func (c *Config) pruneStaleRecords() error {
+	c.mu.RLock()
+	keepPF := make(map[string]struct{}, len(c.PortForwards))
+	for _, r := range c.PortForwards {
+		keepPF[r.ID] = struct{}{}
+	}
+	keepDDNS := make(map[string]struct{}, len(c.DDNS))
+	for _, r := range c.DDNS {
+		keepDDNS[r.ID] = struct{}{}
+	}
+	keepWS := make(map[string]struct{}, len(c.WebServices))
+	keepRoutes := map[string]struct{}{}
+	for _, svc := range c.WebServices {
+		keepWS[svc.ID] = struct{}{}
+		for _, route := range svc.Routes {
+			keepRoutes[route.ID] = struct{}{}
+		}
+	}
+	keepTLS := make(map[string]struct{}, len(c.TLSCerts))
+	for _, cert := range c.TLSCerts {
+		keepTLS[cert.ID] = struct{}{}
+	}
+	c.mu.RUnlock()
+
+	if err := c.pruneByTable("port_forwards", keepPF); err != nil {
+		return err
+	}
+	if err := c.pruneByTable("ddns", keepDDNS); err != nil {
+		return err
+	}
+	if err := c.pruneByTable("web_services", keepWS); err != nil {
+		return err
+	}
+	if err := c.pruneByTable("web_routes", keepRoutes); err != nil {
+		return err
+	}
+	if err := c.pruneByTable("tls_certs", keepTLS); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Config) pruneByTable(table string, keep map[string]struct{}) error {
+	rows, err := c.dataDir.db.Query(`SELECT id FROM ` + table)
+	if err != nil {
+		return fmt.Errorf("list %s ids: %w", table, err)
+	}
+
+	var staleIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan %s id: %w", table, err)
+		}
+		if _, ok := keep[id]; !ok {
+			staleIDs = append(staleIDs, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	for _, id := range staleIDs {
+		if _, err := c.dataDir.db.Exec(`DELETE FROM `+table+` WHERE id=?`, id); err != nil {
+			return fmt.Errorf("delete stale %s %s: %w", table, id, err)
+		}
+	}
+	return nil
 }
 
 // ─── Init defaults ────────────────────────────────────────────────────────────
 
 func (c *Config) initDefaults() error {
 	c.Admin = AdminConfig{Username: "admin", Port: 4455}
-	if err := c.Admin.SetPassword("admin"); err != nil {
+	initialPassword, err := generateRandomPassword(20)
+	if err != nil {
+		return fmt.Errorf("generate initial password: %w", err)
+	}
+	if err := c.Admin.SetPassword(initialPassword); err != nil {
 		return err
 	}
 	c.PortForwards = []PortForwardRule{}
 	c.DDNS = []DDNSRule{}
 	c.WebServices = []WebService{}
 	c.TLSCerts = []TLSCert{}
+	fmt.Printf("[vane] Initial admin credentials created. username=admin password=%s\n", initialPassword)
 	return c.SaveAdmin()
 }
 
@@ -848,6 +930,21 @@ func (c *Config) RUnlock() { c.mu.RUnlock() }
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
+func generateRandomPassword(length int) (string, error) {
+	const alphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+	if length < 12 {
+		length = 12
+	}
+	buf := make([]byte, length)
+	randBytes := make([]byte, length)
+	if _, err := io.ReadFull(rand.Reader, randBytes); err != nil {
+		return "", err
+	}
+	for i := range buf {
+		buf[i] = alphabet[int(randBytes[i])%len(alphabet)]
+	}
+	return string(buf), nil
+}
 func NewID() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)

@@ -1,4 +1,4 @@
-package api
+﻿package api
 
 import (
 	"archive/zip"
@@ -72,6 +72,7 @@ func (h *Handler) Register(r *gin.Engine) {
 
 	auth := api.Group("/")
 	auth.Use(h.authMiddleware())
+	auth.GET("/session", h.session)
 
 	// Dashboard + WS
 	auth.GET("/dashboard", h.getDashboard)
@@ -131,7 +132,7 @@ func (h *Handler) Register(r *gin.Engine) {
 	auth.GET("/tls/:id/pem", h.getCertPEM)
 }
 
-// ─── Safe Entry Middleware ────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ Safe Entry Middleware 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 func SafeEntryMiddleware(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -156,7 +157,7 @@ func SafeEntryMiddleware(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
-		// No safe entry configured → allow everything
+		// No safe entry configured 鈫?allow everything
 		if entry == "" {
 			c.Next()
 			return
@@ -171,7 +172,7 @@ func SafeEntryMiddleware(cfg *config.Config) gin.HandlerFunc {
 	}
 }
 
-// ─── Rate Limiter ─────────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ Rate Limiter 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 type loginAttempt struct {
 	count    int
@@ -186,6 +187,7 @@ var (
 const (
 	maxLoginAttempts = 10
 	loginWindow      = 10 * time.Minute
+	sessionCookie    = "vane_session"
 )
 
 func init() {
@@ -219,7 +221,7 @@ func (h *Handler) rateLimitMiddleware() gin.HandlerFunc {
 		loginMu.Unlock()
 
 		if count > maxLoginAttempts {
-			c.JSON(http.StatusTooManyRequests, gin.H{"error": "登录尝试次数过多，请10分钟后重试"})
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": "鐧诲綍灏濊瘯娆℃暟杩囧锛岃10鍒嗛挓鍚庨噸璇?})
 			c.Abort()
 			return
 		}
@@ -227,7 +229,7 @@ func (h *Handler) rateLimitMiddleware() gin.HandlerFunc {
 	}
 }
 
-// ─── Auth ─────────────────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ Auth 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 func (h *Handler) login(c *gin.Context) {
 	var req struct {
@@ -242,7 +244,7 @@ func (h *Handler) login(c *gin.Context) {
 	ok := h.cfg.Admin.Username == req.Username && h.cfg.Admin.CheckPassword(req.Password)
 	h.cfg.RUnlock()
 	if !ok {
-		c.JSON(401, gin.H{"error": "用户名或密码错误"})
+		c.JSON(401, gin.H{"error": "鐢ㄦ埛鍚嶆垨瀵嗙爜閿欒"})
 		return
 	}
 	// Reset rate-limit counter on success
@@ -252,39 +254,76 @@ func (h *Handler) login(c *gin.Context) {
 
 	token := generateToken()
 	sessions.set(token, time.Now().Add(24*time.Hour))
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie(sessionCookie, token, 24*3600, "/", "", requestIsHTTPS(c), true)
 	c.JSON(200, gin.H{"token": token})
 }
 
 func (h *Handler) logout(c *gin.Context) {
-	sessions.delete(c.GetHeader("Authorization"))
+	for _, token := range tokenCandidates(c) {
+		sessions.delete(token)
+	}
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie(sessionCookie, "", -1, "/", "", requestIsHTTPS(c), true)
 	c.JSON(200, gin.H{"ok": true})
 }
 
 func (h *Handler) authMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		token := c.GetHeader("Authorization")
-		if token == "" {
-			token = c.Query("token")
+		now := time.Now()
+		var activeToken string
+		for _, token := range tokenCandidates(c) {
+			exp, ok := sessions.get(token)
+			if !ok {
+				continue
+			}
+			if now.After(exp) {
+				sessions.delete(token)
+				continue
+			}
+			activeToken = token
+			break
 		}
-		if token == "" {
-			c.JSON(401, gin.H{"error": "unauthorized"})
-			c.Abort()
-			return
-		}
-		exp, ok := sessions.get(token)
-		if !ok || time.Now().After(exp) {
-			sessions.delete(token)
+		if activeToken == "" {
 			c.JSON(401, gin.H{"error": "unauthorized"})
 			c.Abort()
 			return
 		}
 		// Sliding expiry
-		sessions.set(token, time.Now().Add(24*time.Hour))
+		sessions.set(activeToken, time.Now().Add(24*time.Hour))
+		c.SetSameSite(http.SameSiteLaxMode)
+		c.SetCookie(sessionCookie, activeToken, 24*3600, "/", "", requestIsHTTPS(c), true)
 		c.Next()
 	}
 }
 
-// ─── Dashboard ────────────────────────────────────────────────────────────────
+func (h *Handler) session(c *gin.Context) {
+	c.JSON(200, gin.H{"authenticated": true})
+}
+
+func tokenCandidates(c *gin.Context) []string {
+	candidates := make([]string, 0, 2)
+	seen := map[string]struct{}{}
+	if token, err := c.Cookie(sessionCookie); err == nil && token != "" {
+		candidates = append(candidates, token)
+		seen[token] = struct{}{}
+	}
+	if token := c.GetHeader("Authorization"); token != "" {
+		if _, ok := seen[token]; !ok {
+			candidates = append(candidates, token)
+		}
+	}
+	return candidates
+}
+
+func requestIsHTTPS(c *gin.Context) bool {
+	if c.Request.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https")
+}
+
+// 鈹€鈹€鈹€ Dashboard 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 func (h *Handler) getDashboard(c *gin.Context) {
 	h.cfg.RLock()
@@ -331,7 +370,7 @@ func (h *Handler) wsStats(c *gin.Context) {
 	}
 }
 
-// ─── Port check ───────────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ Port check 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 func (h *Handler) checkPort(c *gin.Context) {
 	portStr := c.Query("port")
@@ -352,7 +391,7 @@ func parsePort(s string, out *int) (int, error) {
 	return n, nil
 }
 
-// ─── Settings ─────────────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ Settings 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 func (h *Handler) getSettings(c *gin.Context) {
 	h.cfg.RLock()
@@ -371,7 +410,7 @@ func (h *Handler) markWelcomeShown(c *gin.Context) {
 	h.cfg.Admin.WelcomeShown = true
 	h.cfg.Unlock()
 	if err := h.cfg.SaveAdmin(); err != nil {
-		c.JSON(500, gin.H{"error": "保存失败: " + err.Error()})
+		c.JSON(500, gin.H{"error": "淇濆瓨澶辫触: " + err.Error()})
 		return
 	}
 	c.JSON(200, gin.H{"ok": true})
@@ -396,12 +435,12 @@ func (h *Handler) updateSettings(c *gin.Context) {
 	if req.NewPassword != "" {
 		if !h.cfg.Admin.CheckPassword(req.CurrentPassword) {
 			h.cfg.Unlock()
-			c.JSON(403, gin.H{"error": "当前密码错误"})
+			c.JSON(403, gin.H{"error": "褰撳墠瀵嗙爜閿欒"})
 			return
 		}
 		if err := h.cfg.Admin.SetPassword(req.NewPassword); err != nil {
 			h.cfg.Unlock()
-			c.JSON(500, gin.H{"error": "密码设置失败"})
+			c.JSON(500, gin.H{"error": "瀵嗙爜璁剧疆澶辫触"})
 			return
 		}
 	}
@@ -420,7 +459,7 @@ func (h *Handler) updateSettings(c *gin.Context) {
 	h.cfg.Admin = admin
 	h.cfg.Unlock()
 	if err := h.cfg.SaveAdmin(); err != nil {
-		c.JSON(500, gin.H{"error": "保存配置失败: " + err.Error()})
+		c.JSON(500, gin.H{"error": "淇濆瓨閰嶇疆澶辫触: " + err.Error()})
 		return
 	}
 
@@ -451,7 +490,7 @@ func (h *Handler) updateSettings(c *gin.Context) {
 func restartSelf() {
 	exe, err := os.Executable()
 	if err != nil {
-		log.Printf("restart: os.Executable error: %v — falling back to os.Exit", err)
+		log.Printf("restart: os.Executable error: %v 鈥?falling back to os.Exit", err)
 		os.Exit(0)
 	}
 	// Resolve symlinks so syscall.Exec gets the real binary path.
@@ -460,7 +499,7 @@ func restartSelf() {
 	}
 	log.Printf("restart: re-executing %s %v", exe, os.Args[1:])
 	if err := syscall.Exec(exe, os.Args, os.Environ()); err != nil {
-		log.Printf("restart: syscall.Exec error: %v — falling back to os.Exit", err)
+		log.Printf("restart: syscall.Exec error: %v 鈥?falling back to os.Exit", err)
 		os.Exit(0)
 	}
 }
@@ -495,10 +534,10 @@ func (h *Handler) restoreConfig(c *gin.Context) {
 	h.pf.StartAll()
 	h.ddns.StartAll()
 	h.ws.StartAll()
-	c.JSON(200, gin.H{"ok": true, "message": "配置已恢复，服务已重启"})
+	c.JSON(200, gin.H{"ok": true, "message": "閰嶇疆宸叉仮澶嶏紝鏈嶅姟宸查噸鍚?})
 }
 
-// ─── Port Forward ─────────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ Port Forward 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 func (h *Handler) listPortForwards(c *gin.Context) {
 	h.cfg.RLock()
@@ -513,11 +552,11 @@ func (h *Handler) createPortForward(c *gin.Context) {
 		return
 	}
 	if rule.ListenPort < 1 || rule.ListenPort > 65535 {
-		c.JSON(400, gin.H{"error": "无效端口"})
+		c.JSON(400, gin.H{"error": "鏃犳晥绔彛"})
 		return
 	}
 	if rule.Enabled && !config.IsPortAvailable(rule.ListenPort) {
-		c.JSON(409, gin.H{"error": "端口已被占用", "port": rule.ListenPort})
+		c.JSON(409, gin.H{"error": "绔彛宸茶鍗犵敤", "port": rule.ListenPort})
 		return
 	}
 	rule.ID = config.NewID()
@@ -526,7 +565,7 @@ func (h *Handler) createPortForward(c *gin.Context) {
 	h.cfg.PortForwards = append(h.cfg.PortForwards, rule)
 	h.cfg.Unlock()
 	if err := h.cfg.SavePortForward(rule); err != nil {
-		c.JSON(500, gin.H{"error": "保存失败"})
+		c.JSON(500, gin.H{"error": "淇濆瓨澶辫触"})
 		return
 	}
 	if rule.Enabled {
@@ -544,7 +583,7 @@ func (h *Handler) updatePortForward(c *gin.Context) {
 	}
 	h.pf.Stop(id)
 	if req.Enabled && !config.IsPortAvailable(req.ListenPort) {
-		c.JSON(409, gin.H{"error": "端口已被占用", "port": req.ListenPort})
+		c.JSON(409, gin.H{"error": "绔彛宸茶鍗犵敤", "port": req.ListenPort})
 		return
 	}
 	h.cfg.Lock()
@@ -564,7 +603,7 @@ func (h *Handler) updatePortForward(c *gin.Context) {
 		return
 	}
 	if err := h.cfg.SavePortForward(req); err != nil {
-		c.JSON(500, gin.H{"error": "保存失败"})
+		c.JSON(500, gin.H{"error": "淇濆瓨澶辫触"})
 		return
 	}
 	if req.Enabled {
@@ -585,7 +624,7 @@ func (h *Handler) deletePortForward(c *gin.Context) {
 	}
 	h.cfg.Unlock()
 	if err := h.cfg.DeletePortForward(id); err != nil {
-		c.JSON(500, gin.H{"error": "保存失败"})
+		c.JSON(500, gin.H{"error": "淇濆瓨澶辫触"})
 		return
 	}
 	c.JSON(200, gin.H{"ok": true})
@@ -634,7 +673,7 @@ func (h *Handler) togglePortForward(c *gin.Context) {
 			}
 			h.cfg.RUnlock()
 			_ = h.cfg.SavePortForward(r)
-			c.JSON(409, gin.H{"error": "端口已被占用", "port": port})
+			c.JSON(409, gin.H{"error": "绔彛宸茶鍗犵敤", "port": port})
 			return
 		}
 		_ = h.pf.Start(id)
@@ -652,7 +691,7 @@ func (h *Handler) togglePortForward(c *gin.Context) {
 	}
 	h.cfg.RUnlock()
 	if err := h.cfg.SavePortForward(r); err != nil {
-		c.JSON(500, gin.H{"error": "保存失败"})
+		c.JSON(500, gin.H{"error": "淇濆瓨澶辫触"})
 		return
 	}
 	c.JSON(200, gin.H{"enabled": enabled})
@@ -662,7 +701,7 @@ func (h *Handler) getPortForwardStats(c *gin.Context) {
 	c.JSON(200, gin.H{"history": h.pf.GetHistory(c.Param("id"))})
 }
 
-// ─── DDNS ─────────────────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ DDNS 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 func (h *Handler) listDDNS(c *gin.Context) {
 	h.cfg.RLock()
@@ -682,7 +721,7 @@ func (h *Handler) createDDNS(c *gin.Context) {
 	h.cfg.DDNS = append(h.cfg.DDNS, rule)
 	h.cfg.Unlock()
 	if err := h.cfg.SaveDDNS(rule); err != nil {
-		c.JSON(500, gin.H{"error": "保存失败"})
+		c.JSON(500, gin.H{"error": "淇濆瓨澶辫触"})
 		return
 	}
 	if rule.Enabled {
@@ -715,7 +754,7 @@ func (h *Handler) updateDDNS(c *gin.Context) {
 		return
 	}
 	if err := h.cfg.SaveDDNS(req); err != nil {
-		c.JSON(500, gin.H{"error": "保存失败"})
+		c.JSON(500, gin.H{"error": "淇濆瓨澶辫触"})
 		return
 	}
 	h.ddns.Stop(id)
@@ -737,7 +776,7 @@ func (h *Handler) deleteDDNS(c *gin.Context) {
 	}
 	h.cfg.Unlock()
 	if err := h.cfg.DeleteDDNS(id); err != nil {
-		c.JSON(500, gin.H{"error": "保存失败"})
+		c.JSON(500, gin.H{"error": "淇濆瓨澶辫触"})
 		return
 	}
 	c.JSON(200, gin.H{"ok": true})
@@ -771,7 +810,7 @@ func (h *Handler) toggleDDNS(c *gin.Context) {
 	}
 	h.cfg.RUnlock()
 	if err := h.cfg.SaveDDNS(r); err != nil {
-		c.JSON(500, gin.H{"error": "保存失败"})
+		c.JSON(500, gin.H{"error": "淇濆瓨澶辫触"})
 		return
 	}
 	if enabled {
@@ -820,7 +859,7 @@ func (h *Handler) refreshDDNS(c *gin.Context) {
 	c.JSON(200, res)
 }
 
-// ─── Web Service ──────────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ Web Service 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 func (h *Handler) listWebServices(c *gin.Context) {
 	h.cfg.RLock()
@@ -843,12 +882,12 @@ func (h *Handler) createWebService(c *gin.Context) {
 		return
 	}
 	if svc.ListenPort < 1 || svc.ListenPort > 65535 {
-		c.JSON(400, gin.H{"error": "无效端口"})
+		c.JSON(400, gin.H{"error": "鏃犳晥绔彛"})
 		return
 	}
 	svc.EnableHTTPS = true
 	if svc.Enabled && !config.IsPortAvailable(svc.ListenPort) {
-		c.JSON(409, gin.H{"error": "端口已被占用", "port": svc.ListenPort})
+		c.JSON(409, gin.H{"error": "绔彛宸茶鍗犵敤", "port": svc.ListenPort})
 		return
 	}
 	svc.ID = config.NewID()
@@ -860,7 +899,7 @@ func (h *Handler) createWebService(c *gin.Context) {
 	h.cfg.WebServices = append(h.cfg.WebServices, svc)
 	h.cfg.Unlock()
 	if err := h.cfg.SaveWebService(svc); err != nil {
-		c.JSON(500, gin.H{"error": "保存失败"})
+		c.JSON(500, gin.H{"error": "淇濆瓨澶辫触"})
 		return
 	}
 	if svc.Enabled {
@@ -881,7 +920,7 @@ func (h *Handler) updateWebService(c *gin.Context) {
 	req.EnableHTTPS = true // always
 	h.ws.Stop(id)
 	if req.Enabled && !config.IsPortAvailable(req.ListenPort) {
-		c.JSON(409, gin.H{"error": "端口已被占用", "port": req.ListenPort})
+		c.JSON(409, gin.H{"error": "绔彛宸茶鍗犵敤", "port": req.ListenPort})
 		return
 	}
 	h.cfg.Lock()
@@ -904,7 +943,7 @@ func (h *Handler) updateWebService(c *gin.Context) {
 		return
 	}
 	if err := h.cfg.SaveWebService(req); err != nil {
-		c.JSON(500, gin.H{"error": "保存失败"})
+		c.JSON(500, gin.H{"error": "淇濆瓨澶辫触"})
 		return
 	}
 	if req.Enabled {
@@ -927,7 +966,7 @@ func (h *Handler) deleteWebService(c *gin.Context) {
 	}
 	h.cfg.Unlock()
 	if err := h.cfg.DeleteWebService(id); err != nil {
-		c.JSON(500, gin.H{"error": "保存失败"})
+		c.JSON(500, gin.H{"error": "淇濆瓨澶辫触"})
 		return
 	}
 	c.JSON(200, gin.H{"ok": true})
@@ -974,7 +1013,7 @@ func (h *Handler) toggleWebService(c *gin.Context) {
 			}
 			h.cfg.RUnlock()
 			_ = h.cfg.SaveWebService(svc)
-			c.JSON(409, gin.H{"error": "端口已被占用", "port": port})
+			c.JSON(409, gin.H{"error": "绔彛宸茶鍗犵敤", "port": port})
 			return
 		}
 		if err := h.ws.Start(id); err != nil {
@@ -999,9 +1038,9 @@ func (h *Handler) toggleWebService(c *gin.Context) {
 			_ = h.cfg.SaveWebService(svc)
 			errMsg := err.Error()
 			if strings.Contains(errMsg, "no routes have a matched certificate") {
-				errMsg = "请先添加子规则，证书匹配成功后方可启动"
+				errMsg = "璇峰厛娣诲姞瀛愯鍒欙紝璇佷功鍖归厤鎴愬姛鍚庢柟鍙惎鍔?
 			}
-			c.JSON(500, gin.H{"error": "服务启动失败: " + errMsg})
+			c.JSON(500, gin.H{"error": "鏈嶅姟鍚姩澶辫触: " + errMsg})
 			return
 		}
 	} else {
@@ -1017,13 +1056,13 @@ func (h *Handler) toggleWebService(c *gin.Context) {
 	}
 	h.cfg.RUnlock()
 	if err := h.cfg.SaveWebService(svc); err != nil {
-		c.JSON(500, gin.H{"error": "保存失败"})
+		c.JSON(500, gin.H{"error": "淇濆瓨澶辫触"})
 		return
 	}
 	c.JSON(200, gin.H{"enabled": enabled})
 }
 
-// ─── Web Routes ───────────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ Web Routes 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 func (h *Handler) listRoutes(c *gin.Context) {
 	id := c.Param("id")
@@ -1064,12 +1103,12 @@ func (h *Handler) createRoute(c *gin.Context) {
 	route := req.WebRoute
 	if route.AuthEnabled {
 		if route.AuthUser == "" || req.AuthPass == "" {
-			c.JSON(400, gin.H{"error": "开启访问验证时，账号和密码不能为空"})
+			c.JSON(400, gin.H{"error": "寮€鍚闂獙璇佹椂锛岃处鍙峰拰瀵嗙爜涓嶈兘涓虹┖"})
 			return
 		}
 		hash, err := hashRoutePassword(req.AuthPass, "", true)
 		if err != nil {
-			c.JSON(500, gin.H{"error": "密码加密失败"})
+			c.JSON(500, gin.H{"error": "瀵嗙爜鍔犲瘑澶辫触"})
 			return
 		}
 		route.AuthPassHash = hash
@@ -1094,7 +1133,7 @@ func (h *Handler) createRoute(c *gin.Context) {
 		return
 	}
 	if err := h.cfg.SaveWebRoute(id, route); err != nil {
-		c.JSON(500, gin.H{"error": "保存失败"})
+		c.JSON(500, gin.H{"error": "淇濆瓨澶辫触"})
 		return
 	}
 	h.ws.MatchRouteCert(id, &route)
@@ -1117,7 +1156,7 @@ func (h *Handler) updateRoute(c *gin.Context) {
 	route := req.WebRoute
 	if route.AuthEnabled {
 		if route.AuthUser == "" || (req.AuthPass == "" && route.AuthPassHash == "") {
-			c.JSON(400, gin.H{"error": "开启访问验证时，账号和密码不能为空"})
+			c.JSON(400, gin.H{"error": "寮€鍚闂獙璇佹椂锛岃处鍙峰拰瀵嗙爜涓嶈兘涓虹┖"})
 			return
 		}
 	} else {
@@ -1139,7 +1178,7 @@ func (h *Handler) updateRoute(c *gin.Context) {
 						hash, err := bcrypt.GenerateFromPassword([]byte(req.AuthPass), bcrypt.DefaultCost)
 						if err != nil {
 							h.cfg.Unlock()
-							c.JSON(500, gin.H{"error": "密码加密失败"})
+							c.JSON(500, gin.H{"error": "瀵嗙爜鍔犲瘑澶辫触"})
 							return
 						}
 						route.AuthPassHash = string(hash)
@@ -1158,7 +1197,7 @@ func (h *Handler) updateRoute(c *gin.Context) {
 		return
 	}
 	if err := h.cfg.SaveWebRoute(svcID, route); err != nil {
-		c.JSON(500, gin.H{"error": "保存失败"})
+		c.JSON(500, gin.H{"error": "淇濆瓨澶辫触"})
 		return
 	}
 	h.ws.MatchRouteCert(svcID, &route)
@@ -1185,7 +1224,7 @@ func (h *Handler) deleteRoute(c *gin.Context) {
 	}
 	h.cfg.Unlock()
 	if err := h.cfg.DeleteWebRoute(rid); err != nil {
-		c.JSON(500, gin.H{"error": "保存失败"})
+		c.JSON(500, gin.H{"error": "淇濆瓨澶辫触"})
 		return
 	}
 	h.ws.Stop(svcID)
@@ -1213,7 +1252,7 @@ func (h *Handler) toggleRoute(c *gin.Context) {
 	}
 	h.cfg.Unlock()
 	if err := h.cfg.SaveWebRoute(svcID, updatedRoute); err != nil {
-		c.JSON(500, gin.H{"error": "保存失败"})
+		c.JSON(500, gin.H{"error": "淇濆瓨澶辫触"})
 		return
 	}
 	h.ws.MatchRouteCert(svcID, &updatedRoute)
@@ -1222,7 +1261,7 @@ func (h *Handler) toggleRoute(c *gin.Context) {
 	c.JSON(200, gin.H{"enabled": enabled})
 }
 
-// ─── Access Logs ──────────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ Access Logs 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 func (h *Handler) getAccessLogs(c *gin.Context) {
 	c.JSON(200, webservice.GetLogs().List(c.Param("id"), 200))
@@ -1232,7 +1271,7 @@ func (h *Handler) getAllAccessLogs(c *gin.Context) {
 	c.JSON(200, webservice.GetLogs().List("", 500))
 }
 
-// ─── TLS ──────────────────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ TLS 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 func (h *Handler) listCerts(c *gin.Context) {
 	h.cfg.RLock()
@@ -1279,7 +1318,7 @@ func (h *Handler) createCert(c *gin.Context) {
 	h.cfg.TLSCerts = append(h.cfg.TLSCerts, cert)
 	h.cfg.Unlock()
 	if err := h.cfg.SaveTLSCert(cert); err != nil {
-		c.JSON(500, gin.H{"error": "保存失败"})
+		c.JSON(500, gin.H{"error": "淇濆瓨澶辫触"})
 		return
 	}
 	go h.ws.RematchAllRoutes()
@@ -1318,7 +1357,7 @@ func (h *Handler) updateCert(c *gin.Context) {
 		return
 	}
 	if err := h.cfg.SaveTLSCert(req); err != nil {
-		c.JSON(500, gin.H{"error": "保存失败"})
+		c.JSON(500, gin.H{"error": "淇濆瓨澶辫触"})
 		return
 	}
 	go h.ws.RematchAllRoutes()
@@ -1336,7 +1375,7 @@ func (h *Handler) deleteCert(c *gin.Context) {
 	}
 	h.cfg.Unlock()
 	if err := h.cfg.DeleteTLSCert(id); err != nil {
-		c.JSON(500, gin.H{"error": "保存失败"})
+		c.JSON(500, gin.H{"error": "淇濆瓨澶辫触"})
 		return
 	}
 	go h.ws.RematchAllRoutes()
@@ -1396,27 +1435,27 @@ func (h *Handler) issueCert(c *gin.Context) {
 		go h.ws.RematchAllRoutes()
 	}()
 
-	c.JSON(202, gin.H{"ok": true, "message": "证书申请已开始，请稍后刷新查看状态"})
+	c.JSON(202, gin.H{"ok": true, "message": "璇佷功鐢宠宸插紑濮嬶紝璇风◢鍚庡埛鏂版煡鐪嬬姸鎬?})
 }
 
 func (h *Handler) uploadCert(c *gin.Context) {
 	file, _, err := c.Request.FormFile("file")
 	if err != nil {
-		c.JSON(400, gin.H{"error": "请上传证书 ZIP 文件"})
+		c.JSON(400, gin.H{"error": "璇蜂笂浼犺瘉涔?ZIP 鏂囦欢"})
 		return
 	}
 	defer file.Close()
 
 	raw, err := io.ReadAll(file)
 	if err != nil {
-		c.JSON(400, gin.H{"error": "读取文件失败"})
+		c.JSON(400, gin.H{"error": "璇诲彇鏂囦欢澶辫触"})
 		return
 	}
 
 	// Parse zip
 	zr, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
 	if err != nil {
-		c.JSON(400, gin.H{"error": "无法解析 ZIP 文件: " + err.Error()})
+		c.JSON(400, gin.H{"error": "鏃犳硶瑙ｆ瀽 ZIP 鏂囦欢: " + err.Error()})
 		return
 	}
 
@@ -1438,13 +1477,13 @@ func (h *Handler) uploadCert(c *gin.Context) {
 	}
 
 	if certPEM == "" || keyPEM == "" {
-		c.JSON(400, gin.H{"error": "ZIP 中未找到证书文件（需包含 cert.pem/fullchain.pem 和 key.pem/privkey.pem）"})
+		c.JSON(400, gin.H{"error": "ZIP 涓湭鎵惧埌璇佷功鏂囦欢锛堥渶鍖呭惈 cert.pem/fullchain.pem 鍜?key.pem/privkey.pem锛?})
 		return
 	}
 
 	// Validate PEM pair
 	if _, err := tlsParsePair(certPEM, keyPEM); err != nil {
-		c.JSON(400, gin.H{"error": "无效的证书或私钥: " + err.Error()})
+		c.JSON(400, gin.H{"error": "鏃犳晥鐨勮瘉涔︽垨绉侀挜: " + err.Error()})
 		return
 	}
 
@@ -1472,7 +1511,7 @@ func (h *Handler) uploadCert(c *gin.Context) {
 	h.cfg.TLSCerts = append(h.cfg.TLSCerts, cert)
 	h.cfg.Unlock()
 	if err := h.cfg.SaveTLSCert(cert); err != nil {
-		c.JSON(500, gin.H{"error": "保存失败"})
+		c.JSON(500, gin.H{"error": "淇濆瓨澶辫触"})
 		return
 	}
 	go h.ws.RematchAllRoutes()
@@ -1521,7 +1560,7 @@ func (h *Handler) downloadCert(c *gin.Context) {
 		return
 	}
 	if found.CertPEM == "" || found.KeyPEM == "" {
-		c.JSON(400, gin.H{"error": "证书尚未签发，无法下载"})
+		c.JSON(400, gin.H{"error": "璇佷功灏氭湭绛惧彂锛屾棤娉曚笅杞?})
 		return
 	}
 
@@ -1569,6 +1608,9 @@ func (h *Handler) downloadCert(c *gin.Context) {
 
 func (h *Handler) getCertPEM(c *gin.Context) {
 	id := c.Param("id")
+	includeKey := strings.EqualFold(c.DefaultQuery("include_key", "0"), "1") ||
+		strings.EqualFold(c.DefaultQuery("include_key", ""), "true")
+
 	h.cfg.RLock()
 	var found *config.TLSCert
 	for i := range h.cfg.TLSCerts {
@@ -1583,14 +1625,21 @@ func (h *Handler) getCertPEM(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "cert not found"})
 		return
 	}
-	c.JSON(200, gin.H{
+
+	resp := gin.H{
 		"cert_pem": found.CertPEM,
-		"key_pem":  found.KeyPEM,
 		"domain":   found.Domain,
-	})
+	}
+	if includeKey {
+		log.Printf("[security] private key export requested cert_id=%s ip=%s", id, c.ClientIP())
+		resp["key_pem"] = found.KeyPEM
+	} else {
+		resp["key_pem"] = ""
+	}
+	c.JSON(200, resp)
 }
 
-// ─── DDNS helpers ─────────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ DDNS helpers 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 func (h *Handler) listInterfaces(c *gin.Context) {
 	c.JSON(200, ddns.GetInterfaces())
@@ -1611,7 +1660,7 @@ func (h *Handler) listIfaceIPs(c *gin.Context) {
 	c.JSON(200, ips)
 }
 
-// ─── Utility helpers ──────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ Utility helpers 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 func tlsParsePair(certPEM, keyPEM string) (interface{}, error) {
 	_, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
@@ -1630,7 +1679,7 @@ func sanitizeFilename(s string) string {
 	return b.String()
 }
 
-// ─── Sysinfo ──────────────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ Sysinfo 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 func (h *Handler) getSysinfo(c *gin.Context) {
 	if h.disableSysinfo {
@@ -1685,7 +1734,7 @@ func readSysinfoKernel() string {
 			return fields[2]
 		}
 	}
-	return "—"
+	return "鈥?
 }
 
 // readSysinfoUptime parses /proc/uptime and returns seconds + human string.
@@ -1701,16 +1750,16 @@ func readSysinfoUptime() map[string]interface{} {
 			mins := (total % 3600) / 60
 			human := ""
 			if days > 0 {
-				human += fmt.Sprintf("%d天", days)
+				human += fmt.Sprintf("%d澶?, days)
 			}
 			if hours > 0 {
-				human += fmt.Sprintf("%d小时", hours)
+				human += fmt.Sprintf("%d灏忔椂", hours)
 			}
-			human += fmt.Sprintf("%d分钟", mins)
+			human += fmt.Sprintf("%d鍒嗛挓", mins)
 			return map[string]interface{}{"seconds": total, "human": human}
 		}
 	}
-	return map[string]interface{}{"seconds": 0, "human": "—"}
+	return map[string]interface{}{"seconds": 0, "human": "鈥?}
 }
 
 // readSysinfoMemory reads /proc/meminfo and returns used/total KB + percentage.
@@ -1774,12 +1823,12 @@ func readSysinfoDisk(mountPoint string) map[string]interface{} {
 // This is OS-agnostic and does not rely on interface naming conventions.
 //
 // Logic:
-//  1. type == 772 (ARPHRD_LOOPBACK) → skip
-//  2. tun_flags file exists → TUN/TAP → skip
-//  3. device/ symlink exists → bound to a real hardware driver → keep
-//  4. bridge/ or bonding/ dir exists → software bridge/bond but carries real traffic → keep
-//  5. ifindex != iflink → veth pair (peer lives in another netns) → skip
-//  6. Everything else has no hardware device → skip (dummy, sit, ip6tnl, macvlan, etc.)
+//  1. type == 772 (ARPHRD_LOOPBACK) 鈫?skip
+//  2. tun_flags file exists 鈫?TUN/TAP 鈫?skip
+//  3. device/ symlink exists 鈫?bound to a real hardware driver 鈫?keep
+//  4. bridge/ or bonding/ dir exists 鈫?software bridge/bond but carries real traffic 鈫?keep
+//  5. ifindex != iflink 鈫?veth pair (peer lives in another netns) 鈫?skip
+//  6. Everything else has no hardware device 鈫?skip (dummy, sit, ip6tnl, macvlan, etc.)
 func isVirtualIface(name string) bool {
 	base := "/sys/class/net/" + name
 
@@ -1795,12 +1844,12 @@ func isVirtualIface(name string) bool {
 		return true
 	}
 
-	// 3. Hardware device symlink → physical NIC
+	// 3. Hardware device symlink 鈫?physical NIC
 	if _, err := os.Stat(base + "/device"); err == nil {
 		return false
 	}
 
-	// 4. Software bridge or bonding master → keep (carries real traffic)
+	// 4. Software bridge or bonding master 鈫?keep (carries real traffic)
 	if _, err := os.Stat(base + "/bridge"); err == nil {
 		return false
 	}
@@ -1817,7 +1866,7 @@ func isVirtualIface(name string) bool {
 		}
 	}
 
-	// 6. No hardware device, not a bridge/bond → software-only
+	// 6. No hardware device, not a bridge/bond 鈫?software-only
 	return true
 }
 

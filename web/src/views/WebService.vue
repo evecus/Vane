@@ -473,7 +473,7 @@ const filteredLogs = computed(() => {
   const q = logSearch.value.toLowerCase()
   return logs.value.filter(l =>
     l.client_ip?.includes(q) || l.domain?.includes(q) ||
-    l.user_agent?.toLowerCase().includes(q) || l.path?.includes(q)
+    l.user_agent?.toLowerCase().includes(q) || l.route_name?.toLowerCase().includes(q)
   )
 })
 

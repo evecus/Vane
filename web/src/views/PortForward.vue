@@ -222,9 +222,8 @@ async function del(id) {
 }
 
 function connectWS() {
-  const token = localStorage.getItem('vane_token')
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  ws = new WebSocket(`${proto}://${location.host}/api/ws/stats?token=${token}`)
+  ws = new WebSocket(`${proto}://${location.host}/api/ws/stats`)
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data)
     if (msg.type === 'stats') stats.value = msg.data

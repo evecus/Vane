@@ -83,7 +83,7 @@ func main() {
 		AllowOrigins:     []string{allowedOrigin},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Content-Type", "Authorization"},
-		AllowCredentials: false,
+		AllowCredentials: true,
 	}))
 
 	apiHandler := api.NewHandler(cfg, pfManager, ddnsManager, wsManager, tlsManager, Version, disableSysinfo)

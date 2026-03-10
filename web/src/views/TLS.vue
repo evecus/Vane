@@ -1,7 +1,7 @@
-<template>
+﻿<template>
   <div class="space-y-4 sm:space-y-6 animate-fade-in">
 
-    <!-- 页面标题 + 按钮 -->
+    <!-- 椤甸潰鏍囬 + 鎸夐挳 -->
     <div class="page-header">
       <h1 class="page-title">{{ t('tlsTitle') }}</h1>
       <div class="flex gap-2">
@@ -16,7 +16,7 @@
       </div>
     </div>
 
-    <!-- 空状态 -->
+    <!-- 绌虹姸鎬?-->
     <div v-if="certs.length === 0" class="glass-card p-10 sm:p-16 text-center">
       <div class="w-14 h-14 sm:w-16 sm:h-16 rounded-3xl bg-amber-50 flex items-center justify-center mx-auto mb-4">
         <Shield :size="26" class="text-amber-400" />
@@ -25,7 +25,7 @@
       <p class="text-slate-400 text-sm mt-1">{{ t('noTlsCertsHint') }}</p>
     </div>
 
-    <!-- 证书列表 -->
+    <!-- 璇佷功鍒楄〃 -->
     <div v-else class="grid gap-3 sm:gap-4">
       <div v-for="cert in certs" :key="cert.id"
            class="glass-card p-4 sm:p-5 group transition-all duration-300">
@@ -39,9 +39,9 @@
             <span class="text-[9px] opacity-80 leading-none mt-0.5">DAYS</span>
           </div>
 
-          <!-- 内容区 -->
+          <!-- 鍐呭鍖?-->
           <div class="flex-1 min-w-0">
-            <!-- 名称 + 状态标签 -->
+            <!-- 鍚嶇О + 鐘舵€佹爣绛?-->
             <div class="flex items-center gap-1.5 mb-1.5 flex-wrap">
               <span class="font-semibold text-slate-900 text-sm sm:text-base leading-tight">{{ cert.name || cert.domain }}</span>
               <StatusBadge :status="cert.status" />
@@ -50,13 +50,13 @@
               <span v-if="(cert.domains||[cert.domain]).length > 2" class="text-xs text-slate-400 hidden sm:inline">+{{ (cert.domains||[cert.domain]).length - 2 }}</span>
             </div>
 
-            <!-- 移动端域名（单独一行，最多显示1个） -->
+            <!-- 绉诲姩绔煙鍚嶏紙鍗曠嫭涓€琛岋紝鏈€澶氭樉绀?涓級 -->
             <div class="flex flex-wrap gap-1 mb-1.5 sm:hidden">
               <span v-if="cert.domain" class="font-mono text-xs text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded break-all max-w-full truncate">{{ cert.domain }}</span>
               <span v-if="(cert.domains||[]).length > 1" class="text-xs text-slate-400">+{{ cert.domains.length - 1 }}</span>
             </div>
 
-            <!-- 徽章行 -->
+            <!-- 寰界珷琛?-->
             <div class="flex flex-wrap items-center gap-1 mb-2">
               <span class="badge badge-slate text-xs">{{ cert.source === 'acme' ? 'ACME' : t('manual') }}</span>
               <span v-if="cert.ca_provider === 'zerossl'" class="badge text-xs" style="background:#f0f9ff;color:#0369a1;border:1px solid #bae6fd">ZeroSSL</span>
@@ -66,20 +66,20 @@
               <span v-if="cert.auto_renew" class="badge badge-green text-xs">{{ t('autoRenew') }}</span>
             </div>
 
-            <!-- 进度条 -->
+            <!-- 杩涘害鏉?-->
             <div class="h-1.5 bg-slate-100 rounded-full overflow-hidden mb-2 max-w-[200px] sm:max-w-xs">
               <div class="h-full rounded-full transition-all duration-700"
                    :style="`width: ${Math.min(100, Math.max(0, cert.days_left/90*100))}%; background: ${certBarColor(cert.days_left)}`"></div>
             </div>
 
-            <!-- 日期信息 -->
+            <!-- 鏃ユ湡淇℃伅 -->
             <div class="flex flex-wrap items-center gap-2 sm:gap-4 text-xs text-slate-400">
               <span v-if="cert.issued_at">{{ t('issuedAt') }} {{ fmtDate(cert.issued_at) }}</span>
               <span v-if="cert.expires_at">{{ t('expiresAt') }} {{ fmtDate(cert.expires_at) }}</span>
             </div>
           </div>
 
-          <!-- 操作按钮区（桌面端） -->
+          <!-- 鎿嶄綔鎸夐挳鍖猴紙妗岄潰绔級 -->
           <div class="hidden sm:flex items-center gap-1.5 flex-shrink-0">
             <button v-if="cert.status === 'active'" @click="downloadCert(cert)"
                     class="btn-ghost btn-sm text-slate-500" :title="t('downloadCert')">
@@ -102,7 +102,7 @@
             </button>
           </div>
 
-          <!-- 移动端：右上角仅编辑按钮 -->
+          <!-- 绉诲姩绔細鍙充笂瑙掍粎缂栬緫鎸夐挳 -->
           <div class="flex sm:hidden items-center flex-shrink-0 -mt-0.5">
             <button @click="openEdit(cert)" class="btn-ghost p-1.5 text-slate-400">
               <Pencil :size="14" />
@@ -110,7 +110,7 @@
           </div>
         </div>
 
-        <!-- 移动端操作栏（在卡片底部） -->
+        <!-- 绉诲姩绔搷浣滄爮锛堝湪鍗＄墖搴曢儴锛?-->
         <div class="flex sm:hidden items-center gap-2 mt-3 pt-3 border-t border-slate-100">
           <button v-if="cert.status === 'active'" @click="downloadCert(cert)"
                   class="btn-ghost btn-sm flex-1 justify-center text-slate-500 gap-1.5">
@@ -126,11 +126,11 @@
             <span class="text-xs">{{ cert.status === 'pending' ? t('applying') : t('reApply') }}</span>
           </button>
           <button @click="del(cert.id)" class="btn-ghost btn-sm flex-1 justify-center text-red-400 hover:bg-red-50 gap-1.5">
-            <Trash2 :size="13" /> <span class="text-xs">删除</span>
+            <Trash2 :size="13" /> <span class="text-xs">鍒犻櫎</span>
           </button>
         </div>
 
-        <!-- 错误信息 -->
+        <!-- 閿欒淇℃伅 -->
         <div v-if="cert.status === 'error'" class="mt-3 px-3 py-2 bg-red-50 rounded-lg border border-red-100 text-xs text-red-600 flex items-start gap-2">
           <AlertCircle :size="13" class="flex-shrink-0 mt-0.5" />
           <span class="break-all">{{ cert.error_msg || t('applyFailed') }}</span>
@@ -138,17 +138,17 @@
       </div>
     </div>
 
-    <!-- ══ 申请 / 编辑证书弹窗 ══════════════════════════════════════════ -->
+    <!-- 鈺愨晲 鐢宠 / 缂栬緫璇佷功寮圭獥 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲 -->
     <Teleport to="body">
       <div v-if="modal" class="modal-overlay" @click.self="modal=null">
         <div class="modal-box max-w-lg">
 
-          <!-- 移动端拖动条 -->
+          <!-- 绉诲姩绔嫋鍔ㄦ潯 -->
           <div class="sm:hidden flex justify-center pt-3 pb-1 flex-shrink-0">
             <div class="w-10 h-1 bg-slate-200 rounded-full"></div>
           </div>
 
-          <!-- 标题栏 -->
+          <!-- 鏍囬鏍?-->
           <div class="flex-shrink-0 flex items-center justify-between px-5 sm:px-6 py-3 sm:py-4 border-b border-slate-100">
             <div>
               <h3 class="font-semibold text-slate-900 text-base">{{ editId ? t('editTlsCert') : t('applyAcme') }}</h3>
@@ -157,7 +157,7 @@
             <button @click="modal=null" class="btn-ghost btn-sm p-1.5 ml-2"><X :size="16" /></button>
           </div>
 
-          <!-- 可滚动内容区 -->
+          <!-- 鍙粴鍔ㄥ唴瀹瑰尯 -->
           <div class="flex-1 overflow-y-auto overscroll-contain px-5 sm:px-6 py-4 space-y-4">
 
             <!-- CA Provider -->
@@ -179,13 +179,13 @@
               </div>
             </div>
 
-            <!-- 任务名称 -->
+            <!-- 浠诲姟鍚嶇О -->
             <div>
               <label class="input-label">{{ t('certTaskName') }}</label>
               <input v-model="form.name" class="input" :placeholder="t('certTaskPlaceholder')" />
             </div>
 
-            <!-- 域名列表 -->
+            <!-- 鍩熷悕鍒楄〃 -->
             <div>
               <label class="input-label">{{ t('certDomains') }}</label>
               <textarea v-model="form.domainsText" class="input font-mono text-sm resize-none" rows="3"
@@ -193,24 +193,9 @@
               <p class="text-xs text-slate-400 mt-1">{{ t('certDomainsHint') }}</p>
             </div>
 
-            <!-- ZeroSSL 区域 -->
+            <!-- ZeroSSL 鍖哄煙 -->
             <template v-if="form.ca_provider === 'zerossl'">
-              <!-- 是否使用私有账号 -->
-              <div class="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-200 gap-3">
-                <div class="min-w-0">
-                  <div class="text-sm font-medium text-slate-700">{{ t('usePrivateAccount') }}</div>
-                  <div class="text-xs text-slate-400 mt-0.5 leading-snug">{{ t('usePrivateAccountHint') }}</div>
-                </div>
-                <label class="toggle flex-shrink-0">
-                  <input type="checkbox" v-model="form.usePrivateAccount" />
-                  <div class="toggle-track"></div>
-                  <div class="toggle-thumb"></div>
-                </label>
-              </div>
-
-              <!-- 私有账号填写区 -->
-              <div v-if="form.usePrivateAccount"
-                   class="p-4 bg-sky-50 rounded-xl border border-sky-100 space-y-3">
+              <div class="p-4 bg-sky-50 rounded-xl border border-sky-100 space-y-3">
                 <div>
                   <label class="input-label">{{ t('acmeEmail') }}</label>
                   <input v-model="form.email" class="input" type="email" placeholder="admin@example.com"
@@ -229,7 +214,7 @@
               </div>
             </template>
 
-            <!-- Let's Encrypt：邮箱 -->
+            <!-- Let's Encrypt锛氶偖绠?-->
             <template v-else>
               <div>
                 <label class="input-label">{{ t('acmeEmail') }}</label>
@@ -246,7 +231,7 @@
               </select>
             </div>
 
-            <!-- Cloudflare 配置 -->
+            <!-- Cloudflare 閰嶇疆 -->
             <template v-if="form.provider === 'cloudflare'">
               <div class="p-4 bg-amber-50 rounded-xl border border-amber-100 space-y-3">
                 <h4 class="text-xs font-bold text-amber-700 uppercase tracking-wide">Cloudflare DNS API</h4>
@@ -261,13 +246,13 @@
               </div>
             </template>
 
-            <!-- 错误提示 -->
+            <!-- 閿欒鎻愮ず -->
             <div v-if="modalError" class="flex items-start gap-2 text-red-600 bg-red-50 px-3 py-2.5 rounded-xl border border-red-100 text-xs">
               <AlertCircle :size="13" class="flex-shrink-0 mt-0.5" /> <span>{{ modalError }}</span>
             </div>
           </div>
 
-          <!-- 底部操作栏 -->
+          <!-- 搴曢儴鎿嶄綔鏍?-->
           <div class="flex-shrink-0 border-t border-slate-100 px-5 sm:px-6 py-3 sm:py-4">
             <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div class="flex items-center gap-2">
@@ -295,7 +280,7 @@
       </div>
     </Teleport>
 
-    <!-- ══ 上传证书弹窗 ════════════════════════════════════════════════ -->
+    <!-- 鈺愨晲 涓婁紶璇佷功寮圭獥 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲 -->
     <Teleport to="body">
       <div v-if="uploadModal" class="modal-overlay" @click.self="uploadModal=null">
         <div class="modal-box max-w-lg">
@@ -307,7 +292,7 @@
           <div class="flex-shrink-0 flex items-center justify-between px-5 sm:px-6 py-3 sm:py-4 border-b border-slate-100">
             <div>
               <h3 class="font-semibold text-slate-900 text-base">{{ t('uploadCertTitle') }}</h3>
-              <p class="text-xs text-slate-400 mt-0.5">上传包含 cert.pem 和 key.pem 的 ZIP 压缩包</p>
+              <p class="text-xs text-slate-400 mt-0.5">涓婁紶鍖呭惈 cert.pem 鍜?key.pem 鐨?ZIP 鍘嬬缉鍖?/p>
             </div>
             <button @click="uploadModal=null" class="btn-ghost btn-sm p-1.5 ml-2"><X :size="16" /></button>
           </div>
@@ -315,12 +300,12 @@
           <div class="flex-1 overflow-y-auto overscroll-contain px-5 sm:px-6 py-4 space-y-4">
 
             <div>
-              <label class="input-label">证书 ZIP 文件</label>
+              <label class="input-label">璇佷功 ZIP 鏂囦欢</label>
               <label class="flex items-center gap-3 p-4 border-2 border-dashed border-slate-200 rounded-xl cursor-pointer hover:border-vane-300 hover:bg-vane-50/30 transition-all active:bg-vane-50/50">
                 <Upload :size="18" class="text-slate-400 flex-shrink-0" />
                 <div class="min-w-0">
-                  <div class="text-sm text-slate-600 truncate">{{ uploadForm.zipFile ? uploadForm.zipFile.name : '点击选择 ZIP 文件' }}</div>
-                  <div class="text-xs text-slate-400 mt-0.5">需包含 cert.pem（或 fullchain.pem）和 key.pem（或 privkey.pem）</div>
+                  <div class="text-sm text-slate-600 truncate">{{ uploadForm.zipFile ? uploadForm.zipFile.name : '鐐瑰嚮閫夋嫨 ZIP 鏂囦欢' }}</div>
+                  <div class="text-xs text-slate-400 mt-0.5">闇€鍖呭惈 cert.pem锛堟垨 fullchain.pem锛夊拰 key.pem锛堟垨 privkey.pem锛?/div>
                 </div>
                 <input type="file" accept=".zip" class="hidden" @change="e => uploadForm.zipFile = e.target.files[0]" />
               </label>
@@ -328,7 +313,7 @@
 
             <div class="flex items-start gap-2 text-xs text-slate-500 bg-slate-50 rounded-xl px-3 py-2.5">
               <Info :size="13" class="flex-shrink-0 mt-0.5 text-slate-400" />
-              <span>程序将自动从证书中读取域名信息（SAN），无需手动填写。可直接上传从本程序下载的证书 ZIP。</span>
+              <span>绋嬪簭灏嗚嚜鍔ㄤ粠璇佷功涓鍙栧煙鍚嶄俊鎭紙SAN锛夛紝鏃犻渶鎵嬪姩濉啓銆傚彲鐩存帴涓婁紶浠庢湰绋嬪簭涓嬭浇鐨勮瘉涔?ZIP銆?/span>
             </div>
 
             <div v-if="uploadError" class="flex items-start gap-2 text-red-600 bg-red-50 px-3 py-2 rounded-xl border border-red-100 text-xs">
@@ -350,17 +335,17 @@
       </div>
     </Teleport>
 
-    <!-- ══ 查看 PEM 弹窗 ══════════════════════════════════════════════ -->
+    <!-- 鈺愨晲 鏌ョ湅 PEM 寮圭獥 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲 -->
     <Teleport to="body">
       <div v-if="pemModal" class="modal-overlay" @click.self="pemModal=null">
         <div class="modal-box sm:max-w-2xl">
 
-          <!-- 移动端拖动条 -->
+          <!-- 绉诲姩绔嫋鍔ㄦ潯 -->
           <div class="sm:hidden flex justify-center pt-3 pb-1 flex-shrink-0">
             <div class="w-10 h-1 bg-slate-200 rounded-full"></div>
           </div>
 
-          <!-- 标题栏 -->
+          <!-- 鏍囬鏍?-->
           <div class="flex-shrink-0 flex items-center justify-between px-5 sm:px-6 py-3 sm:py-4 border-b border-slate-100">
             <div class="min-w-0">
               <h3 class="font-semibold text-slate-900 font-mono text-sm sm:text-base truncate">{{ pemData.domain }}</h3>
@@ -369,7 +354,7 @@
             <button @click="pemModal=null" class="btn-ghost btn-sm p-1.5 ml-2 flex-shrink-0"><X :size="16" /></button>
           </div>
 
-          <!-- 可滚动内容 -->
+          <!-- 鍙粴鍔ㄥ唴瀹?-->
           <div class="flex-1 overflow-y-auto overscroll-contain px-5 sm:px-6 py-4 space-y-4">
             <div>
               <div class="flex items-center justify-between mb-1.5">
@@ -391,7 +376,7 @@
             </div>
           </div>
 
-          <!-- 底部下载按钮 -->
+          <!-- 搴曢儴涓嬭浇鎸夐挳 -->
           <div class="flex-shrink-0 border-t border-slate-100 px-5 sm:px-6 py-3 sm:py-4">
             <div class="flex gap-2">
               <button class="btn-secondary flex-1 justify-center gap-1.5" @click="downloadFromPEM()">
@@ -421,33 +406,6 @@ import ProviderBadge from '@/components/ProviderBadge.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 
 const { t } = useI18n()
-
-// ─── 内置 ZeroSSL 账号（Base64 编码存储，轮询使用）────────────────────────
-const BUILTIN_ZS_ACCOUNTS = [
-  {
-    email: '76q7n@dollicons.com',
-    _kid:  'SmhMNWdrVmUwLXpQS29INUc2X1o1QQ==',
-    _hmac: 'TDI0T3VQSG1lVVMzUnlOOXdwMjhlYUpxVEJyWVQ3QlZCWHZIVTNCdm1OT2g4NU1weDNuejY1c0tzaVkxQ2lrNGpyQVZLTnZGVmRSRms2OXRmVDB0QVE=',
-  },
-  {
-    email: 'jamie@gmail.com',
-    _kid:  'UnVtUExSRFMxSWFHNVlySEtVcUctZw==',
-    _hmac: 'T3ByN1psVDl0MWcyTXAzbndNam4xZGw5c1VDMi15cDZwR2pmLUUyUHpHWEJKVFhvTHNwX2dQenYzNWVTMHpLNG13Tm5RUENJRFVQSmNGNTYzMmphbHc=',
-  },
-  {
-    email: 'gings@gmail.com',
-    _kid:  'MTZubU82eUNiaGttX055NnNwaEp1UQ==',
-    _hmac: 'aFBPdjFiZFNEQ05USm1BU1F2elhxSklDY091UHh1QlVFT25wN3pGVm5BektpbUpNZlNiTDlSSEdreVkyUGlnX2J3Z2NzZVNXVTBYVWNzWV9PUW5FYlE=',
-  },
-]
-
-function decodeAccount(acc) {
-  return {
-    email: acc.email,
-    zerossl_key_id: atob(acc._kid),
-    zerossl_api_key: atob(acc._hmac),
-  }
-}
 
 const certs = ref([])
 const modal = ref(null)
@@ -488,7 +446,6 @@ function blankForm() {
     name: '', domainsText: '', domain: '', email: '',
     ca_provider: 'letsencrypt', provider: 'cloudflare',
     provider_conf: {}, auto_renew: true, source: 'acme',
-    usePrivateAccount: false,
   }
 }
 
@@ -504,10 +461,6 @@ function openEdit(cert) {
   modalError.value = ''
   const domains = cert.domains?.length ? cert.domains : (cert.domain ? [cert.domain] : [])
   const pc = cert.provider_conf || {}
-  const builtinEmails = BUILTIN_ZS_ACCOUNTS.map(a => a.email)
-  const hasPrivateEab = cert.ca_provider === 'zerossl' &&
-    !!(pc.zerossl_key_id || pc.zerossl_api_key) &&
-    !builtinEmails.includes(cert.email)
   form.value = {
     name:              cert.name || '',
     domainsText:       domains.join('\n'),
@@ -518,7 +471,6 @@ function openEdit(cert) {
     provider_conf:     { ...pc },
     auto_renew:        cert.auto_renew,
     source:            cert.source,
-    usePrivateAccount: hasPrivateEab,
   }
   modal.value = true
 }
@@ -533,14 +485,10 @@ function openUpload() {
 function validateForm() {
   const domains = (form.value.domainsText || '').split('\n').map(s => s.trim()).filter(Boolean)
   if (!domains.length) return t('errNoDomain')
+  if (!form.value.email) return t('errNoEmail')
   if (form.value.ca_provider === 'zerossl') {
-    if (form.value.usePrivateAccount) {
-      if (!form.value.email) return t('errNoEmail')
-      if (!form.value.provider_conf.zerossl_key_id) return t('errNoEabKeyId')
-      if (!form.value.provider_conf.zerossl_api_key) return t('errNoZsHmac')
-    }
-  } else {
-    if (!form.value.email) return t('errNoEmail')
+    if (!form.value.provider_conf.zerossl_key_id) return t('errNoEabKeyId')
+    if (!form.value.provider_conf.zerossl_api_key) return t('errNoZsHmac')
   }
   if (form.value.provider === 'cloudflare' && !form.value.provider_conf.api_token) {
     return t('errNoCfToken')
@@ -548,23 +496,9 @@ function validateForm() {
   return null
 }
 
-function buildPayload(builtinIdx = 0) {
+function buildPayload() {
   const domains = (form.value.domainsText || '').split('\n').map(s => s.trim()).filter(Boolean)
-  const base = { ...form.value, domains, domain: domains[0] || '', domainsText: undefined, usePrivateAccount: undefined }
-  if (form.value.ca_provider === 'zerossl' && !form.value.usePrivateAccount) {
-    const acc = decodeAccount(BUILTIN_ZS_ACCOUNTS[builtinIdx % BUILTIN_ZS_ACCOUNTS.length])
-    base.email = acc.email
-    base.provider_conf = { ...base.provider_conf, zerossl_key_id: acc.zerossl_key_id, zerossl_api_key: acc.zerossl_api_key }
-  }
-  return base
-}
-
-async function tryWithBuiltin(action) {
-  let lastErr = null
-  for (let i = 0; i < BUILTIN_ZS_ACCOUNTS.length; i++) {
-    try { return await action(i) } catch (e) { lastErr = e }
-  }
-  throw lastErr
+  return { ...form.value, domains, domain: domains[0] || '', domainsText: undefined }
 }
 
 async function createAndIssue() {
@@ -572,12 +506,8 @@ async function createAndIssue() {
   if (modalError.value) return
   saving.value = true
   try {
-    let certId
-    if (form.value.ca_provider === 'zerossl' && !form.value.usePrivateAccount) {
-      await tryWithBuiltin(async (idx) => { const { data } = await api.post('/tls', buildPayload(idx)); certId = data.id })
-    } else {
-      const { data } = await api.post('/tls', buildPayload()); certId = data.id
-    }
+    const { data } = await api.post('/tls', buildPayload())
+    const certId = data.id
     modal.value = null
     await load()
     api.post(`/tls/${certId}/issue`).catch(() => {})
@@ -595,11 +525,7 @@ async function updateCert() {
   saving.value = true
   try {
     const id = editId.value
-    if (form.value.ca_provider === 'zerossl' && !form.value.usePrivateAccount) {
-      await tryWithBuiltin(async (idx) => { await api.put(`/tls/${id}`, buildPayload(idx)) })
-    } else {
-      await api.put(`/tls/${id}`, buildPayload())
-    }
+    await api.put(`/tls/${id}`, buildPayload())
     modal.value = null
     await load()
     api.post(`/tls/${id}/issue`).catch(() => {})
@@ -623,26 +549,13 @@ function pollUntilDone(id) {
 async function issue(id) {
   const cert = certs.value.find(c => c.id === id)
   if (cert) cert.status = 'pending'
-  // If this is a ZeroSSL cert using a builtin account, refresh EAB before issuing
-  if (cert && cert.ca_provider === 'zerossl' && BUILTIN_ZS_ACCOUNTS.map(a => a.email).includes(cert.email)) {
-    try {
-      await tryWithBuiltin(async (idx) => {
-        const acc = decodeAccount(BUILTIN_ZS_ACCOUNTS[idx % BUILTIN_ZS_ACCOUNTS.length])
-        await api.put(`/tls/${id}`, {
-          ...cert,
-          email: acc.email,
-          provider_conf: { ...cert.provider_conf, zerossl_key_id: acc.zerossl_key_id, zerossl_api_key: acc.zerossl_api_key }
-        })
-      })
-    } catch (e) { /* proceed anyway */ }
-  }
   api.post(`/tls/${id}/issue`).catch(() => {})
   pollUntilDone(id)
 }
 
 async function upload() {
   uploadError.value = ''
-  if (!uploadForm.value.zipFile) { uploadError.value = '请选择 ZIP 文件'; return }
+  if (!uploadForm.value.zipFile) { uploadError.value = '璇烽€夋嫨 ZIP 鏂囦欢'; return }
   try {
     const fd = new FormData()
     fd.append('file', uploadForm.value.zipFile)
@@ -661,7 +574,7 @@ async function del(id) {
   await load()
 }
 
-// ─── 下载证书 ZIP ──────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€ 涓嬭浇璇佷功 ZIP 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 async function downloadCert(cert) {
   const res = await api.get(`/tls/${cert.id}/download`, { responseType: 'blob' })
   const safeName = (cert.domain || 'cert').replace(/\*/g, 'wildcard').replace(/[^a-zA-Z0-9._-]/g, '_')
@@ -669,7 +582,7 @@ async function downloadCert(cert) {
 }
 
 async function viewPEM(cert) {
-  const { data } = await api.get(`/tls/${cert.id}/pem`)
+  const { data } = await api.get(`/tls/${cert.id}/pem`, { params: { include_key: '1' } })
   pemData.value = data
   pemModal.value = true
 }
