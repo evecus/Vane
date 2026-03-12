@@ -18,15 +18,27 @@ import (
 
 	_ "modernc.org/sqlite"
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/crypto/pbkdf2"
 )
 
 // ─── Encryption ───────────────────────────────────────────────────────────────
 
 const encryptionKeyEnv = "VANE_SECRET"
 
+// deriveKey derives a 32-byte AES key from a passphrase using PBKDF2-SHA256.
+// Using PBKDF2 (100 000 iterations) instead of a bare SHA-256 makes brute-force
+// attacks against the encrypted database ~100 000× more expensive.
+//
+// The salt is fixed ("vane-kdf-v1") because the key file itself is the secret;
+// a per-file random salt would add no meaningful security here while
+// complicating key recovery.
 func deriveKey(passphrase string) []byte {
-	h := sha256.Sum256([]byte(passphrase))
-	return h[:]
+	const (
+		kdfSalt   = "vane-kdf-v1"
+		kdfIter   = 100_000
+		kdfKeyLen = 32
+	)
+	return pbkdf2.Key([]byte(passphrase), []byte(kdfSalt), kdfIter, kdfKeyLen, sha256.New)
 }
 
 func encryptJSON(key []byte, v any) (string, error) {
@@ -162,6 +174,10 @@ func (dd *DataDir) migrate() error {
 			port INTEGER NOT NULL DEFAULT 4455,
 			safe_entry TEXT NOT NULL DEFAULT '',
 			welcome_shown INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE IF NOT EXISTS sessions (
+			token TEXT PRIMARY KEY,
+			expires_at INTEGER NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS port_forwards (
 			id TEXT PRIMARY KEY,
@@ -804,19 +820,20 @@ func (c *Config) SaveBackup() (string, error) {
 
 func (c *Config) Import(data []byte) error {
 	var snap struct {
-		Admin        AdminConfig       `json:"admin"`
 		PortForwards []PortForwardRule `json:"port_forwards"`
 		DDNS         []DDNSRule        `json:"ddns"`
 		WebServices  []WebService      `json:"web_services"`
 		TLSCerts     []TLSCert         `json:"tls_certs"`
 	}
+	// Only accept encrypted backups — reject plaintext JSON to prevent
+	// an attacker from crafting a backup that overwrites credentials.
 	if err := decryptJSON(c.dataDir.Key, string(data), &snap); err != nil {
-		if err2 := json.Unmarshal(data, &snap); err2 != nil {
-			return fmt.Errorf("invalid backup: %w", err)
-		}
+		return fmt.Errorf("invalid or unencrypted backup: %w", err)
 	}
 	c.mu.Lock()
-	c.Admin = snap.Admin
+	// Intentionally do NOT restore c.Admin — admin credentials must never
+	// be overwritten via a backup restore.  The caller retains their current
+	// username and password after a restore.
 	c.PortForwards = snap.PortForwards
 	c.DDNS = snap.DDNS
 	c.WebServices = snap.WebServices
@@ -827,15 +844,44 @@ func (c *Config) Import(data []byte) error {
 
 // ─── Init defaults ────────────────────────────────────────────────────────────
 
+// initDefaults sets up the initial admin account on first run.
+// No hardcoded default password is used — a cryptographically random
+// temporary password is generated and printed to stdout once so the
+// operator can log in and set a proper password immediately.
 func (c *Config) initDefaults() error {
+	// Generate a random 12-character alphanumeric temporary password.
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	buf := make([]byte, 12)
+	if _, err := rand.Read(buf); err != nil {
+		return fmt.Errorf("generate temp password: %w", err)
+	}
+	for i, b := range buf {
+		buf[i] = charset[int(b)%len(charset)]
+	}
+	tempPassword := string(buf)
+
 	c.Admin = AdminConfig{Username: "admin", Port: 4455}
-	if err := c.Admin.SetPassword("admin"); err != nil {
+	if err := c.Admin.SetPassword(tempPassword); err != nil {
 		return err
 	}
 	c.PortForwards = []PortForwardRule{}
 	c.DDNS = []DDNSRule{}
 	c.WebServices = []WebService{}
 	c.TLSCerts = []TLSCert{}
+
+	// Print the temporary password prominently so the operator sees it.
+	// It is intentionally NOT logged so it does not end up in log files.
+	fmt.Printf("\n"+
+		"  ┌─────────────────────────────────────────────────┐\n"+
+		"  │         🔑  FIRST RUN — TEMPORARY PASSWORD        │\n"+
+		"  │                                                   │\n"+
+		"  │   Username : admin                                │\n"+
+		"  │   Password : %-34s│\n"+
+		"  │                                                   │\n"+
+		"  │   Please log in and change this password now.     │\n"+
+		"  └─────────────────────────────────────────────────┘\n\n",
+		tempPassword)
+
 	return c.SaveAdmin()
 }
 

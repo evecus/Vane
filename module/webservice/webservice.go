@@ -21,6 +21,81 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// validateBackendURL rejects backend URLs that could be used for SSRF attacks.
+// Only http:// and https:// schemes are permitted, and the resolved host must
+// not be a loopback, link-local, or RFC-1918 private address (unless it is
+// explicitly 127.0.0.1 / [::1] pointing to a local service — those are still
+// blocked because the admin is the only legitimate user of this panel and can
+// reach local services through other means).
+func validateBackendURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("backend URL scheme must be http or https, got %q", u.Scheme)
+	}
+	hostname := u.Hostname()
+	if hostname == "" {
+		return fmt.Errorf("backend URL has no host")
+	}
+
+	// Block by literal hostname strings first (covers "localhost" variants)
+	lower := strings.ToLower(hostname)
+	blockedHosts := []string{"localhost", "ip6-localhost", "ip6-loopback"}
+	for _, h := range blockedHosts {
+		if lower == h {
+			return fmt.Errorf("backend URL points to a blocked host %q", hostname)
+		}
+	}
+
+	// Resolve and check IP ranges
+	ips, err := net.LookupHost(hostname)
+	if err != nil {
+		// If resolution fails we still allow the URL — the proxy will simply fail
+		// at runtime. We only block IPs we can positively identify as internal.
+		return nil
+	}
+	for _, ipStr := range ips {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			continue
+		}
+		if isBlockedIP(ip) {
+			return fmt.Errorf("backend URL resolves to a blocked IP address %s", ipStr)
+		}
+	}
+	return nil
+}
+
+// isBlockedIP returns true for loopback, link-local, and private (RFC-1918 / RFC-4193) addresses.
+func isBlockedIP(ip net.IP) bool {
+	blockedCIDRs := []string{
+		"127.0.0.0/8",    // IPv4 loopback
+		"::1/128",        // IPv6 loopback
+		"169.254.0.0/16", // IPv4 link-local
+		"fe80::/10",      // IPv6 link-local
+		"10.0.0.0/8",     // RFC-1918
+		"172.16.0.0/12",  // RFC-1918
+		"192.168.0.0/16", // RFC-1918
+		"fc00::/7",       // IPv6 unique-local (RFC-4193)
+		"100.64.0.0/10",  // CGNAT (RFC-6598)
+		"0.0.0.0/8",      // "This" network
+		"240.0.0.0/4",    // Reserved
+	}
+	for _, cidr := range blockedCIDRs {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			continue
+		}
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 // ─── Access log store ─────────────────────────────────────────────────────────
 
 const maxLogs = 2000
@@ -437,6 +512,10 @@ func (m *Manager) buildRouter(svc *config.WebService) http.Handler {
 	entries := make([]entry, 0, len(svc.Routes))
 	for _, route := range svc.Routes {
 		if !route.Enabled {
+			continue
+		}
+		if err := validateBackendURL(route.BackendURL); err != nil {
+			log.Printf("[webservice] blocked backend %q: %v", route.BackendURL, err)
 			continue
 		}
 		target, err := url.Parse(route.BackendURL)

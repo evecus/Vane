@@ -74,10 +74,12 @@ func main() {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
-	// CORS: restrict to same host by default
+	// CORS: restrict to same host by default.
+	// "0.0.0.0" is not a valid browser Origin — use "localhost" so the
+	// CORS header actually matches browser-initiated requests.
 	allowedOrigin := os.Getenv("VANE_CORS_ORIGIN")
 	if allowedOrigin == "" {
-		allowedOrigin = fmt.Sprintf("http://0.0.0.0:%d", cfg.Admin.Port)
+		allowedOrigin = fmt.Sprintf("http://localhost:%d", cfg.Admin.Port)
 	}
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{allowedOrigin},
@@ -87,6 +89,7 @@ func main() {
 	}))
 
 	apiHandler := api.NewHandler(cfg, pfManager, ddnsManager, wsManager, tlsManager, Version, disableSysinfo)
+	api.InitSessions(dd.DB())
 	apiHandler.Register(r)
 
 	r.Use(api.SafeEntryMiddleware(cfg))

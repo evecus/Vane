@@ -19,7 +19,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -263,9 +262,10 @@ func (h *Handler) logout(c *gin.Context) {
 func (h *Handler) authMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := c.GetHeader("Authorization")
-		if token == "" {
-			token = c.Query("token")
-		}
+		// NOTE: We deliberately do NOT fall back to c.Query("token") here.
+		// Tokens in URL query strings appear in server logs, browser history,
+		// and Referer headers, making them easy to leak. The WebSocket client
+		// must pass the token via the Authorization header on the upgrade request.
 		if token == "" {
 			c.JSON(401, gin.H{"error": "unauthorized"})
 			c.Abort()
@@ -312,6 +312,27 @@ func (h *Handler) wsStats(c *gin.Context) {
 		return
 	}
 	defer conn.Close()
+
+	// Authentication: read token from first message (sent by client immediately after connect).
+	// This avoids exposing the token in the URL (server logs, browser history, Referer headers).
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, msg, err := conn.ReadMessage()
+	if err != nil {
+		_ = conn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "auth required"))
+		return
+	}
+	_ = conn.SetReadDeadline(time.Time{}) // reset deadline
+
+	token := strings.TrimSpace(string(msg))
+	exp, ok := sessions.get(token)
+	if !ok || time.Now().After(exp) {
+		sessions.delete(token)
+		_ = conn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "unauthorized"))
+		return
+	}
+
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
@@ -393,12 +414,16 @@ func (h *Handler) updateSettings(c *gin.Context) {
 	oldPort := h.cfg.Admin.Port
 	oldSafeEntry := h.cfg.Admin.SafeEntry
 	// Require current password confirmation before changing credentials
-	if req.NewPassword != "" {
+	// (both password change AND username change require verification).
+	credentialChange := req.NewPassword != "" || (req.Username != "" && req.Username != h.cfg.Admin.Username)
+	if credentialChange {
 		if !h.cfg.Admin.CheckPassword(req.CurrentPassword) {
 			h.cfg.Unlock()
 			c.JSON(403, gin.H{"error": "当前密码错误"})
 			return
 		}
+	}
+	if req.NewPassword != "" {
 		if err := h.cfg.Admin.SetPassword(req.NewPassword); err != nil {
 			h.cfg.Unlock()
 			c.JSON(500, gin.H{"error": "密码设置失败"})
@@ -446,21 +471,23 @@ func (h *Handler) updateSettings(c *gin.Context) {
 
 // restartSelf re-executes the current binary with the same arguments and
 // environment, effectively restarting the server on the newly configured port.
-// If exec fails (e.g. binary path unavailable) we fall back to os.Exit so that
-// a process supervisor (systemd, Docker restart policy, etc.) will relaunch us.
+// On Unix we use syscall.Exec (in-process replacement, zero downtime).
+// On other platforms (Windows) we spawn a child process and exit, relying on
+// the process supervisor to handle the transition.
+// restartExec is defined in restart_unix.go / restart_other.go via build tags.
 func restartSelf() {
 	exe, err := os.Executable()
 	if err != nil {
 		log.Printf("restart: os.Executable error: %v — falling back to os.Exit", err)
 		os.Exit(0)
 	}
-	// Resolve symlinks so syscall.Exec gets the real binary path.
+	// Resolve symlinks so the exec call gets the real binary path.
 	if real, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = real
 	}
 	log.Printf("restart: re-executing %s %v", exe, os.Args[1:])
-	if err := syscall.Exec(exe, os.Args, os.Environ()); err != nil {
-		log.Printf("restart: syscall.Exec error: %v — falling back to os.Exit", err)
+	if err := restartExec(exe, os.Args, os.Environ()); err != nil {
+		log.Printf("restart: exec error: %v — falling back to os.Exit", err)
 		os.Exit(0)
 	}
 }
@@ -1407,9 +1434,14 @@ func (h *Handler) uploadCert(c *gin.Context) {
 	}
 	defer file.Close()
 
-	raw, err := io.ReadAll(file)
+	const maxUploadSize = 5 << 20 // 5 MB — ample for a cert+key ZIP
+	raw, err := io.ReadAll(io.LimitReader(file, maxUploadSize+1))
 	if err != nil {
 		c.JSON(400, gin.H{"error": "读取文件失败"})
+		return
+	}
+	if int64(len(raw)) > maxUploadSize {
+		c.JSON(400, gin.H{"error": "文件过大，最大允许 5 MB"})
 		return
 	}
 
@@ -1583,9 +1615,10 @@ func (h *Handler) getCertPEM(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "cert not found"})
 		return
 	}
+	// Return only the public certificate — never expose the private key via API.
+	// Use the /download endpoint to obtain the full cert+key bundle.
 	c.JSON(200, gin.H{
 		"cert_pem": found.CertPEM,
-		"key_pem":  found.KeyPEM,
 		"domain":   found.Domain,
 	})
 }
