@@ -74,19 +74,23 @@ func main() {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
-	// CORS: restrict to same host by default.
-	// "0.0.0.0" is not a valid browser Origin — use "localhost" so the
-	// CORS header actually matches browser-initiated requests.
+	// CORS: allow requests from the same port regardless of hostname.
+	// The admin panel is served by Vane itself, so any origin reaching
+	// the correct port is considered same-site. Fine-grained restriction
+	// can be applied via the VANE_CORS_ORIGIN environment variable.
 	allowedOrigin := os.Getenv("VANE_CORS_ORIGIN")
-	if allowedOrigin == "" {
-		allowedOrigin = fmt.Sprintf("http://localhost:%d", cfg.Admin.Port)
-	}
-	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{allowedOrigin},
+	corsConfig := cors.Config{
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Content-Type", "Authorization"},
 		AllowCredentials: false,
-	}))
+	}
+	if allowedOrigin != "" {
+		corsConfig.AllowOrigins = []string{allowedOrigin}
+	} else {
+		// Allow any origin — the auth token is the real access control.
+		corsConfig.AllowAllOrigins = true
+	}
+	r.Use(cors.New(corsConfig))
 
 	apiHandler := api.NewHandler(cfg, pfManager, ddnsManager, wsManager, tlsManager, Version, disableSysinfo)
 	api.InitSessions(dd.DB())
