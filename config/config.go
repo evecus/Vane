@@ -845,43 +845,17 @@ func (c *Config) Import(data []byte) error {
 // ─── Init defaults ────────────────────────────────────────────────────────────
 
 // initDefaults sets up the initial admin account on first run.
-// No hardcoded default password is used — a cryptographically random
-// temporary password is generated and printed to stdout once so the
-// operator can log in and set a proper password immediately.
+// Default credentials are admin / admin — the dashboard will prompt
+// the user to change the password on first login.
 func (c *Config) initDefaults() error {
-	// Generate a random 12-character alphanumeric temporary password.
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	buf := make([]byte, 12)
-	if _, err := rand.Read(buf); err != nil {
-		return fmt.Errorf("generate temp password: %w", err)
-	}
-	for i, b := range buf {
-		buf[i] = charset[int(b)%len(charset)]
-	}
-	tempPassword := string(buf)
-
 	c.Admin = AdminConfig{Username: "admin", Port: 4455}
-	if err := c.Admin.SetPassword(tempPassword); err != nil {
+	if err := c.Admin.SetPassword("admin"); err != nil {
 		return err
 	}
 	c.PortForwards = []PortForwardRule{}
 	c.DDNS = []DDNSRule{}
 	c.WebServices = []WebService{}
 	c.TLSCerts = []TLSCert{}
-
-	// Print the temporary password prominently so the operator sees it.
-	// It is intentionally NOT logged so it does not end up in log files.
-	fmt.Printf("\n"+
-		"  ┌─────────────────────────────────────────────────┐\n"+
-		"  │         🔑  FIRST RUN — TEMPORARY PASSWORD        │\n"+
-		"  │                                                   │\n"+
-		"  │   Username : admin                                │\n"+
-		"  │   Password : %-34s│\n"+
-		"  │                                                   │\n"+
-		"  │   Please log in and change this password now.     │\n"+
-		"  └─────────────────────────────────────────────────┘\n\n",
-		tempPassword)
-
 	return c.SaveAdmin()
 }
 
