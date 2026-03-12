@@ -42,8 +42,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          #cache: 'npm'
-          #cache-dependency-path: web/package-lock.json
 
       - name: Install frontend dependencies
         working-directory: web
@@ -90,8 +88,9 @@ jobs:
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         with:
+          tag_name: ${{ steps.ver.outputs.value }}
           name: "Vane ${{ steps.ver.outputs.value }}"
           body: |
             ## 🌀 Vane ${{ steps.ver.outputs.value }}
@@ -108,9 +107,8 @@ jobs:
             chmod +x vane-linux-amd64
             ./vane-linux-amd64
 
-            # 访问管理界面
-            # http://your-ip:4455
-            # 默认账号: admin / vane1234
+            # 首次启动会在终端打印随机生成的临时密码，请登录后立即修改
+            # 访问管理界面: http://your-ip:4455
             ```
 
             ### 更新日志
@@ -121,14 +119,3 @@ jobs:
             sha256sums.txt
           draft: false
           prerelease: false
-
-      - name: Upload artifacts (non-tag builds)
-        uses: actions/upload-artifact@v4
-        if: "!startsWith(github.ref, 'refs/tags/')"
-        with:
-          name: vane-binaries
-          path: |
-            vane-linux-amd64
-            vane-linux-arm64
-            sha256sums.txt
-          retention-days: 7
