@@ -9,7 +9,7 @@ on:
       version:
         description: '发布版本号 (例如: v1.0.0)'
         required: true
-        default: 'test'
+        default: 'v1.0.'
 
 permissions:
   contents: write
