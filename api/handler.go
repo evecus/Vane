@@ -1429,25 +1429,49 @@ func (h *Handler) uploadCert(c *gin.Context) {
 		return
 	}
 
-	var certPEM, keyPEM string
+	var certPEM, keyPEM, issuerPEM string
 	for _, f := range zr.File {
 		name := strings.ToLower(filepath.Base(f.Name))
+		ext := filepath.Ext(name)
 		rc, err := f.Open()
 		if err != nil {
 			continue
 		}
 		content, _ := io.ReadAll(rc)
 		rc.Close()
+		text := string(content)
+
+		// Match by exact filename first (common formats)
 		switch name {
 		case "cert.pem", "fullchain.pem", "certificate.pem":
-			certPEM = string(content)
-		case "key.pem", "privkey.pem", "private.pem":
-			keyPEM = string(content)
+			certPEM = text
+			continue
+		case "key.pem", "privkey.pem", "private.pem", "privatekey.pem":
+			keyPEM = text
+			continue
+		}
+
+		// Match by extension and content for separated format (域名.crt / 域名.key etc.)
+		switch ext {
+		case ".key":
+			keyPEM = text
+		case ".crt", ".pem", ".cer":
+			// Distinguish server cert vs issuer cert by filename suffix
+			if strings.HasSuffix(strings.TrimSuffix(name, ext), "_issuercertificate") {
+				issuerPEM = text
+			} else if certPEM == "" {
+				certPEM = text
+			}
 		}
 	}
 
+	// Merge server cert + issuer cert into a full chain (standard practice)
+	if issuerPEM != "" && certPEM != "" {
+		certPEM = certPEM + issuerPEM
+	}
+
 	if certPEM == "" || keyPEM == "" {
-		c.JSON(400, gin.H{"error": "ZIP 中未找到证书文件（需包含 cert.pem/fullchain.pem 和 key.pem/privkey.pem）"})
+		c.JSON(400, gin.H{"error": "ZIP 中未找到证书文件（支持 .crt/.pem/.key 或 cert.pem/key.pem 格式）"})
 		return
 	}
 
