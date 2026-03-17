@@ -22,12 +22,10 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// validateBackendURL rejects backend URLs that could be used for SSRF attacks.
-// Only http:// and https:// schemes are permitted, and the resolved host must
-// not be a loopback, link-local, or RFC-1918 private address (unless it is
-// explicitly 127.0.0.1 / [::1] pointing to a local service — those are still
-// blocked because the admin is the only legitimate user of this panel and can
-// reach local services through other means).
+// validateBackendURL checks that the backend URL has a valid http/https scheme.
+// Local and private addresses are intentionally allowed — the web service is
+// a reverse proxy configured by the admin, and proxying to local services
+// (e.g. http://127.0.0.1:8080) is a primary use case.
 func validateBackendURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -37,64 +35,10 @@ func validateBackendURL(raw string) error {
 	if scheme != "http" && scheme != "https" {
 		return fmt.Errorf("backend URL scheme must be http or https, got %q", u.Scheme)
 	}
-	hostname := u.Hostname()
-	if hostname == "" {
+	if u.Hostname() == "" {
 		return fmt.Errorf("backend URL has no host")
 	}
-
-	// Block by literal hostname strings first (covers "localhost" variants)
-	lower := strings.ToLower(hostname)
-	blockedHosts := []string{"localhost", "ip6-localhost", "ip6-loopback"}
-	for _, h := range blockedHosts {
-		if lower == h {
-			return fmt.Errorf("backend URL points to a blocked host %q", hostname)
-		}
-	}
-
-	// Resolve and check IP ranges
-	ips, err := net.LookupHost(hostname)
-	if err != nil {
-		// If resolution fails we still allow the URL — the proxy will simply fail
-		// at runtime. We only block IPs we can positively identify as internal.
-		return nil
-	}
-	for _, ipStr := range ips {
-		ip := net.ParseIP(ipStr)
-		if ip == nil {
-			continue
-		}
-		if isBlockedIP(ip) {
-			return fmt.Errorf("backend URL resolves to a blocked IP address %s", ipStr)
-		}
-	}
 	return nil
-}
-
-// isBlockedIP returns true for loopback, link-local, and private (RFC-1918 / RFC-4193) addresses.
-func isBlockedIP(ip net.IP) bool {
-	blockedCIDRs := []string{
-		"127.0.0.0/8",    // IPv4 loopback
-		"::1/128",        // IPv6 loopback
-		"169.254.0.0/16", // IPv4 link-local
-		"fe80::/10",      // IPv6 link-local
-		"10.0.0.0/8",     // RFC-1918
-		"172.16.0.0/12",  // RFC-1918
-		"192.168.0.0/16", // RFC-1918
-		"fc00::/7",       // IPv6 unique-local (RFC-4193)
-		"100.64.0.0/10",  // CGNAT (RFC-6598)
-		"0.0.0.0/8",      // "This" network
-		"240.0.0.0/4",    // Reserved
-	}
-	for _, cidr := range blockedCIDRs {
-		_, network, err := net.ParseCIDR(cidr)
-		if err != nil {
-			continue
-		}
-		if network.Contains(ip) {
-			return true
-		}
-	}
-	return false
 }
 
 // ─── Access log store ─────────────────────────────────────────────────────────
@@ -513,26 +457,20 @@ func (m *Manager) Stop(id string) {
 	}
 }
 
-// buildRouter 按 Host header 分发到对应后端
+// buildRouter 按 Host header 分发到对应后端。
+// 路由表在每次请求时从 config 动态读取，无需重启服务即可感知新增/修改/删除的路由。
+// ReverseProxy 实例按 backendURL 缓存在 proxyCache 中避免重复创建。
 func (m *Manager) buildRouter(svc *config.WebService) http.Handler {
-	type entry struct {
-		route config.WebRoute
-		proxy *httputil.ReverseProxy
-	}
+	svcID := svc.ID
+	var proxyCache sync.Map // key: backendURL string → *httputil.ReverseProxy
 
-	entries := make([]entry, 0, len(svc.Routes))
-	for _, route := range svc.Routes {
-		if !route.Enabled {
-			continue
+	getProxy := func(backendURL string) (*httputil.ReverseProxy, error) {
+		if v, ok := proxyCache.Load(backendURL); ok {
+			return v.(*httputil.ReverseProxy), nil
 		}
-		if err := validateBackendURL(route.BackendURL); err != nil {
-			log.Printf("[webservice] blocked backend %q: %v", route.BackendURL, err)
-			continue
-		}
-		target, err := url.Parse(route.BackendURL)
+		target, err := url.Parse(backendURL)
 		if err != nil {
-			log.Printf("[webservice] invalid backend %q: %v", route.BackendURL, err)
-			continue
+			return nil, err
 		}
 		proxy := httputil.NewSingleHostReverseProxy(target)
 		orig := proxy.Director
@@ -544,10 +482,9 @@ func (m *Manager) buildRouter(svc *config.WebService) http.Handler {
 			log.Printf("[webservice] proxy error %s: %v", r.URL, err)
 			http.Error(w, "Bad Gateway", http.StatusBadGateway)
 		}
-		entries = append(entries, entry{route: route, proxy: proxy})
+		proxyCache.Store(backendURL, proxy)
+		return proxy, nil
 	}
-
-	svcID := svc.ID
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := r.Host
@@ -555,46 +492,81 @@ func (m *Manager) buildRouter(svc *config.WebService) http.Handler {
 			host = h
 		}
 
+		// Dynamically read current routes from config on every request
+		m.cfg.RLock()
+		var matchedRoute *config.WebRoute
+		var matchedBackend string
+		for _, ws := range m.cfg.WebServices {
+			if ws.ID != svcID {
+				continue
+			}
+			for _, route := range ws.Routes {
+				if !route.Enabled {
+					continue
+				}
+				routeDomain := strings.TrimPrefix(strings.ToLower(route.Domain), "www.")
+				reqDomain := strings.TrimPrefix(strings.ToLower(host), "www.")
+				if routeDomain == reqDomain {
+					r := route
+					matchedRoute = &r
+					matchedBackend = route.BackendURL
+					break
+				}
+			}
+			break
+		}
+		m.cfg.RUnlock()
+
+		if matchedRoute == nil {
+			log.Printf("[webservice] no matching route for host: %s (svc %s)", host, svcID)
+			http.Error(w, "No matching route for host: "+host, http.StatusBadGateway)
+			logAccess(svcID, "", "", host, r)
+			return
+		}
+
+		if err := validateBackendURL(matchedBackend); err != nil {
+			log.Printf("[webservice] invalid backend %q: %v", matchedBackend, err)
+			http.Error(w, "Bad Gateway", http.StatusBadGateway)
+			logAccess(svcID, matchedRoute.ID, matchedRoute.Name, matchedRoute.Domain, r)
+			return
+		}
+
+		proxy, err := getProxy(matchedBackend)
+		if err != nil {
+			log.Printf("[webservice] parse backend %q: %v", matchedBackend, err)
+			http.Error(w, "Bad Gateway", http.StatusBadGateway)
+			logAccess(svcID, matchedRoute.ID, matchedRoute.Name, matchedRoute.Domain, r)
+			return
+		}
+
 		rr := &responseRecorder{ResponseWriter: w, status: 200}
 
-		for _, e := range entries {
-			routeDomain := strings.TrimPrefix(e.route.Domain, "www.")
-			reqDomain := strings.TrimPrefix(host, "www.")
-			if strings.EqualFold(routeDomain, reqDomain) {
-				// Basic Auth check with session cookie to avoid repeated prompts
-				if e.route.AuthEnabled && e.route.AuthPassHash != "" {
-					cookieName := "vane_auth_" + e.route.ID[:8]
-					sessionToken := authSessionToken(e.route.ID, e.route.AuthPassHash)
-					// Check if valid session cookie already exists
-					if cookie, err := r.Cookie(cookieName); err != nil || cookie.Value != sessionToken {
-						// No valid cookie — check Basic Auth credentials
-						user, pass, ok := r.BasicAuth()
-						if !ok || user != e.route.AuthUser || bcrypt.CompareHashAndPassword([]byte(e.route.AuthPassHash), []byte(pass)) != nil {
-							w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
-							http.Error(w, "Unauthorized", http.StatusUnauthorized)
-							logAccess(svcID, e.route.ID, e.route.Name, e.route.Domain, r)
-							return
-						}
-						// Credentials valid — set session cookie (7 days)
-						http.SetCookie(w, &http.Cookie{
-							Name:     cookieName,
-							Value:    sessionToken,
-							Path:     "/",
-							MaxAge:   7 * 24 * 3600,
-							HttpOnly: true,
-							Secure:   true,
-							SameSite: http.SameSiteLaxMode,
-						})
-					}
+		// Basic Auth check with session cookie to avoid repeated prompts
+		if matchedRoute.AuthEnabled && matchedRoute.AuthPassHash != "" {
+			cookieName := "vane_auth_" + matchedRoute.ID[:8]
+			sessionToken := authSessionToken(matchedRoute.ID, matchedRoute.AuthPassHash)
+			if cookie, err := r.Cookie(cookieName); err != nil || cookie.Value != sessionToken {
+				user, pass, ok := r.BasicAuth()
+				if !ok || user != matchedRoute.AuthUser || bcrypt.CompareHashAndPassword([]byte(matchedRoute.AuthPassHash), []byte(pass)) != nil {
+					w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
+					http.Error(w, "Unauthorized", http.StatusUnauthorized)
+					logAccess(svcID, matchedRoute.ID, matchedRoute.Name, matchedRoute.Domain, r)
+					return
 				}
-				e.proxy.ServeHTTP(rr, r)
-				logAccess(svcID, e.route.ID, e.route.Name, e.route.Domain, r)
-				return
+				http.SetCookie(w, &http.Cookie{
+					Name:     cookieName,
+					Value:    sessionToken,
+					Path:     "/",
+					MaxAge:   7 * 24 * 3600,
+					HttpOnly: true,
+					Secure:   true,
+					SameSite: http.SameSiteLaxMode,
+				})
 			}
 		}
 
-		http.Error(w, "No matching route for host: "+host, http.StatusBadGateway)
-		logAccess(svcID, "", "", host, r)
+		proxy.ServeHTTP(rr, r)
+		logAccess(svcID, matchedRoute.ID, matchedRoute.Name, matchedRoute.Domain, r)
 	})
 }
 
