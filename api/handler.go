@@ -794,16 +794,19 @@ func (h *Handler) refreshDDNS(c *gin.Context) {
 func (h *Handler) listWebServices(c *gin.Context) {
 	h.cfg.RLock()
 	svcs := make([]config.WebService, len(h.cfg.WebServices))
-	copy(svcs, h.cfg.WebServices)
-	h.cfg.RUnlock()
-	// Never expose password hashes to frontend — replace with a boolean indicator
-	for i := range svcs {
-		for j := range svcs[i].Routes {
-			if svcs[i].Routes[j].AuthPassHash != "" {
-				svcs[i].Routes[j].AuthPassHash = "set" // signal to frontend that a password exists
+	for i, svc := range h.cfg.WebServices {
+		svcs[i] = svc
+		// Deep-copy Routes so we can safely modify AuthPassHash without touching h.cfg
+		routes := make([]config.WebRoute, len(svc.Routes))
+		for j, route := range svc.Routes {
+			if route.AuthPassHash != "" {
+				route.AuthPassHash = "set" // signal to frontend that a password exists
 			}
+			routes[j] = route
 		}
+		svcs[i].Routes = routes
 	}
+	h.cfg.RUnlock()
 	c.JSON(200, svcs)
 }
 
