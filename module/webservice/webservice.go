@@ -500,12 +500,11 @@ func (m *Manager) buildRouter(svc *config.WebService) http.Handler {
 			}
 			req.Header.Set("X-Forwarded-For", clientIP)
 			req.Header.Set("X-Real-IP", clientIP)
-			if req.TLS != nil || svc.EnableHTTPS {
+			if svc.EnableHTTPS {
 				req.Header.Set("X-Forwarded-Proto", "https")
 			} else {
 				req.Header.Set("X-Forwarded-Proto", "http")
 			}
-			// Delete hop-by-hop headers
 			req.Header.Del("Te")
 			req.Header.Del("Trailers")
 		}
@@ -576,7 +575,11 @@ func (m *Manager) buildRouter(svc *config.WebService) http.Handler {
 		if matchedRoute.AuthEnabled && matchedRoute.AuthPassHash != "" {
 			cookieName := "vane_auth_" + matchedRoute.ID[:8]
 			sessionToken := authSessionToken(matchedRoute.ID, matchedRoute.AuthPassHash)
-			if cookie, err := r.Cookie(cookieName); err != nil || cookie.Value != sessionToken {
+			cookieOK := false
+			if cookie, err := r.Cookie(cookieName); err == nil && cookie.Value == sessionToken {
+				cookieOK = true
+			}
+			if !cookieOK {
 				user, pass, ok := r.BasicAuth()
 				if !ok || user != matchedRoute.AuthUser || bcrypt.CompareHashAndPassword([]byte(matchedRoute.AuthPassHash), []byte(pass)) != nil {
 					w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
@@ -584,15 +587,20 @@ func (m *Manager) buildRouter(svc *config.WebService) http.Handler {
 					logAccess(svcID, matchedRoute.ID, matchedRoute.Name, matchedRoute.Domain, r)
 					return
 				}
+				// Credentials valid: set cookie and redirect to the same URL so the
+				// browser replays the request with the cookie (avoids WriteHeader race
+				// where proxy response would overwrite our Set-Cookie header).
 				http.SetCookie(w, &http.Cookie{
 					Name:     cookieName,
 					Value:    sessionToken,
 					Path:     "/",
-					MaxAge:   7 * 24 * 3600,
+					MaxAge:   24 * 3600,
 					HttpOnly: true,
-					Secure:   true,
+					Secure:   svc.EnableHTTPS,
 					SameSite: http.SameSiteLaxMode,
 				})
+				http.Redirect(w, r, r.RequestURI, http.StatusFound)
+				return
 			}
 		}
 
