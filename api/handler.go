@@ -1534,6 +1534,15 @@ func (h *Handler) downloadCert(c *gin.Context) {
 		return
 	}
 
+	// Split cert chain: lego returns server cert + intermediate(s) concatenated.
+	// The first PEM block is the server cert; the rest are intermediate/issuer certs.
+	serverCert, issuerCert := splitCertChain(found.CertPEM)
+
+	safeName := sanitizeFilename(found.Domain)
+	if safeName == "" {
+		safeName = "cert"
+	}
+
 	// Build zip in memory
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
@@ -1547,8 +1556,12 @@ func (h *Handler) downloadCert(c *gin.Context) {
 		return err
 	}
 
-	_ = addFile("cert.pem", found.CertPEM)
-	_ = addFile("key.pem", found.KeyPEM)
+	_ = addFile(safeName+".crt", serverCert)
+	_ = addFile(safeName+".pem", serverCert)
+	_ = addFile(safeName+".key", found.KeyPEM)
+	if issuerCert != "" {
+		_ = addFile(safeName+"_issuerCertificate.crt", issuerCert)
+	}
 
 	// info.json with domains and metadata
 	domains := found.Domains
@@ -1568,10 +1581,6 @@ func (h *Handler) downloadCert(c *gin.Context) {
 
 	zw.Close()
 
-	safeName := sanitizeFilename(found.Domain)
-	if safeName == "" {
-		safeName = "cert"
-	}
 	c.Header("Content-Disposition", `attachment; filename="`+safeName+`-certs.zip"`)
 	c.Data(200, "application/zip", buf.Bytes())
 }
@@ -1637,4 +1646,27 @@ func sanitizeFilename(s string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// splitCertChain splits a PEM certificate chain into the server certificate
+// (first block) and the issuer/intermediate certificate(s) (remaining blocks).
+func splitCertChain(pemChain string) (serverCert, issuerCert string) {
+	var server, issuer strings.Builder
+	rest := []byte(pemChain)
+	first := true
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		encoded := string(pem.EncodeToMemory(block))
+		if first {
+			server.WriteString(encoded)
+			first = false
+		} else {
+			issuer.WriteString(encoded)
+		}
+	}
+	return server.String(), issuer.String()
 }
