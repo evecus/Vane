@@ -1198,29 +1198,35 @@ func (h *Handler) listCerts(c *gin.Context) {
 	h.cfg.RLock()
 	defer h.cfg.RUnlock()
 	type certView struct {
-		ID        string `json:"id"`
-		Name      string `json:"name"`
-		Domain    string `json:"domain"`
-		Domains   []string `json:"domains"`
-		Source    string `json:"source"`
-		CAProvider string `json:"ca_provider"`
-		Provider  string `json:"provider"`
-		IssuedAt  string `json:"issued_at"`
-		ExpiresAt string `json:"expires_at"`
-		AutoRenew bool   `json:"auto_renew"`
-		Status    string `json:"status"`
-		ErrorMsg  string `json:"error_msg,omitempty"`
-		DaysLeft  int    `json:"days_left"`
-		CreatedAt string `json:"created_at"`
+		ID           string              `json:"id"`
+		Name         string              `json:"name"`
+		Domain       string              `json:"domain"`
+		Domains      []string            `json:"domains"`
+		Source       string              `json:"source"`
+		CAProvider   string              `json:"ca_provider"`
+		Provider     string              `json:"provider"`
+		ProviderConf config.ProviderConf `json:"provider_conf"`
+		Email        string              `json:"email"`
+		IssuedAt     string              `json:"issued_at"`
+		ExpiresAt    string              `json:"expires_at"`
+		AutoRenew    bool                `json:"auto_renew"`
+		Status       string              `json:"status"`
+		ErrorMsg     string              `json:"error_msg,omitempty"`
+		DaysLeft     int                 `json:"days_left"`
+		CreatedAt    string              `json:"created_at"`
+		// HasCert indicates whether a certificate PEM is stored (without exposing the PEM itself)
+		HasCert bool `json:"has_cert"`
 	}
 	views := make([]certView, 0, len(h.cfg.TLSCerts))
 	for _, cert := range h.cfg.TLSCerts {
 		views = append(views, certView{
 			ID: cert.ID, Name: cert.Name, Domain: cert.Domain, Domains: cert.Domains,
 			Source: cert.Source, CAProvider: cert.CAProvider, Provider: cert.Provider,
+			ProviderConf: cert.ProviderConf, Email: cert.Email,
 			IssuedAt: cert.IssuedAt, ExpiresAt: cert.ExpiresAt, AutoRenew: cert.AutoRenew,
 			Status: cert.Status, ErrorMsg: cert.ErrorMsg,
 			DaysLeft: cert.DaysUntilExpiry(), CreatedAt: cert.CreatedAt,
+			HasCert: cert.CertPEM != "",
 		})
 	}
 	c.JSON(200, views)
@@ -1595,6 +1601,3 @@ func sanitizeFilename(s string) string {
 	}
 	return b.String()
 }
-
-
-
