@@ -49,7 +49,7 @@
                :class="isActive(item.to) ? 'bg-white/20' : 'bg-slate-100 group-hover:bg-slate-200'">
             <component :is="item.icon" :size="16" />
           </div>
-          <span class="flex-1">{{ item.label }}</span>
+          <span class="flex-1 font-semibold">{{ item.label }}</span>
         </router-link>
 
         <div class="px-3 pb-1 pt-4">
@@ -64,7 +64,8 @@
                :class="isActive('/settings') ? 'bg-white/20' : 'bg-slate-100'">
             <Settings :size="16" />
           </div>
-          {{ i18n.t('settings') }}
+          
+          <span class="font-semibold">{{ i18n.t('settings') }}</span>
         </router-link>
       </nav>
 
