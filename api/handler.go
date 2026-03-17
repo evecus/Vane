@@ -808,7 +808,6 @@ func (h *Handler) createWebService(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "无效端口"})
 		return
 	}
-	svc.EnableHTTPS = true
 	if svc.Enabled && !config.IsPortAvailable(svc.ListenPort) {
 		c.JSON(409, gin.H{"error": "端口已被占用", "port": svc.ListenPort})
 		return
@@ -840,7 +839,6 @@ func (h *Handler) updateWebService(c *gin.Context) {
 		c.JSON(400, gin.H{"error": err.Error()})
 		return
 	}
-	req.EnableHTTPS = true // always
 	h.ws.Stop(id)
 	if req.Enabled && !config.IsPortAvailable(req.ListenPort) {
 		c.JSON(409, gin.H{"error": "端口已被占用", "port": req.ListenPort})

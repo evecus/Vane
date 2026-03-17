@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yourusername/vane/config"
@@ -267,7 +268,21 @@ type managedServer struct {
 	http80Srv *http.Server // optional :80 → HTTPS redirect server
 	httpLn    *chanListener
 	httpsLn   *chanListener
-	certMap   map[string]tls.Certificate // prebuilt at startup, keyed by lowercase domain
+	// certMap is updated atomically whenever certificates change — no restart needed.
+	// Holds a map[string]tls.Certificate keyed by lowercase domain/wildcard.
+	certMap atomic.Value // stores map[string]tls.Certificate
+}
+
+func (ms *managedServer) loadCertMap() map[string]tls.Certificate {
+	v := ms.certMap.Load()
+	if v == nil {
+		return map[string]tls.Certificate{}
+	}
+	return v.(map[string]tls.Certificate)
+}
+
+func (ms *managedServer) storeCertMap(m map[string]tls.Certificate) {
+	ms.certMap.Store(m)
 }
 
 func (ms *managedServer) close() {
@@ -369,12 +384,6 @@ func (m *Manager) Start(id string) error {
 	}
 
 	// ── HTTPS 模式（含 HTTP→HTTPS 重定向）────────────────────────────────────
-	// 收集所有有匹配证书的路由，至少要有一个才能启动
-	certMap := m.buildCertMap(svc)
-	if len(certMap) == 0 {
-		return fmt.Errorf("service %q: TLS enabled but no routes have a matched certificate", svc.Name)
-	}
-
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
@@ -388,8 +397,9 @@ func (m *Manager) Start(id string) error {
 		sniff:   sl,
 		httpLn:  httpLn,
 		httpsLn: httpsLn,
-		certMap: certMap,
 	}
+	// Store initial certMap (may be empty if certs not yet issued — will be hot-updated)
+	ms.storeCertMap(m.buildCertMap(svc))
 
 	httpsPort := svc.ListenPort
 
@@ -424,20 +434,21 @@ func (m *Manager) Start(id string) error {
 	tlsCfg := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			certMap := ms.loadCertMap()
 			serverName := strings.ToLower(hello.ServerName)
-			if c, ok := ms.certMap[serverName]; ok {
+			if c, ok := certMap[serverName]; ok {
 				return &c, nil
 			}
 			// 通配符回退
 			parts := strings.SplitN(serverName, ".", 2)
 			if len(parts) == 2 {
 				wildcard := "*." + parts[1]
-				if c, ok := ms.certMap[wildcard]; ok {
+				if c, ok := certMap[wildcard]; ok {
 					return &c, nil
 				}
 			}
 			// 兜底取第一个
-			for _, c := range ms.certMap {
+			for _, c := range certMap {
 				cc := c
 				return &cc, nil
 			}
@@ -770,6 +781,25 @@ func (m *Manager) RematchAllRoutes() {
 	for i := range pairs {
 		r := pairs[i].route
 		m.MatchRouteCert(pairs[i].svcID, &r)
+	}
+
+	// Hot-reload certMap for every running HTTPS service — no restart needed.
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, ms := range m.servers {
+		m.cfg.RLock()
+		var svc *config.WebService
+		for i := range m.cfg.WebServices {
+			if m.cfg.WebServices[i].ID == id {
+				s := m.cfg.WebServices[i]
+				svc = &s
+				break
+			}
+		}
+		m.cfg.RUnlock()
+		if svc != nil && svc.EnableHTTPS {
+			ms.storeCertMap(m.buildCertMap(svc))
+		}
 	}
 }
 
