@@ -54,6 +54,7 @@ func (h *Handler) Register(r *gin.Engine) {
 
 	// Dashboard
 	auth.GET("/dashboard", h.getDashboard)
+	auth.GET("/admin/logs", h.getAdminLogs)
 
 	// Settings
 	auth.GET("/settings", h.getSettings)
@@ -219,6 +220,7 @@ func (h *Handler) login(c *gin.Context) {
 	ok := h.cfg.Admin.Username == req.Username && h.cfg.Admin.CheckPassword(req.Password)
 	h.cfg.RUnlock()
 	if !ok {
+		adminLogs.Add(AdminLoginRecord{IP: c.ClientIP(), Success: false, Time: time.Now().UTC().Format(time.RFC3339)})
 		c.JSON(401, gin.H{"error": "用户名或密码错误"})
 		return
 	}
@@ -227,6 +229,7 @@ func (h *Handler) login(c *gin.Context) {
 	delete(loginAttempts, c.ClientIP())
 	loginMu.Unlock()
 
+	adminLogs.Add(AdminLoginRecord{IP: c.ClientIP(), Success: true, Time: time.Now().UTC().Format(time.RFC3339)})
 	token := generateToken()
 	sessions.set(token, time.Now().Add(24*time.Hour))
 	c.JSON(200, gin.H{"token": token})
@@ -263,6 +266,10 @@ func (h *Handler) authMiddleware() gin.HandlerFunc {
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
+
+func (h *Handler) getAdminLogs(c *gin.Context) {
+	c.JSON(200, adminLogs.List())
+}
 
 func (h *Handler) getDashboard(c *gin.Context) {
 	h.cfg.RLock()
@@ -1628,6 +1635,3 @@ func sanitizeFilename(s string) string {
 	}
 	return b.String()
 }
-
-
-
