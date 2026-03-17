@@ -571,35 +571,46 @@ func (m *Manager) buildRouter(svc *config.WebService) http.Handler {
 
 		rr := &responseRecorder{ResponseWriter: w, status: 200}
 
-		// Basic Auth check with session cookie to avoid repeated prompts
+		// Custom login page — replaces browser-native Basic Auth popup
 		if matchedRoute.AuthEnabled && matchedRoute.AuthPassHash != "" {
 			cookieName := "vane_auth_" + matchedRoute.ID[:8]
 			sessionToken := authSessionToken(matchedRoute.ID, matchedRoute.AuthPassHash)
-			cookieOK := false
-			if cookie, err := r.Cookie(cookieName); err == nil && cookie.Value == sessionToken {
-				cookieOK = true
-			}
-			if !cookieOK {
-				user, pass, ok := r.BasicAuth()
-				if !ok || user != matchedRoute.AuthUser || bcrypt.CompareHashAndPassword([]byte(matchedRoute.AuthPassHash), []byte(pass)) != nil {
-					w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
-					http.Error(w, "Unauthorized", http.StatusUnauthorized)
-					logAccess(svcID, matchedRoute.ID, matchedRoute.Name, matchedRoute.Domain, r)
+
+			// Check valid session cookie
+			if cookie, err := r.Cookie(cookieName); err != nil || cookie.Value != sessionToken {
+				// Handle login form POST
+				if r.Method == http.MethodPost && r.URL.Path == "/__vane_login__" {
+					_ = r.ParseForm()
+					user := r.FormValue("username")
+					pass := r.FormValue("password")
+					next := r.FormValue("next")
+					if next == "" {
+						next = "/"
+					}
+					if user == matchedRoute.AuthUser && bcrypt.CompareHashAndPassword([]byte(matchedRoute.AuthPassHash), []byte(pass)) == nil {
+						http.SetCookie(w, &http.Cookie{
+							Name:     cookieName,
+							Value:    sessionToken,
+							Path:     "/",
+							MaxAge:   24 * 3600,
+							HttpOnly: true,
+							Secure:   svc.EnableHTTPS,
+							SameSite: http.SameSiteLaxMode,
+						})
+						http.Redirect(w, r, next, http.StatusFound)
+						return
+					}
+					// Wrong credentials — show form again with error
+					w.Header().Set("Content-Type", "text/html; charset=utf-8")
+					w.WriteHeader(http.StatusUnauthorized)
+					w.Write([]byte(buildLoginPage(r.RequestURI, "用户名或密码错误", matchedRoute.Domain)))
 					return
 				}
-				// Credentials valid: set cookie and redirect to the same URL so the
-				// browser replays the request with the cookie (avoids WriteHeader race
-				// where proxy response would overwrite our Set-Cookie header).
-				http.SetCookie(w, &http.Cookie{
-					Name:     cookieName,
-					Value:    sessionToken,
-					Path:     "/",
-					MaxAge:   24 * 3600,
-					HttpOnly: true,
-					Secure:   svc.EnableHTTPS,
-					SameSite: http.SameSiteLaxMode,
-				})
-				http.Redirect(w, r, r.RequestURI, http.StatusFound)
+				// Show login form
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.WriteHeader(http.StatusUnauthorized)
+				w.Write([]byte(buildLoginPage(r.RequestURI, "", matchedRoute.Domain)))
+				logAccess(svcID, matchedRoute.ID, matchedRoute.Name, matchedRoute.Domain, r)
 				return
 			}
 		}
@@ -607,6 +618,74 @@ func (m *Manager) buildRouter(svc *config.WebService) http.Handler {
 		proxy.ServeHTTP(rr, r)
 		logAccess(svcID, matchedRoute.ID, matchedRoute.Name, matchedRoute.Domain, r)
 	})
+}
+
+// buildLoginPage returns a self-contained HTML login page.
+func buildLoginPage(next, errMsg, domain string) string {
+	errHTML := ""
+	if errMsg != "" {
+		errHTML = `<div class="error">` + errMsg + `</div>`
+	}
+	return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>登录 · ` + domain + `</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{min-height:100vh;display:flex;align-items:center;justify-content:center;
+     background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+.card{background:#fff;border-radius:16px;box-shadow:0 4px 24px rgba(0,0,0,.08);
+      padding:40px 36px;width:100%;max-width:380px}
+.logo{text-align:center;margin-bottom:28px}
+.logo .icon{display:inline-flex;align-items:center;justify-content:center;
+            width:52px;height:52px;border-radius:14px;background:#6366f1;margin-bottom:12px}
+.logo .icon svg{color:#fff}
+.logo h1{font-size:20px;font-weight:700;color:#1e293b}
+.logo p{font-size:13px;color:#94a3b8;margin-top:4px}
+label{display:block;font-size:13px;font-weight:600;color:#64748b;
+      text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}
+input[type=text],input[type=password]{width:100%;padding:11px 14px;border:1.5px solid #e2e8f0;
+  border-radius:10px;font-size:15px;color:#1e293b;background:#f8fafc;outline:none;transition:border .2s}
+input:focus{border-color:#6366f1;background:#fff}
+.field{margin-bottom:18px}
+button{width:100%;padding:12px;border:none;border-radius:10px;background:#6366f1;
+       color:#fff;font-size:15px;font-weight:600;cursor:pointer;margin-top:4px;transition:background .2s}
+button:hover{background:#4f46e5}
+button:active{transform:scale(.98)}
+.error{background:#fef2f2;border:1px solid #fecaca;color:#dc2626;
+       border-radius:10px;padding:10px 14px;font-size:13px;margin-bottom:18px;text-align:center}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <div class="icon">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z"/>
+        <path d="M9.879 16.121A3 3 0 1012.015 11L11 14H9c0 .768.293 1.536.879 2.121z"/>
+      </svg>
+    </div>
+    <h1>` + domain + `</h1>
+    <p>请登录以继续访问</p>
+  </div>
+  ` + errHTML + `
+  <form method="POST" action="/__vane_login__">
+    <input type="hidden" name="next" value="` + next + `">
+    <div class="field">
+      <label>用户名</label>
+      <input type="text" name="username" autocomplete="username" autofocus required>
+    </div>
+    <div class="field">
+      <label>密码</label>
+      <input type="password" name="password" autocomplete="current-password" required>
+    </div>
+    <button type="submit">登录 →</button>
+  </form>
+</div>
+</body>
+</html>`
 }
 
 func logAccess(svcID, routeID, routeName, domain string, r *http.Request) {
