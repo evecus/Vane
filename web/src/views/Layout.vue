@@ -158,31 +158,34 @@
           </div>
           <!-- 搜索 -->
           <div class="px-5 py-2.5 border-b border-slate-50 flex-shrink-0">
-            <input v-model="logSearch" class="input text-xs py-1.5 max-w-xs" placeholder="搜索 IP / 域名 / UA…" />
+            <input v-model="logSearch" class="input text-xs py-1.5 max-w-xs" placeholder="搜索 IP…" />
           </div>
           <!-- 表格 -->
           <div class="flex-1 overflow-auto">
-            <table class="w-full text-xs min-w-[500px]">
+            <table class="w-full text-xs min-w-[400px]">
               <thead class="bg-slate-50 sticky top-0">
                 <tr>
                   <th class="text-left px-4 py-2.5 font-semibold text-slate-500 whitespace-nowrap">时间</th>
-                  <th class="text-left px-4 py-2.5 font-semibold text-slate-500">路由</th>
-                  <th class="text-left px-4 py-2.5 font-semibold text-slate-500">域名</th>
                   <th class="text-left px-4 py-2.5 font-semibold text-slate-500">来源 IP</th>
-                  <th class="text-left px-4 py-2.5 font-semibold text-slate-500">UA</th>
+                  <th class="text-left px-4 py-2.5 font-semibold text-slate-500">结果</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="log in filteredLogs" :key="log.id"
+                <tr v-for="(log, i) in filteredLogs" :key="i"
                     class="border-t border-slate-50 hover:bg-slate-50 transition-colors">
                   <td class="px-4 py-2 font-mono text-slate-400 whitespace-nowrap">{{ formatTime(log.time) }}</td>
-                  <td class="px-4 py-2 text-slate-600">{{ log.route_name || '—' }}</td>
-                  <td class="px-4 py-2 font-mono font-semibold text-slate-700">{{ log.domain }}</td>
-                  <td class="px-4 py-2 font-mono text-slate-600">{{ log.client_ip }}</td>
-                  <td class="px-4 py-2 text-slate-400 max-w-[160px] truncate" :title="log.user_agent">{{ parseUA(log.user_agent) }}</td>
+                  <td class="px-4 py-2 font-mono text-slate-700">{{ log.ip }}</td>
+                  <td class="px-4 py-2">
+                    <span v-if="log.success" class="inline-flex items-center gap-1 text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full text-xs font-medium">
+                      ✓ 登录成功
+                    </span>
+                    <span v-else class="inline-flex items-center gap-1 text-red-500 bg-red-50 px-2 py-0.5 rounded-full text-xs font-medium">
+                      ✗ 密码错误
+                    </span>
+                  </td>
                 </tr>
                 <tr v-if="filteredLogs.length === 0">
-                  <td colspan="5" class="text-center py-12 text-slate-300 text-sm">暂无访问记录</td>
+                  <td colspan="3" class="text-center py-12 text-slate-300 text-sm">暂无登录记录</td>
                 </tr>
               </tbody>
             </table>
@@ -222,15 +225,12 @@ const logSearch = ref('')
 const filteredLogs = computed(() => {
   if (!logSearch.value) return logs.value
   const q = logSearch.value.toLowerCase()
-  return logs.value.filter(l =>
-    l.client_ip?.includes(q) || l.domain?.includes(q) ||
-    l.user_agent?.toLowerCase().includes(q)
-  )
+  return logs.value.filter(l => l.ip?.includes(q))
 })
 
 async function loadLogs() {
   try {
-    const { data } = await api.get('/webservice/logs')
+    const { data } = await api.get('/admin/logs')
     logs.value = data
   } catch {}
 }
