@@ -22,14 +22,14 @@
         <h1 class="text-3xl sm:text-4xl font-bold text-slate-900 tracking-tight">Vane</h1>
       </div>
 
-      <div class="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-xl">
+      <div class="bg-white/15 backdrop-blur-xl rounded-3xl border border-slate-200/60 p-6 sm:p-8 shadow-xl" style="background: rgba(120,100,200,0.08); backdrop-filter: blur(20px); border: 1px solid rgba(120,100,200,0.15);">
         <h2 class="text-lg sm:text-xl font-semibold text-slate-800 mb-5 text-center">{{ i18n.t('welcomeBack') }}</h2>
 
         <form @submit.prevent="handleLogin" class="space-y-4">
           <div>
             <label class="block text-slate-500 text-xs font-semibold uppercase tracking-wide mb-1.5">{{ i18n.t('username') }}</label>
             <input v-model="form.username" type="text" autocomplete="username"
-                   class="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-slate-900 placeholder:text-slate-400
+                   class="w-full px-4 py-3 rounded-xl bg-slate-100/60 border border-slate-200/80 text-slate-900 placeholder:text-slate-400
                           focus:outline-none focus:ring-2 focus:ring-vane-400 focus:border-transparent transition-all text-base" />
           </div>
           <div>
