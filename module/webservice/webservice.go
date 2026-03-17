@@ -473,10 +473,32 @@ func (m *Manager) buildRouter(svc *config.WebService) http.Handler {
 			return nil, err
 		}
 		proxy := httputil.NewSingleHostReverseProxy(target)
-		orig := proxy.Director
 		proxy.Director = func(req *http.Request) {
-			orig(req)
-			req.Host = target.Host
+			// Set backend scheme and path, but preserve the original Host header
+			// so the backend app generates correct URLs and redirects.
+			req.URL.Scheme = target.Scheme
+			req.URL.Host = target.Host
+			if target.Path != "" {
+				req.URL.Path = target.Path + req.URL.Path
+			}
+			// Standard reverse-proxy headers
+			clientIP := req.RemoteAddr
+			if ip, _, err := net.SplitHostPort(clientIP); err == nil {
+				clientIP = ip
+			}
+			if prior := req.Header.Get("X-Forwarded-For"); prior != "" {
+				clientIP = prior + ", " + clientIP
+			}
+			req.Header.Set("X-Forwarded-For", clientIP)
+			req.Header.Set("X-Real-IP", clientIP)
+			if req.TLS != nil || svc.EnableHTTPS {
+				req.Header.Set("X-Forwarded-Proto", "https")
+			} else {
+				req.Header.Set("X-Forwarded-Proto", "http")
+			}
+			// Delete hop-by-hop headers
+			req.Header.Del("Te")
+			req.Header.Del("Trailers")
 		}
 		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Printf("[webservice] proxy error %s: %v", r.URL, err)
