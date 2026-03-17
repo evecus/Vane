@@ -46,21 +46,30 @@ func validateBackendURL(raw string) error {
 const maxLogs = 2000
 
 type LogStore struct {
-	mu   sync.Mutex
-	logs []config.WebAccessLog
+	mu    sync.Mutex
+	logs  []config.WebAccessLog
+	dedup map[string]struct{} // key = date+routeID+clientIP+ua, cleared daily
 }
 
-var globalLogs = &LogStore{}
+var globalLogs = &LogStore{dedup: make(map[string]struct{})}
 
 func (s *LogStore) Add(l config.WebAccessLog) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Auto-clear logs from previous days — keep only today's entries
+	// Auto-clear logs and dedup map from previous days — keep only today's entries
 	today := time.Now().Format("2006-01-02")
 	filtered := s.logs[:0]
 	for _, existing := range s.logs {
 		if len(existing.Time) >= 10 && existing.Time[:10] == today {
 			filtered = append(filtered, existing)
+		}
+	}
+	// If day rolled over, rebuild dedup from surviving entries
+	if len(filtered) != len(s.logs) {
+		s.dedup = make(map[string]struct{}, len(filtered))
+		for _, e := range filtered {
+			k := today + "\x00" + e.RouteID + "\x00" + e.ClientIP + "\x00" + e.UserAgent
+			s.dedup[k] = struct{}{}
 		}
 	}
 	s.logs = append(filtered, l)
@@ -597,26 +606,23 @@ func logAccess(svcID, routeID, routeName, domain string, r *http.Request) {
 	if ip, _, err := net.SplitHostPort(clientIP); err == nil {
 		clientIP = ip
 	}
+	// Prefer X-Real-IP set by our own proxy Director (already stripped of port)
+	if xip := r.Header.Get("X-Real-IP"); xip != "" {
+		clientIP = xip
+	}
 	ua := r.UserAgent()
 	browser := parseBrowser(ua)
-
-	// Deduplicate: only record if no existing entry today with same IP + UA + routeID
-	globalLogs.mu.Lock()
 	today := time.Now().Format("2006-01-02")
-	for i := len(globalLogs.logs) - 1; i >= 0; i-- {
-		l := globalLogs.logs[i]
-		if len(l.Time) < 10 {
-			continue
-		}
-		if l.Time[:10] < today {
-			break
-		}
-		if l.RouteID == routeID && l.ClientIP == clientIP && l.UserAgent == ua {
-			globalLogs.mu.Unlock()
-			return
-		}
+	dedupKey := today + "\x00" + routeID + "\x00" + clientIP + "\x00" + browser
+
+	globalLogs.mu.Lock()
+	if _, exists := globalLogs.dedup[dedupKey]; exists {
+		globalLogs.mu.Unlock()
+		return
 	}
+	globalLogs.dedup[dedupKey] = struct{}{}
 	globalLogs.mu.Unlock()
+
 	globalLogs.Add(config.WebAccessLog{
 		ID:        config.NewID(),
 		ServiceID: svcID,
