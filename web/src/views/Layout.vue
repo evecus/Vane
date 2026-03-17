@@ -101,6 +101,15 @@
 
         <!-- 右侧状态栏 -->
         <div class="flex items-center gap-2 sm:gap-3">
+          <!-- 访问日志按钮：仅仪表盘页显示 -->
+          <button v-if="route.path === '/dashboard'"
+                  @click="openLogs"
+                  class="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-700 bg-slate-50 hover:bg-slate-100
+                         px-2.5 py-1.5 rounded-full border border-slate-200 transition-all"
+                  title="访问日志">
+            <ScrollText :size="13" />
+            <span class="hidden sm:inline">访问日志</span>
+          </button>
           <button @click="i18n.toggle()"
                   class="text-xs text-slate-500 hover:text-slate-700 bg-slate-50 hover:bg-slate-100
                          px-2.5 sm:px-3 py-1.5 rounded-full border border-slate-200 transition-all">
@@ -121,6 +130,67 @@
       </div>
     </main>
   </div>
+
+  <!-- ══ 访问日志面板 ══════════════════════════════════════════════ -->
+  <Teleport to="body">
+    <Transition name="modal">
+      <div v-if="logsOpen"
+           class="fixed inset-0 z-50 flex items-center justify-center p-4"
+           style="background:rgba(0,0,0,0.35);backdrop-filter:blur(4px)"
+           @click.self="logsOpen=false">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-4xl flex flex-col"
+             style="max-height:80vh">
+          <!-- 标题栏 -->
+          <div class="flex items-center justify-between px-5 py-4 border-b border-slate-100 flex-shrink-0">
+            <div class="flex items-center gap-2">
+              <ScrollText :size="16" class="text-vane-500" />
+              <span class="font-semibold text-slate-800">访问日志</span>
+              <span class="text-xs text-slate-400 ml-1">{{ filteredLogs.length }} 条</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <button @click="loadLogs" class="btn-ghost btn-sm p-1.5 text-slate-400 hover:text-slate-600" title="刷新">
+                <RefreshCw :size="14" />
+              </button>
+              <button @click="logsOpen=false" class="btn-ghost btn-sm p-1.5 text-slate-400 hover:text-slate-600">
+                <X :size="16" />
+              </button>
+            </div>
+          </div>
+          <!-- 搜索 -->
+          <div class="px-5 py-2.5 border-b border-slate-50 flex-shrink-0">
+            <input v-model="logSearch" class="input text-xs py-1.5 max-w-xs" placeholder="搜索 IP / 域名 / UA…" />
+          </div>
+          <!-- 表格 -->
+          <div class="flex-1 overflow-auto">
+            <table class="w-full text-xs min-w-[500px]">
+              <thead class="bg-slate-50 sticky top-0">
+                <tr>
+                  <th class="text-left px-4 py-2.5 font-semibold text-slate-500 whitespace-nowrap">时间</th>
+                  <th class="text-left px-4 py-2.5 font-semibold text-slate-500">路由</th>
+                  <th class="text-left px-4 py-2.5 font-semibold text-slate-500">域名</th>
+                  <th class="text-left px-4 py-2.5 font-semibold text-slate-500">来源 IP</th>
+                  <th class="text-left px-4 py-2.5 font-semibold text-slate-500">UA</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="log in filteredLogs" :key="log.id"
+                    class="border-t border-slate-50 hover:bg-slate-50 transition-colors">
+                  <td class="px-4 py-2 font-mono text-slate-400 whitespace-nowrap">{{ formatTime(log.time) }}</td>
+                  <td class="px-4 py-2 text-slate-600">{{ log.route_name || '—' }}</td>
+                  <td class="px-4 py-2 font-mono font-semibold text-slate-700">{{ log.domain }}</td>
+                  <td class="px-4 py-2 font-mono text-slate-600">{{ log.client_ip }}</td>
+                  <td class="px-4 py-2 text-slate-400 max-w-[160px] truncate" :title="log.user_agent">{{ parseUA(log.user_agent) }}</td>
+                </tr>
+                <tr v-if="filteredLogs.length === 0">
+                  <td colspan="5" class="text-center py-12 text-slate-300 text-sm">暂无访问记录</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </Transition>
+  </Teleport>
 </template>
 
 <script setup>
@@ -128,8 +198,9 @@ import { ref, computed, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useI18n } from '@/stores/i18n'
+import { api } from '@/stores/auth'
 import {
-  LayoutDashboard, ArrowLeftRight, Globe, Server, Shield, Settings, LogOut, Menu, X
+  LayoutDashboard, ArrowLeftRight, Globe, Server, Shield, Settings, LogOut, Menu, X, ScrollText, RefreshCw
 } from 'lucide-vue-next'
 
 const auth = useAuthStore()
@@ -142,6 +213,48 @@ const drawerOpen = ref(false)
 
 // 路由切换时自动关闭抽屉
 watch(() => route.path, () => { drawerOpen.value = false })
+
+// ── 访问日志面板 ──────────────────────────────────────────────────
+const logsOpen = ref(false)
+const logs = ref([])
+const logSearch = ref('')
+
+const filteredLogs = computed(() => {
+  if (!logSearch.value) return logs.value
+  const q = logSearch.value.toLowerCase()
+  return logs.value.filter(l =>
+    l.client_ip?.includes(q) || l.domain?.includes(q) ||
+    l.user_agent?.toLowerCase().includes(q)
+  )
+})
+
+async function loadLogs() {
+  try {
+    const { data } = await api.get('/webservice/logs')
+    logs.value = data
+  } catch {}
+}
+
+function openLogs() {
+  logsOpen.value = true
+  loadLogs()
+}
+
+function formatTime(ts) {
+  if (!ts) return ''
+  return new Date(ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
+function parseUA(ua) {
+  if (!ua) return '—'
+  if (ua.includes('iPhone') || ua.includes('iPad')) return '📱 iOS'
+  if (ua.includes('Android')) return '📱 Android'
+  if (ua.includes('Chrome')) return '🌐 Chrome'
+  if (ua.includes('Firefox')) return '🦊 Firefox'
+  if (ua.includes('Safari')) return '🧭 Safari'
+  if (ua.includes('curl')) return '⌨️ curl'
+  return ua.slice(0, 30)
+}
 
 const navItems = computed(() => [
   { to: '/dashboard',   label: i18n.t('dashboard'),   icon: LayoutDashboard,
@@ -170,4 +283,6 @@ function isActive(to) {
 .fade-overlay-leave-to {
   opacity: 0;
 }
+.modal-enter-active, .modal-leave-active { transition: opacity 0.2s ease; }
+.modal-enter-from, .modal-leave-to { opacity: 0; }
 </style>
