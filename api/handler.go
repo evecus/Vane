@@ -1554,10 +1554,9 @@ func (h *Handler) getCertPEM(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "cert not found"})
 		return
 	}
-	// Return only the public certificate — never expose the private key via API.
-	// Use the /download endpoint to obtain the full cert+key bundle.
 	c.JSON(200, gin.H{
 		"cert_pem": found.CertPEM,
+		"key_pem":  found.KeyPEM,
 		"domain":   found.Domain,
 	})
 }
