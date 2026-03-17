@@ -123,3 +123,40 @@ func generateToken() string {
 func InitSessions(db *sql.DB) {
 	sessions.initDB(db)
 }
+
+// ─── Admin login log ──────────────────────────────────────────────────────────
+
+type AdminLoginRecord struct {
+	IP      string `json:"ip"`
+	Success bool   `json:"success"`
+	Time    string `json:"time"`
+}
+
+type adminLoginStore struct {
+	mu      sync.Mutex
+	records []AdminLoginRecord
+}
+
+var adminLogs = &adminLoginStore{}
+
+const maxAdminLogs = 500
+
+func (s *adminLoginStore) Add(r AdminLoginRecord) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.records = append(s.records, r)
+	if len(s.records) > maxAdminLogs {
+		s.records = s.records[len(s.records)-maxAdminLogs:]
+	}
+}
+
+func (s *adminLoginStore) List() []AdminLoginRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]AdminLoginRecord, len(s.records))
+	// return newest first
+	for i, r := range s.records {
+		out[len(s.records)-1-i] = r
+	}
+	return out
+}
