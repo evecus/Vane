@@ -789,10 +789,12 @@ func (h *Handler) listWebServices(c *gin.Context) {
 	svcs := make([]config.WebService, len(h.cfg.WebServices))
 	copy(svcs, h.cfg.WebServices)
 	h.cfg.RUnlock()
-	// Never expose password hashes to frontend
+	// Never expose password hashes to frontend — replace with a boolean indicator
 	for i := range svcs {
 		for j := range svcs[i].Routes {
-			svcs[i].Routes[j].AuthPassHash = ""
+			if svcs[i].Routes[j].AuthPassHash != "" {
+				svcs[i].Routes[j].AuthPassHash = "set" // signal to frontend that a password exists
+			}
 		}
 	}
 	c.JSON(200, svcs)
@@ -1075,9 +1077,35 @@ func (h *Handler) updateRoute(c *gin.Context) {
 		return
 	}
 	route := req.WebRoute
+	// Look up existing route data first (to get stored hash, created_at, etc.)
+	h.cfg.RLock()
+	var existingRoute *config.WebRoute
+	for i := range h.cfg.WebServices {
+		if h.cfg.WebServices[i].ID == svcID {
+			for j := range h.cfg.WebServices[i].Routes {
+				if h.cfg.WebServices[i].Routes[j].ID == rid {
+					r := h.cfg.WebServices[i].Routes[j]
+					existingRoute = &r
+					break
+				}
+			}
+			break
+		}
+	}
+	h.cfg.RUnlock()
+	if existingRoute == nil {
+		c.JSON(404, gin.H{"error": "route not found"})
+		return
+	}
+
 	if route.AuthEnabled {
-		if route.AuthUser == "" || (req.AuthPass == "" && route.AuthPassHash == "") {
-			c.JSON(400, gin.H{"error": "开启访问验证时，账号和密码不能为空"})
+		// Password required only when: new password not provided AND no existing hash stored
+		if route.AuthUser == "" {
+			c.JSON(400, gin.H{"error": "开启访问验证时，账号不能为空"})
+			return
+		}
+		if req.AuthPass == "" && existingRoute.AuthPassHash == "" {
+			c.JSON(400, gin.H{"error": "开启访问验证时，密码不能为空"})
 			return
 		}
 	} else {
@@ -1600,3 +1628,6 @@ func sanitizeFilename(s string) string {
 	}
 	return b.String()
 }
+
+
+

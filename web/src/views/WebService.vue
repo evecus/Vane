@@ -302,9 +302,12 @@
                 <div>
                   <label class="input-label">
                     密码
-                    <span v-if="routeForm.id" class="text-xs font-normal text-slate-400 ml-1 normal-case tracking-normal">留空则保持原密码不变</span>
+                    <span v-if="routeForm.auth_pass_hash === 'set'" class="text-xs font-normal text-emerald-500 ml-1 normal-case tracking-normal">已设置，留空保持不变</span>
+                    <span v-else-if="routeForm.id" class="text-xs font-normal text-slate-400 ml-1 normal-case tracking-normal">留空则保持原密码不变</span>
                   </label>
-                  <input v-model="routeAuthPass" type="password" class="input font-mono" placeholder="••••••••" autocomplete="new-password" />
+                  <input v-model="routeAuthPass" type="password" class="input font-mono"
+                         :placeholder="routeForm.auth_pass_hash === 'set' ? '不修改请留空' : '••••••••'"
+                         autocomplete="new-password" />
                 </div>
               </div>
             </div>
@@ -598,7 +601,11 @@ async function saveRoute() {
     }
   }
   const id = currentSvcID.value
-  const payload = { ...routeForm.value, auth_pass: routeAuthPass.value || undefined }
+  const payload = {
+    ...routeForm.value,
+    auth_pass_hash: undefined, // never send hash back to backend
+    auth_pass: routeAuthPass.value || undefined,
+  }
   try {
     if (editingRoute.value) {
       await api.put(`/webservice/${id}/routes/${routeForm.value.id}`, payload)
