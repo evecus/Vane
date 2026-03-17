@@ -10,19 +10,15 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/gorilla/websocket"
 	"github.com/yourusername/vane/config"
 	"github.com/yourusername/vane/module/ddns"
 	"github.com/yourusername/vane/module/portforward"
@@ -31,34 +27,18 @@ import (
 	"github.com/yourusername/vane/module/webservice"
 )
 
-var upgrader = websocket.Upgrader{
-	// Verify Origin matches the admin host to prevent cross-origin WebSocket hijacking
-	CheckOrigin: func(r *http.Request) bool {
-		origin := r.Header.Get("Origin")
-		if origin == "" {
-			return true // same-origin non-browser requests
-		}
-		host := r.Host
-		// Strip scheme from origin and compare host
-		origin = strings.TrimPrefix(origin, "https://")
-		origin = strings.TrimPrefix(origin, "http://")
-		return strings.EqualFold(origin, host)
-	},
-}
-
 type Handler struct {
-	cfg            *config.Config
-	pf             *portforward.Manager
-	ddns           *ddns.Manager
-	ws             *webservice.Manager
-	tls            *tlsmod.Manager
-	version        string
-	disableSysinfo bool
+	cfg     *config.Config
+	pf      *portforward.Manager
+	ddns    *ddns.Manager
+	ws      *webservice.Manager
+	tls     *tlsmod.Manager
+	version string
 }
 
 func NewHandler(cfg *config.Config, pf *portforward.Manager, d *ddns.Manager,
-	ws *webservice.Manager, t *tlsmod.Manager, version string, disableSysinfo bool) *Handler {
-	return &Handler{cfg: cfg, pf: pf, ddns: d, ws: ws, tls: t, version: version, disableSysinfo: disableSysinfo}
+	ws *webservice.Manager, t *tlsmod.Manager, version string, _ bool) *Handler {
+	return &Handler{cfg: cfg, pf: pf, ddns: d, ws: ws, tls: t, version: version}
 }
 
 // Register wires all routes.
@@ -72,10 +52,8 @@ func (h *Handler) Register(r *gin.Engine) {
 	auth := api.Group("/")
 	auth.Use(h.authMiddleware())
 
-	// Dashboard + WS
+	// Dashboard
 	auth.GET("/dashboard", h.getDashboard)
-	auth.GET("/sysinfo", h.getSysinfo)
-	auth.GET("/ws/stats", h.wsStats)
 
 	// Settings
 	auth.GET("/settings", h.getSettings)
@@ -306,52 +284,6 @@ func (h *Handler) getDashboard(c *gin.Context) {
 	c.JSON(200, dash)
 }
 
-func (h *Handler) wsStats(c *gin.Context) {
-	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
-	if err != nil {
-		return
-	}
-	defer conn.Close()
-
-	// Authentication: read token from first message (sent by client immediately after connect).
-	// This avoids exposing the token in the URL (server logs, browser history, Referer headers).
-	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	_, msg, err := conn.ReadMessage()
-	if err != nil {
-		_ = conn.WriteMessage(websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "auth required"))
-		return
-	}
-	_ = conn.SetReadDeadline(time.Time{}) // reset deadline
-
-	token := strings.TrimSpace(string(msg))
-	exp, ok := sessions.get(token)
-	if !ok || time.Now().After(exp) {
-		sessions.delete(token)
-		_ = conn.WriteMessage(websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "unauthorized"))
-		return
-	}
-
-	ticker := time.NewTicker(3 * time.Second)
-	defer ticker.Stop()
-	for range ticker.C {
-		h.cfg.RLock()
-		rules := make([]config.PortForwardRule, len(h.cfg.PortForwards))
-		copy(rules, h.cfg.PortForwards)
-		h.cfg.RUnlock()
-		stats := make(map[string]interface{})
-		for _, r := range rules {
-			if s := h.pf.GetStats(r.ID); s != nil {
-				stats[r.ID] = s.Snapshot()
-			}
-		}
-		if err := conn.WriteJSON(gin.H{"type": "stats", "data": stats, "time": time.Now()}); err != nil {
-			return
-		}
-	}
-}
-
 // ─── Port check ───────────────────────────────────────────────────────────────
 
 func (h *Handler) checkPort(c *gin.Context) {
@@ -519,10 +451,13 @@ func (h *Handler) restoreConfig(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "invalid config: " + err.Error()})
 		return
 	}
-	h.pf.StartAll()
-	h.ddns.StartAll()
-	h.ws.StartAll()
-	c.JSON(200, gin.H{"ok": true, "message": "配置已恢复，服务已重启"})
+	// Full restore includes admin credentials, port and safe-entry path —
+	// restart the process so all settings take effect cleanly.
+	c.JSON(200, gin.H{"ok": true, "message": "配置已恢复，程序即将重启"})
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		restartSelf()
+	}()
 }
 
 // ─── Port Forward ─────────────────────────────────────────────────────────────
@@ -1663,254 +1598,5 @@ func sanitizeFilename(s string) string {
 	return b.String()
 }
 
-// ─── Sysinfo ──────────────────────────────────────────────────────────────────
-
-func (h *Handler) getSysinfo(c *gin.Context) {
-	if h.disableSysinfo {
-		c.JSON(200, gin.H{"disabled": true})
-		return
-	}
-	c.JSON(200, gin.H{
-		"os":      readSysinfoOS(),
-		"kernel":  readSysinfoKernel(),
-		"arch":    readSysinfoArch(),
-		"uptime":  readSysinfoUptime(),
-		"memory":  readSysinfoMemory(),
-		"disk":    readSysinfoDisk("/"),
-		"network": readSysinfoNetworkTraffic(),
-		"ifaces":  readSysinfoIfaces(),
-	})
-}
-
-// readSysinfoOS reads /etc/os-release for PRETTY_NAME, falls back to uname.
-func readSysinfoOS() string {
-	if data, err := os.ReadFile("/etc/os-release"); err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			if strings.HasPrefix(line, "PRETTY_NAME=") {
-				v := strings.TrimPrefix(line, "PRETTY_NAME=")
-				v = strings.Trim(v, "\"")
-				return v
-			}
-		}
-	}
-	if data, err := os.ReadFile("/proc/version"); err == nil {
-		fields := strings.Fields(string(data))
-		if len(fields) >= 3 {
-			return "Linux " + fields[2]
-		}
-	}
-	return "Unknown"
-}
-
-// readSysinfoArch returns the CPU architecture from uname or runtime.
-func readSysinfoArch() string {
-	if out, err := exec.Command("uname", "-m").Output(); err == nil {
-		return strings.TrimSpace(string(out))
-	}
-	return runtime.GOARCH
-}
-
-// readSysinfoKernel returns the kernel version from /proc/version.
-func readSysinfoKernel() string {
-	if data, err := os.ReadFile("/proc/version"); err == nil {
-		fields := strings.Fields(string(data))
-		if len(fields) >= 3 {
-			return fields[2]
-		}
-	}
-	return "—"
-}
-
-// readSysinfoUptime parses /proc/uptime and returns seconds + human string.
-func readSysinfoUptime() map[string]interface{} {
-	if data, err := os.ReadFile("/proc/uptime"); err == nil {
-		fields := strings.Fields(string(data))
-		if len(fields) >= 1 {
-			var secs float64
-			fmt.Sscanf(fields[0], "%f", &secs)
-			total := int64(secs)
-			days := total / 86400
-			hours := (total % 86400) / 3600
-			mins := (total % 3600) / 60
-			human := ""
-			if days > 0 {
-				human += fmt.Sprintf("%d天", days)
-			}
-			if hours > 0 {
-				human += fmt.Sprintf("%d小时", hours)
-			}
-			human += fmt.Sprintf("%d分钟", mins)
-			return map[string]interface{}{"seconds": total, "human": human}
-		}
-	}
-	return map[string]interface{}{"seconds": 0, "human": "—"}
-}
-
-// readSysinfoMemory reads /proc/meminfo and returns used/total KB + percentage.
-func readSysinfoMemory() map[string]interface{} {
-	data, err := os.ReadFile("/proc/meminfo")
-	if err != nil {
-		return nil
-	}
-	m := make(map[string]uint64)
-	for _, line := range strings.Split(string(data), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		key := strings.TrimSuffix(fields[0], ":")
-		var val uint64
-		fmt.Sscanf(fields[1], "%d", &val)
-		m[key] = val
-	}
-	total := m["MemTotal"]
-	free := m["MemFree"]
-	buffers := m["Buffers"]
-	cached := m["Cached"]
-	sReclaimable := m["SReclaimable"]
-	used := total - free - buffers - cached - sReclaimable
-	if total == 0 {
-		return nil
-	}
-	pct := fmt.Sprintf("%.1f", float64(used)/float64(total)*100)
-	return map[string]interface{}{
-		"total_kb": total,
-		"used_kb":  used,
-		"free_kb":  free,
-		"pct":      pct,
-	}
-}
 
 
-
-
-// isVirtualIface detects virtual/software-only interfaces via /sys/class/net attributes.
-// This is OS-agnostic and does not rely on interface naming conventions.
-//
-// Logic:
-//  1. type == 772 (ARPHRD_LOOPBACK) → skip
-//  2. tun_flags file exists → TUN/TAP → skip
-//  3. device/ symlink exists → bound to a real hardware driver → keep
-//  4. bridge/ or bonding/ dir exists → software bridge/bond but carries real traffic → keep
-//  5. ifindex != iflink → veth pair (peer lives in another netns) → skip
-//  6. Everything else has no hardware device → skip (dummy, sit, ip6tnl, macvlan, etc.)
-func isVirtualIface(name string) bool {
-	base := "/sys/class/net/" + name
-
-	// 1. Loopback type (ARPHRD_LOOPBACK = 772)
-	if data, err := os.ReadFile(base + "/type"); err == nil {
-		if strings.TrimSpace(string(data)) == "772" {
-			return true
-		}
-	}
-
-	// 2. TUN/TAP: tun_flags exists
-	if _, err := os.Stat(base + "/tun_flags"); err == nil {
-		return true
-	}
-
-	// 3. Hardware device symlink → physical NIC
-	if _, err := os.Stat(base + "/device"); err == nil {
-		return false
-	}
-
-	// 4. Software bridge or bonding master → keep (carries real traffic)
-	if _, err := os.Stat(base + "/bridge"); err == nil {
-		return false
-	}
-	if _, err := os.Stat(base + "/bonding"); err == nil {
-		return false
-	}
-
-	// 5. veth pair: iflink points to peer in another netns, so ifindex != iflink
-	ifidxData, err1 := os.ReadFile(base + "/ifindex")
-	iflinkData, err2 := os.ReadFile(base + "/iflink")
-	if err1 == nil && err2 == nil {
-		if strings.TrimSpace(string(ifidxData)) != strings.TrimSpace(string(iflinkData)) {
-			return true
-		}
-	}
-
-	// 6. No hardware device, not a bridge/bond → software-only
-	return true
-}
-
-// readSysinfoNetworkTraffic reads cumulative RX/TX bytes from /proc/net/dev,
-// showing only physical/bridge interfaces.
-func readSysinfoNetworkTraffic() []map[string]interface{} {
-	data, err := os.ReadFile("/proc/net/dev")
-	if err != nil {
-		return nil
-	}
-	var result []map[string]interface{}
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines[2:] { // skip header lines
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		colonIdx := strings.Index(line, ":")
-		if colonIdx < 0 {
-			continue
-		}
-		iface := strings.TrimSpace(line[:colonIdx])
-		if isVirtualIface(iface) {
-			continue
-		}
-		fields := strings.Fields(line[colonIdx+1:])
-		if len(fields) < 9 {
-			continue
-		}
-		var rx, tx uint64
-		fmt.Sscanf(fields[0], "%d", &rx)
-		fmt.Sscanf(fields[8], "%d", &tx)
-		result = append(result, map[string]interface{}{
-			"iface":    iface,
-			"rx_bytes": rx,
-			"tx_bytes": tx,
-		})
-	}
-	return result
-}
-
-// readSysinfoIfaces returns IPs for physical interfaces only,
-// filtering out link-local IPv6 (fe80::) and keeping public + private IPs.
-func readSysinfoIfaces() []map[string]interface{} {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return nil
-	}
-	var result []map[string]interface{}
-	for _, iface := range ifaces {
-		if isVirtualIface(iface.Name) {
-			continue
-		}
-		if iface.Flags&net.FlagLoopback != 0 {
-			continue
-		}
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		var ips []string
-		for _, addr := range addrs {
-			s := addr.String()
-			// Skip link-local IPv6 fe80::/10
-			ip, _, _ := net.ParseCIDR(s)
-			if ip == nil {
-				ip = net.ParseIP(s)
-			}
-			if ip != nil && ip.IsLinkLocalUnicast() {
-				continue
-			}
-			ips = append(ips, s)
-		}
-		if len(ips) > 0 {
-			result = append(result, map[string]interface{}{
-				"name": iface.Name,
-				"ips":  ips,
-			})
-		}
-	}
-	return result
-}

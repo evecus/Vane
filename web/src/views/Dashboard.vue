@@ -30,132 +30,6 @@
       </Transition>
     </Teleport>
 
-    <!-- ══ 系统信息（顶部，最大） ══════════════════════════════════════ -->
-    <div v-if="!sysinfo?.disabled" class="glass-card p-3 sm:p-6">
-      <div class="flex items-center justify-between mb-3 sm:mb-5">
-        <div>
-          <h2 class="font-bold text-slate-800 text-sm sm:text-lg">系统信息</h2>
-          <p class="text-xs text-slate-400 mt-0.5">主机运行状态</p>
-        </div>
-        <Monitor :size="16" class="text-blue-400" />
-      </div>
-
-      <div v-if="!sysinfo" class="flex items-center justify-center py-8 text-slate-300 text-xs">
-        <Loader2 :size="16" class="animate-spin mr-2" /> 加载中...
-      </div>
-
-      <div v-else class="space-y-2 sm:space-y-4">
-        <!-- OS / Kernel / Uptime / Arch -->
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5 sm:gap-3">
-          <div class="bg-slate-50 rounded-xl px-2 py-2 sm:px-3 sm:py-2.5">
-            <div class="text-xs text-slate-400 mb-0.5">操作系统</div>
-            <div class="text-xs font-medium text-slate-700 truncate leading-snug" :title="sysinfo.os">{{ sysinfo.os || '—' }}</div>
-          </div>
-          <div class="bg-slate-50 rounded-xl px-2 py-2 sm:px-3 sm:py-2.5">
-            <div class="text-xs text-slate-400 mb-0.5">内核版本</div>
-            <div class="text-xs font-mono font-medium text-slate-700 truncate" :title="sysinfo.kernel">{{ sysinfo.kernel || '—' }}</div>
-          </div>
-          <div class="bg-slate-50 rounded-xl px-2 py-2 sm:px-3 sm:py-2.5">
-            <div class="text-xs text-slate-400 mb-0.5">运行时间</div>
-            <div class="text-xs font-medium text-slate-700 truncate">{{ sysinfo.uptime?.human || '—' }}</div>
-          </div>
-          <div class="bg-slate-50 rounded-xl px-2 py-2 sm:px-3 sm:py-2.5">
-            <div class="text-xs text-slate-400 mb-0.5">CPU 架构</div>
-            <div class="text-xs font-mono font-medium text-slate-700 truncate">{{ sysinfo.arch || '—' }}</div>
-          </div>
-        </div>
-
-        <!-- Memory + Disk -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
-          <div class="bg-slate-50 rounded-xl px-3 py-2.5">
-            <div class="flex items-center justify-between text-xs mb-1.5">
-              <div class="flex items-center gap-1 text-slate-600 font-medium">
-                <Cpu :size="12" class="text-blue-400" /> 内存
-              </div>
-              <div class="flex items-center gap-1.5 text-slate-400">
-                <span>{{ fmtBytes(sysinfo.memory?.used_kb * 1024) }}/{{ fmtBytes(sysinfo.memory?.total_kb * 1024) }}</span>
-                <span class="font-bold" :class="memColor(sysinfo.memory?.pct)">{{ sysinfo.memory?.pct }}%</span>
-              </div>
-            </div>
-            <div class="h-2 bg-white rounded-full overflow-hidden shadow-inner">
-              <div class="h-full rounded-full transition-all duration-700"
-                   :style="`width:${sysinfo.memory?.pct}%; background:${memBg(sysinfo.memory?.pct)}`"></div>
-            </div>
-          </div>
-          <div class="bg-slate-50 rounded-xl px-3 py-2.5">
-            <div class="flex items-center justify-between text-xs mb-1.5">
-              <div class="flex items-center gap-1 text-slate-600 font-medium">
-                <HardDrive :size="12" class="text-purple-400" /> 磁盘 (/)
-              </div>
-              <div class="flex items-center gap-1.5 text-slate-400">
-                <span>{{ fmtBytes(sysinfo.disk?.used_kb * 1024) }}/{{ fmtBytes(sysinfo.disk?.total_kb * 1024) }}</span>
-                <span class="font-bold" :class="memColor(sysinfo.disk?.pct)">{{ sysinfo.disk?.pct }}%</span>
-              </div>
-            </div>
-            <div class="h-2 bg-white rounded-full overflow-hidden shadow-inner">
-              <div class="h-full rounded-full transition-all duration-700"
-                   :style="`width:${sysinfo.disk?.pct}%; background:${memBg(sysinfo.disk?.pct)}`"></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 网卡流量 + 网卡 IP -->
-        <div class="grid grid-cols-2 sm:grid-cols-2 gap-2 sm:gap-3">
-          <div class="bg-slate-50 rounded-xl px-2.5 py-2.5 sm:px-4 sm:py-3">
-            <div class="flex items-center gap-1 text-xs text-slate-500 font-medium mb-2">
-              <Activity :size="12" class="text-emerald-400" /> 网卡流量
-            </div>
-            <div v-if="!sysinfo.network?.length" class="text-xs text-slate-300 italic">无数据</div>
-            <div v-else class="space-y-1.5">
-              <template v-for="n in sysinfo.network" :key="n.iface">
-                <div v-if="!isVirtualIface(n.iface) && (n.rx_bytes > 0 || n.tx_bytes > 0)"
-                     class="text-xs">
-                  <!-- 桌面：名称左，↓↑ 两行靠右 -->
-                  <div class="hidden sm:flex items-start justify-between gap-2">
-                    <span class="font-mono text-slate-600 flex-shrink-0">{{ n.iface }}</span>
-                    <div class="flex flex-col items-end gap-0.5">
-                      <span class="text-blue-500">↓{{ fmtBytes(n.rx_bytes) }}</span>
-                      <span class="text-emerald-500">↑{{ fmtBytes(n.tx_bytes) }}</span>
-                    </div>
-                  </div>
-                  <!-- 移动端：名称一行，↓↑ 各占一行在下方 -->
-                  <div class="sm:hidden">
-                    <div class="font-mono text-slate-600">{{ n.iface }}</div>
-                    <div class="text-blue-500 mt-0.5">↓{{ fmtBytes(n.rx_bytes) }}</div>
-                    <div class="text-emerald-500">↑{{ fmtBytes(n.tx_bytes) }}</div>
-                  </div>
-                </div>
-              </template>
-            </div>
-          </div>
-          <div class="bg-slate-50 rounded-xl px-2.5 py-2.5 sm:px-4 sm:py-3">
-            <div class="flex items-center gap-1 text-xs text-slate-500 font-medium mb-2">
-              <NetworkIcon :size="12" class="text-indigo-400" /> 网卡 IP
-            </div>
-            <div v-if="!sysinfo.ifaces?.length" class="text-xs text-slate-300 italic">无数据</div>
-            <div v-else class="space-y-1.5">
-              <template v-for="iface in sysinfo.ifaces" :key="iface.name">
-                <div v-if="!isVirtualIface(iface.name)" class="text-xs">
-                  <!-- 桌面：名称左，IP 右侧堆叠 -->
-                  <div class="hidden sm:flex items-start justify-between gap-2">
-                    <span class="font-mono font-semibold text-slate-600 flex-shrink-0">{{ iface.name }}</span>
-                    <div class="flex flex-col items-end gap-0.5">
-                      <span v-for="ip in iface.ips" :key="ip" class="font-mono text-slate-400 text-right break-all">{{ ip }}</span>
-                    </div>
-                  </div>
-                  <!-- 移动端：名称 + IP 换行堆叠 -->
-                  <div class="sm:hidden">
-                    <div class="font-mono font-semibold text-slate-600">{{ iface.name }}</div>
-                    <div v-for="ip in iface.ips" :key="ip" class="font-mono text-slate-400 break-all mt-0.5">{{ ip }}</div>
-                  </div>
-                </div>
-              </template>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
     <!-- ══ 第一行：端口转发 + 动态域名 ══════════════════════════════ -->
     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
 
@@ -350,23 +224,17 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
-import {
-  Shield, Server, ShieldAlert, Monitor, Cpu, HardDrive,
-  Activity, Network as NetworkIcon, Loader2, ArrowLeftRight, Globe
-} from 'lucide-vue-next'
+import { ref, onMounted } from 'vue'
+import { Shield, Server, ShieldAlert, ArrowLeftRight, Globe } from 'lucide-vue-next'
 import { useRouter } from 'vue-router'
 import { api } from '@/stores/auth'
-import { useI18n } from '@/stores/i18n'
 
-const i18n = useI18n()
 const router = useRouter()
 const dashboard = ref({})
 const certs = ref([])
 const ddnsRules = ref([])
 const pfRules = ref([])
 const wsRules = ref([])
-const sysinfo = ref(null)
 
 // ── First-login modal ──────────────────────────────────────────────────────
 const showWelcomeModal = ref(false)
@@ -380,31 +248,6 @@ async function goToSettings() {
   router.push('/settings')
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-// 过滤虚拟网卡：docker、veth、br-、virbr、lo、tun、tap 等
-function isVirtualIface(name) {
-  return /^(docker|veth|br-|virbr|lo|tun|tap|dummy|bond|vlan|ovs|flannel|cali|cilium)/i.test(name)
-}
-
-function fmtBytes(bytes) {
-  if (!bytes || bytes === 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(bytes) / Math.log(1024))
-  return (bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0) + ' ' + units[i]
-}
-function memColor(pct) {
-  const p = parseFloat(pct)
-  if (p >= 90) return 'text-red-500'
-  if (p >= 70) return 'text-amber-500'
-  return 'text-emerald-600'
-}
-function memBg(pct) {
-  const p = parseFloat(pct)
-  if (p >= 90) return '#ef4444'
-  if (p >= 70) return '#f59e0b'
-  return '#10b981'
-}
 function certBarStyle(days) {
   const pct = Math.min(100, Math.max(0, (days / 90) * 100))
   const color = days < 14 ? '#ef4444' : days < 30 ? '#f59e0b' : '#10b981'
@@ -414,37 +257,24 @@ function domainLabel(r) {
   return (r.sub_domain ? r.sub_domain + '.' : '') + (r.domain || '')
 }
 
-// ── Data loading ───────────────────────────────────────────────────────────
 async function load() {
   try {
-    const [db, certsRes, ddnsRes, pfRes, wsRes, sysinfoRes, settingsRes] = await Promise.all([
+    const [db, certsRes, ddnsRes, pfRes, wsRes, settingsRes] = await Promise.all([
       api.get('/dashboard'), api.get('/tls'), api.get('/ddns'),
-      api.get('/portforward'), api.get('/webservice'), api.get('/sysinfo'),
-      api.get('/settings'),
+      api.get('/portforward'), api.get('/webservice'), api.get('/settings'),
     ])
     dashboard.value = db.data
     certs.value = certsRes.data
     ddnsRules.value = ddnsRes.data
     pfRules.value = pfRes.data
     wsRules.value = wsRes.data
-    sysinfo.value = sysinfoRes.data
     if (!settingsRes.data.welcome_shown) {
       showWelcomeModal.value = true
     }
   } catch {}
 }
 
-let sysinfoTimer
-onMounted(() => {
-  load()
-  sysinfoTimer = setInterval(async () => {
-    try {
-      const res = (await api.get('/sysinfo')).data
-      if (!res.disabled) sysinfo.value = res
-    } catch {}
-  }, 10000)
-})
-onUnmounted(() => clearInterval(sysinfoTimer))
+onMounted(load)
 </script>
 
 <style scoped>

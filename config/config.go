@@ -784,17 +784,37 @@ func (c *Config) Save() error {
 
 // ─── Backup / Restore ─────────────────────────────────────────────────────────
 
+// portableBackupKey is a fixed key derived from a well-known passphrase so that
+// backup files can be restored on any machine (not tied to the local secret.key).
+// The security model is: the backup file itself must be kept secret; the encryption
+// prevents casual inspection and tampering but is not machine-locked.
+var portableBackupKey = deriveKey("vane-portable-backup-v1")
+
+// FullBackup contains every piece of configuration including admin credentials.
+type FullBackup struct {
+	Version      string            `json:"version"`
+	Admin        AdminConfig       `json:"admin"`
+	PortForwards []PortForwardRule `json:"port_forwards"`
+	DDNS         []DDNSRule        `json:"ddns"`
+	WebServices  []WebService      `json:"web_services"`
+	TLSCerts     []TLSCert         `json:"tls_certs"`
+}
+
+// Export serialises the complete configuration (including admin account, port,
+// safe-entry path, username and password hash) and encrypts it with a portable
+// fixed key so the backup file can be restored on any machine.
 func (c *Config) Export() ([]byte, error) {
 	c.mu.RLock()
-	snap := struct {
-		Admin        AdminConfig       `json:"admin"`
-		PortForwards []PortForwardRule `json:"port_forwards"`
-		DDNS         []DDNSRule        `json:"ddns"`
-		WebServices  []WebService      `json:"web_services"`
-		TLSCerts     []TLSCert         `json:"tls_certs"`
-	}{c.Admin, c.PortForwards, c.DDNS, c.WebServices, c.TLSCerts}
+	snap := FullBackup{
+		Version:      "2",
+		Admin:        c.Admin,
+		PortForwards: c.PortForwards,
+		DDNS:         c.DDNS,
+		WebServices:  c.WebServices,
+		TLSCerts:     c.TLSCerts,
+	}
 	c.mu.RUnlock()
-	enc, err := encryptJSON(c.dataDir.Key, snap)
+	enc, err := encryptJSON(portableBackupKey, snap)
 	if err != nil {
 		return nil, err
 	}
@@ -818,22 +838,16 @@ func (c *Config) SaveBackup() (string, error) {
 	return name, nil
 }
 
+// Import restores a full backup including admin credentials (username, password
+// hash, port, safe-entry path).  The backup must have been created by Export and
+// is decrypted with the portable fixed key.
 func (c *Config) Import(data []byte) error {
-	var snap struct {
-		PortForwards []PortForwardRule `json:"port_forwards"`
-		DDNS         []DDNSRule        `json:"ddns"`
-		WebServices  []WebService      `json:"web_services"`
-		TLSCerts     []TLSCert         `json:"tls_certs"`
-	}
-	// Only accept encrypted backups — reject plaintext JSON to prevent
-	// an attacker from crafting a backup that overwrites credentials.
-	if err := decryptJSON(c.dataDir.Key, string(data), &snap); err != nil {
-		return fmt.Errorf("invalid or unencrypted backup: %w", err)
+	var snap FullBackup
+	if err := decryptJSON(portableBackupKey, string(data), &snap); err != nil {
+		return fmt.Errorf("invalid or unrecognised backup file: %w", err)
 	}
 	c.mu.Lock()
-	// Intentionally do NOT restore c.Admin — admin credentials must never
-	// be overwritten via a backup restore.  The caller retains their current
-	// username and password after a restore.
+	c.Admin = snap.Admin
 	c.PortForwards = snap.PortForwards
 	c.DDNS = snap.DDNS
 	c.WebServices = snap.WebServices

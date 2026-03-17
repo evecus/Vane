@@ -76,7 +76,7 @@
           </div>
           <div>
             <h3 class="font-semibold text-slate-800 text-sm">备份与恢复</h3>
-            <p class="text-xs text-slate-400">{{ i18n.t('backupRestoreDesc') }}</p>
+            <p class="text-xs text-slate-400">完整备份，任意机器可还原</p>
           </div>
         </div>
         <div class="p-5 space-y-3">
@@ -85,7 +85,7 @@
               <Download :size="14" class="text-slate-500" />
               <span class="text-sm font-medium text-slate-700">{{ i18n.t('backupTitle') }}</span>
             </div>
-            <p class="text-xs text-slate-400">{{ i18n.t('backupDesc') }}</p>
+            <p class="text-xs text-slate-400">备份包含所有配置、端口、安全入口、用户名及密码，数据已加密，可在任意机器上还原。</p>
             <button class="btn-secondary btn-sm w-full justify-center" @click="backup">
               <Download :size="13" /> {{ i18n.t('downloadBackup') }}
             </button>
@@ -95,7 +95,7 @@
               <Upload :size="14" class="text-slate-500" />
               <span class="text-sm font-medium text-slate-700">{{ i18n.t('restoreTitle') }}</span>
             </div>
-            <p class="text-xs text-slate-400">{{ i18n.t('restoreDesc') }}</p>
+            <p class="text-xs text-slate-400">还原后将覆盖当前全部配置（含账号密码），程序自动重启，请使用备份文件中的账号重新登录。</p>
             <label class="btn btn-secondary btn-sm w-full justify-center cursor-pointer">
               <Upload :size="13" /> {{ i18n.t('selectBackup') }}
               <input type="file" accept=".enc,.json" class="hidden" @change="restore" />
@@ -407,7 +407,13 @@ async function restore(e) {
   try {
     const buf = await file.arrayBuffer()
     await api.post('/settings/restore', new Uint8Array(buf), { headers: { 'Content-Type': 'application/octet-stream' } })
-    restoreMsg.value = i18n.t('restoreSuccess')
+    restoreMsg.value = '还原成功，程序正在重启，请稍候…'
+    // Full restore includes admin credentials and port — wait for restart then redirect to login
+    setTimeout(async () => {
+      await pollUntilAlive(window.location.origin, 15000, 600)
+      authStore.logout()
+      router.push('/login')
+    }, 1500)
   } catch (err) { restoreError.value = i18n.t('restoreFailed') + (err.response?.data?.error || err.message) }
   e.target.value = ''
 }
