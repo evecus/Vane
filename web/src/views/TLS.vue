@@ -405,7 +405,7 @@
         </div>
       </div>
     </Teleport>
-
+    <ConfirmModal v-model="showConfirm" :title="confirmTitle" :message="confirmMessage" @confirm="runConfirm" />
   </div>
 </template>
 
@@ -419,6 +419,7 @@ import { api } from '@/stores/auth'
 import { useI18n } from '@/stores/i18n'
 import ProviderBadge from '@/components/ProviderBadge.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
+import ConfirmModal from '@/components/ConfirmModal.vue'
 
 const { t } = useI18n()
 
@@ -457,6 +458,12 @@ const pemData = ref({})
 const form = ref({})
 const uploadForm = ref({})
 const editId = ref(null)
+// Confirm modal
+const showConfirm = ref(false)
+const confirmTitle = ref('')
+const confirmMessage = ref('')
+const confirmAction = ref(null)
+async function runConfirm() { if (confirmAction.value) await confirmAction.value() }
 const saving = ref(false)
 const modalError = ref('')
 const uploadMode = ref('files')
@@ -656,9 +663,14 @@ async function upload() {
 }
 
 async function del(id) {
-  if (!confirm(t('confirmDelCert'))) return
-  await api.delete(`/tls/${id}`)
-  await load()
+  confirmTitle.value = '删除证书'
+  confirmMessage.value = '确认删除此证书？关联的网页服务将无法使用 HTTPS，此操作不可撤销。'
+  confirmAction.value = async () => {
+    await api.delete(`/tls/${id}`)
+    certs.value = certs.value.filter(c => c.id !== id)
+    await load()
+  }
+  showConfirm.value = true
 }
 
 // ─── 下载证书 ZIP ──────────────────────────────────────────────────────────
