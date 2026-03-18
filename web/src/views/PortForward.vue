@@ -149,6 +149,7 @@
         </div>
       </div>
     </Teleport>
+    <ConfirmModal v-model="showConfirm" :title="confirmTitle" :message="confirmMessage" @confirm="runConfirm" />
   </div>
 </template>
 
@@ -157,6 +158,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { Plus, ArrowLeftRight, ArrowRight, Pencil, Trash2, X, AlertCircle } from 'lucide-vue-next'
 import { api } from '@/stores/auth'
 import { useI18n } from '@/stores/i18n'
+import ConfirmModal from '@/components/ConfirmModal.vue'
 
 const { t } = useI18n()
 
@@ -166,8 +168,14 @@ const modal = ref(null)
 const editing = ref(false)
 const form = ref({})
 const formError = ref('')
+// Confirm modal
+const showConfirm = ref(false)
+const confirmTitle = ref('')
+const confirmMessage = ref('')
+const confirmAction = ref(null)
+async function runConfirm() { if (confirmAction.value) await confirmAction.value() }
 
-let ws = null
+let statsTimer = null
 
 function fmtBytes(bytes) {
   if (!bytes || bytes === 0) return '0 B'
@@ -216,26 +224,26 @@ async function toggle(id) {
 }
 
 async function del(id) {
-  if (!confirm(t('confirmDelRule'))) return
-  await api.delete(`/portforward/${id}`)
-  await load()
+  confirmTitle.value = '删除端口转发'
+  confirmMessage.value = '确认删除此转发规则？此操作不可撤销。'
+  confirmAction.value = async () => {
+    await api.delete(`/portforward/${id}`)
+    rules.value = rules.value.filter(r => r.id !== id)
+    await load()
+  }
+  showConfirm.value = true
 }
 
-function connectWS() {
-  const token = localStorage.getItem('vane_token')
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  ws = new WebSocket(`${proto}://${location.host}/api/ws/stats`)
-  ws.onopen = () => {
-    // Send token as first message — keeps it out of the URL (server logs, history, Referer)
-    ws.send(token || '')
-  }
-  ws.onmessage = (e) => {
-    const msg = JSON.parse(e.data)
-    if (msg.type === 'stats') stats.value = msg.data
-  }
-  ws.onclose = () => setTimeout(connectWS, 3000)
+async function pollStats() {
+  try {
+    const ids = rules.value.filter(r => r.enabled).map(r => r.id)
+    const results = await Promise.all(ids.map(id => api.get(`/portforward/${id}/stats`).catch(() => null)))
+    const map = {}
+    ids.forEach((id, i) => { if (results[i]) map[id] = results[i].data })
+    stats.value = map
+  } catch {}
 }
 
-onMounted(() => { load(); connectWS() })
-onUnmounted(() => ws?.close())
+onMounted(() => { load(); statsTimer = setInterval(pollStats, 3000) })
+onUnmounted(() => clearInterval(statsTimer))
 </script>
