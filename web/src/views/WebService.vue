@@ -67,16 +67,26 @@
       <!-- 子规则区域 -->
       <div class="p-3 sm:p-4">
         <div class="flex items-center justify-between mb-3">
-          <span class="text-xs font-bold text-slate-400 uppercase tracking-widest">{{ t('subRoutes') }}</span>
+          <button @click="toggleCollapse(svc.id)"
+                  class="flex items-center gap-1.5 text-xs font-bold text-slate-400 uppercase tracking-widest hover:text-slate-600 transition-colors select-none">
+            <svg class="w-3.5 h-3.5 transition-transform duration-200 flex-shrink-0"
+                 :class="collapsed[svc.id] ? '-rotate-90' : 'rotate-0'"
+                 fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/>
+            </svg>
+            {{ t('subRoutes') }}
+            <span class="font-normal normal-case tracking-normal text-slate-300 ml-0.5">({{ (svc.routes||[]).length }})</span>
+          </button>
           <button @click="openRouteModal(svc.id)" class="btn-ghost btn-sm text-purple-600 hover:bg-purple-50 text-xs">
             <Plus :size="12" /> {{ t('addSubRoute') }}
           </button>
         </div>
 
-        <div v-if="!(svc.routes&&svc.routes.length)"
-             class="text-center py-5 sm:py-6 text-slate-300 text-sm border border-dashed border-slate-200 rounded-xl">
-          {{ t('noSubRoutes') }}
-        </div>
+        <div v-show="!collapsed[svc.id]">
+          <div v-if="!(svc.routes&&svc.routes.length)"
+               class="text-center py-5 sm:py-6 text-slate-300 text-sm border border-dashed border-slate-200 rounded-xl">
+            {{ t('noSubRoutes') }}
+          </div>
         <div v-else class="space-y-2">
           <div v-for="route in svc.routes" :key="route.id"
                class="flex items-start sm:items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2.5 sm:py-3 bg-slate-50 rounded-xl hover:bg-purple-50/50 transition-colors group/route">
@@ -135,6 +145,7 @@
               </button>
             </div>
           </div>
+        </div>
         </div>
       </div>
     </div>
@@ -431,6 +442,9 @@ const confirmTitle = ref('')
 const confirmMessage = ref('')
 const confirmAction = ref(null)
 async function runConfirm() { if (confirmAction.value) await confirmAction.value() }
+// Collapse state per service id
+const collapsed = ref({})
+function toggleCollapse(id) { collapsed.value[id] = !collapsed.value[id] }
 const logs = ref([])
 const logSearch = ref('')
 const logsModal = ref(false)
