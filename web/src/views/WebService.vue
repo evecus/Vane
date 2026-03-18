@@ -408,6 +408,7 @@
         {{ t('copied') }}
       </div>
     </Teleport>
+    <ConfirmModal v-model="showConfirm" :title="confirmTitle" :message="confirmMessage" @confirm="runConfirm" />
   </div>
 </template>
 
@@ -416,6 +417,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { Plus, Server, ArrowRight, Pencil, Trash2, X, ScrollText, RefreshCw, AlertCircle } from 'lucide-vue-next'
 import { api } from '@/stores/auth'
 import { useI18n } from '@/stores/i18n'
+import ConfirmModal from '@/components/ConfirmModal.vue'
 
 const { t } = useI18n()
 
@@ -423,6 +425,12 @@ const services = ref([])
 const copyToast = ref(false)
 let copyToastTimer = null
 const certs = ref([])
+// Confirm modal
+const showConfirm = ref(false)
+const confirmTitle = ref('')
+const confirmMessage = ref('')
+const confirmAction = ref(null)
+async function runConfirm() { if (confirmAction.value) await confirmAction.value() }
 const logs = ref([])
 const logSearch = ref('')
 const logsModal = ref(false)
@@ -560,9 +568,13 @@ async function toggleService(id) {
   }
 }
 async function delService(id) {
-  if (!confirm(t('confirmDelService'))) return
-  await api.delete(`/webservice/${id}`)
-  await load()
+  confirmTitle.value = '删除 Web 服务'
+  confirmMessage.value = '将同时删除该服务下的所有路由规则，此操作不可撤销。'
+  confirmAction.value = async () => {
+    await api.delete(`/webservice/${id}`)
+    await load()
+  }
+  showConfirm.value = true
 }
 
 // ── Route CRUD ──
@@ -625,9 +637,16 @@ async function toggleRoute(svcID, rid) {
 }
 
 async function delRoute(svcID, rid) {
-  if (!confirm(t('confirmDelRoute'))) return
-  await api.delete(`/webservice/${svcID}/routes/${rid}`)
-  await load()
+  confirmTitle.value = '删除路由规则'
+  confirmMessage.value = '确认删除此路由规则？此操作不可撤销。'
+  confirmAction.value = async () => {
+    await api.delete(`/webservice/${svcID}/routes/${rid}`)
+    // Immediately remove from local state for instant UI feedback
+    const svc = services.value.find(s => s.id === svcID)
+    if (svc) svc.routes = (svc.routes || []).filter(r => r.id !== rid)
+    await load()
+  }
+  showConfirm.value = true
 }
 
 // ── Helpers ──
