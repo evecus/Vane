@@ -11,7 +11,8 @@
 
   body {
     @apply font-sans text-slate-800 antialiased;
-    background: #f1f5f9;
+    background: linear-gradient(135deg, #faf5ff 0%, #eff6ff 100%);
+    min-height: 100vh;
   }
 
   ::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -23,11 +24,14 @@
 @layer components {
   /* ── Glass card ─────────────────────────────────────────── */
   .glass-card {
-    @apply bg-white/80 backdrop-blur-sm rounded-2xl border border-white/60;
-    box-shadow: 0 4px 24px rgba(0,0,0,0.06), 0 1px 4px rgba(0,0,0,0.04);
+    background: rgba(255, 255, 255, 0.55);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    @apply rounded-2xl border border-white/50;
+    box-shadow: 0 4px 24px rgba(139,92,246,0.06), 0 1px 4px rgba(0,0,0,0.04);
   }
   .glass-card:hover {
-    box-shadow: 0 12px 40px rgba(0,0,0,0.10), 0 4px 12px rgba(0,0,0,0.06);
+    box-shadow: 0 12px 40px rgba(139,92,246,0.10), 0 4px 12px rgba(0,0,0,0.06);
     @apply transition-shadow duration-300;
   }
 
@@ -141,6 +145,6 @@
     @apply flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium
            transition-all duration-200 cursor-pointer select-none;
   }
-  .nav-item:hover  { @apply bg-white/60 text-slate-900; }
+  .nav-item:hover  { background: rgba(139,92,246,0.08); @apply text-slate-900; }
   .nav-item.active { @apply text-white shadow-md; }
 }
