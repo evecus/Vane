@@ -11,12 +11,13 @@
     <!-- ══ Sidebar（桌面端固定 / 移动端抽屉）═══════════════════════ -->
     <aside
       class="fixed sm:static inset-y-0 left-0 z-50 w-72 sm:w-64 flex-shrink-0 flex flex-col h-full
-             transform transition-transform duration-300 ease-in-out bg-white border-r border-slate-100
+             transform transition-transform duration-300 ease-in-out border-r border-white/40
              sm:translate-x-0"
-      :class="drawerOpen ? 'translate-x-0' : '-translate-x-full'">
+      :class="drawerOpen ? 'translate-x-0' : '-translate-x-full'"
+      style="background: rgba(255,255,255,0.75); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);">
 
       <!-- Logo + 移动端关闭按钮 -->
-      <div class="px-5 pt-6 pb-4 flex items-center gap-3 border-b border-slate-100">
+      <div class="px-5 pt-6 pb-4 flex items-center gap-3 border-b border-white/40">
         <div class="w-10 h-10 rounded-2xl bg-vane-600 flex items-center justify-center shadow flex-shrink-0">
           <svg class="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z"/>
@@ -70,7 +71,7 @@
       </nav>
 
       <!-- User footer -->
-      <div class="p-4 border-t border-slate-100">
+      <div class="p-4 border-t border-white/40">
         <div class="flex items-center gap-3">
           <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-vane-500 to-pink-400 flex items-center justify-center text-white font-bold text-sm shadow flex-shrink-0">
             {{ username.charAt(0).toUpperCase() }}
@@ -89,8 +90,9 @@
     <!-- ══ Main content ══════════════════════════════════════════════ -->
     <main class="flex-1 overflow-y-auto min-w-0">
       <!-- Topbar -->
-      <header class="sticky top-0 z-30 bg-white/80 backdrop-blur-sm border-b border-slate-100
-                     px-4 sm:px-8 py-3 sm:py-4 flex items-center justify-between sm:justify-end gap-3">
+      <header class="sticky top-0 z-30 border-b border-white/40
+                     px-4 sm:px-8 py-3 sm:py-4 flex items-center justify-between sm:justify-end gap-3"
+              style="background: rgba(255,255,255,0.65); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);">
 
         <!-- 移动端汉堡菜单按钮 -->
         <button @click="drawerOpen = true"
