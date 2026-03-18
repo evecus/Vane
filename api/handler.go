@@ -1561,6 +1561,11 @@ func (h *Handler) downloadCert(c *gin.Context) {
 	// Split cert chain: lego returns server cert + intermediate(s) concatenated.
 	// The first PEM block is the server cert; the rest are intermediate/issuer certs.
 	serverCert, issuerCert := splitCertChain(found.CertPEM)
+	// Fallback: if splitting failed (malformed PEM), use raw CertPEM as-is
+	if serverCert == "" {
+		serverCert = found.CertPEM
+		issuerCert = ""
+	}
 
 	safeName := sanitizeFilename(found.Domain)
 	if safeName == "" {
@@ -1580,12 +1585,16 @@ func (h *Handler) downloadCert(c *gin.Context) {
 		return err
 	}
 
-	_ = addFile(safeName+".crt", serverCert)
-	_ = addFile(safeName+".pem", serverCert)
-	_ = addFile(safeName+".key", found.KeyPEM)
 	if issuerCert != "" {
+		// .crt and .pem = fullchain (server cert + intermediate), matches industry standard
+		_ = addFile(safeName+".crt", serverCert+issuerCert)
+		_ = addFile(safeName+".pem", serverCert+issuerCert)
 		_ = addFile(safeName+"_issuerCertificate.crt", issuerCert)
+	} else {
+		_ = addFile(safeName+".crt", serverCert)
+		_ = addFile(safeName+".pem", serverCert)
 	}
+	_ = addFile(safeName+".key", found.KeyPEM)
 
 	// info.json with domains and metadata
 	domains := found.Domains
@@ -1664,10 +1673,14 @@ func tlsParsePair(certPEM, keyPEM string) (interface{}, error) {
 func sanitizeFilename(s string) string {
 	var b strings.Builder
 	for _, r := range s {
-		if r == '"' || r == '\r' || r == '\n' || r == '\\' {
-			continue
+		switch r {
+		case '*':
+			b.WriteRune('_') // wildcard → underscore, matches common convention (_.example.com)
+		case '"', '\r', '\n', '\\', '/', ':', '?', '<', '>', '|':
+			// skip illegal filename characters
+		default:
+			b.WriteRune(r)
 		}
-		b.WriteRune(r)
 	}
 	return b.String()
 }
