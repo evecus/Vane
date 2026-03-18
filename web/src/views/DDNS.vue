@@ -405,6 +405,7 @@
         </div>
       </div>
     </Teleport>
+    <ConfirmModal v-model="showConfirm" :title="confirmTitle" :message="confirmMessage" @confirm="runConfirm" />
   </div>
 </template>
 
@@ -414,6 +415,7 @@ import { Plus, Globe, Pencil, Trash2, X, RefreshCw, AlertCircle } from 'lucide-v
 import { api } from '@/stores/auth'
 import { useI18n } from '@/stores/i18n'
 import ProviderBadge from '@/components/ProviderBadge.vue'
+import ConfirmModal from '@/components/ConfirmModal.vue'
 
 const { t } = useI18n()
 
@@ -422,6 +424,12 @@ const modal = ref(null)
 const editing = ref(false)
 const form = ref({})
 const saveError = ref('')
+// Confirm modal
+const showConfirm = ref(false)
+const confirmTitle = ref('')
+const confirmMessage = ref('')
+const confirmAction = ref(null)
+async function runConfirm() { if (confirmAction.value) await confirmAction.value() }
 const interfaces = ref([])
 const ifaceIPs = ref([])
 const ifaceTestResult = ref('')
@@ -638,8 +646,14 @@ async function triggerRefreshWithStatus(id) {
 async function toggle(id) { await api.post(`/ddns/${id}/toggle`); await load() }
 async function refresh(id) { triggerRefreshWithStatus(id) }
 async function del(id) {
-  if (!confirm(t('confirmDelDdns'))) return
-  await api.delete(`/ddns/${id}`); await load()
+  confirmTitle.value = '删除动态域名'
+  confirmMessage.value = '确认删除此 DDNS 规则？此操作不可撤销。'
+  confirmAction.value = async () => {
+    await api.delete(`/ddns/${id}`)
+    rules.value = rules.value.filter(r => r.id !== id)
+    await load()
+  }
+  showConfirm.value = true
 }
 
 onMounted(load)
