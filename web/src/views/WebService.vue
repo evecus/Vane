@@ -33,16 +33,21 @@
           :{{ svc.listen_port }}
         </div>
         <div class="flex-1 min-w-0">
-          <div class="flex items-center gap-1.5 flex-wrap">
-            <span class="font-semibold text-slate-900 text-sm sm:text-base">{{ svc.name || t('unnamedService') }}</span>
-            <span class="status-dot" :class="svc.enabled ? 'active' : 'inactive'"></span>
+          <!-- 第一行：名称 + 状态点 -->
+          <div class="flex items-center gap-1.5">
+            <span class="font-semibold text-slate-900 text-sm sm:text-base truncate">{{ svc.name || t('unnamedService') }}</span>
+            <span class="status-dot flex-shrink-0" :class="svc.enabled ? 'active' : 'inactive'"></span>
+          </div>
+          <!-- 第二行：badges -->
+          <div class="flex items-center gap-1 mt-1 flex-wrap">
             <span v-if="svc.enable_https" class="badge badge-green text-xs">HTTPS</span>
             <span v-else class="badge badge-slate text-xs">HTTP</span>
             <span class="badge badge-purple text-xs">{{ t('port', {port: svc.listen_port}) }}</span>
+            <span v-if="svc.enable_https" class="badge badge-slate text-xs">HTTP→HTTPS</span>
           </div>
+          <!-- 第三行：子规则数量 -->
           <div class="text-xs text-slate-400 mt-0.5">
             {{ t('routeCount', {n: (svc.routes||[]).length}) }}
-            <span v-if="svc.enable_https"> · {{ t('httpRedirect') }}</span>
           </div>
         </div>
         <div class="flex items-center gap-1 sm:gap-2 flex-shrink-0">
@@ -505,6 +510,12 @@ const filteredLogs = computed(() => {
 async function load() {
   const res = await api.get('/webservice')
   services.value = res.data
+  // 默认折叠所有子规则，已手动展开的保持不变
+  res.data.forEach(svc => {
+    if (collapsed.value[svc.id] === undefined) {
+      collapsed.value[svc.id] = true
+    }
+  })
 }
 
 async function loadLogs() {
