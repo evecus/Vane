@@ -49,6 +49,9 @@ func (h *Handler) Register(r *gin.Engine) {
 	api.POST("/login", h.rateLimitMiddleware(), h.login)
 	api.POST("/logout", h.logout)
 
+	// Dynamic manifest.json — returns correct start_url based on safe_entry config
+	r.GET("/manifest.json", h.serveManifest)
+
 	auth := api.Group("/")
 	auth.Use(h.authMiddleware())
 
@@ -1711,4 +1714,34 @@ func splitCertChain(pemChain string) (serverCert, issuerCert string) {
 		}
 	}
 	return server.String(), issuer.String()
+}
+
+// ─── Dynamic manifest.json ────────────────────────────────────────────────────
+
+// serveManifest returns a manifest.json with start_url set to the configured
+// safe_entry path (or "/" when no safe entry is set), so that PWA home-screen
+// shortcuts always launch the correct URL.
+func (h *Handler) serveManifest(c *gin.Context) {
+	h.cfg.RLock()
+	entry := h.cfg.Admin.SafeEntry
+	h.cfg.RUnlock()
+
+	startURL := "/"
+	if entry != "" {
+		startURL = "/" + strings.Trim(entry, "/") + "/"
+	}
+
+	c.JSON(200, gin.H{
+		"name":             "Vane",
+		"short_name":       "Vane",
+		"description":      "Vane Network Manager",
+		"start_url":        startURL,
+		"display":          "standalone",
+		"background_color": "#667eea",
+		"theme_color":      "#764ba2",
+		"icons": []gin.H{
+			{"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
+			{"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"},
+		},
+	})
 }
