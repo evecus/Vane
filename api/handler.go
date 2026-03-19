@@ -127,9 +127,14 @@ func SafeEntryMiddleware(cfg *config.Config) gin.HandlerFunc {
 
 		// Always allow static assets (JS/CSS/fonts/images embedded in index.html)
 		// These use absolute paths like /assets/index-xxx.js regardless of safe_entry.
+		// Also allow PWA icons and manifest so browser tabs and home screen icons work
+		// correctly even when a safe_entry prefix is configured.
 		if strings.HasPrefix(path, "/assets/") ||
 			path == "/favicon.svg" || path == "/favicon.ico" ||
-			path == "/favicon.png" || path == "/robots.txt" {
+			path == "/favicon.png" || path == "/robots.txt" ||
+			path == "/manifest.json" ||
+			path == "/icon-192.png" || path == "/icon-512.png" ||
+			path == "/apple-touch-icon.png" {
 			c.Next()
 			return
 		}
