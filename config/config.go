@@ -106,15 +106,30 @@ type DataDir struct {
 	db   *sql.DB
 }
 
-func NewDataDir() (*DataDir, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		exe = "."
+func NewDataDir(customPath string) (*DataDir, error) {
+	var root string
+
+	if customPath != "" {
+		// 如果用户指定了路径，建议转为绝对路径以避免相对路径偏移
+		absPath, err := filepath.Abs(customPath)
+		if err != nil {
+			return nil, fmt.Errorf("invalid config path: %w", err)
+		}
+		root = absPath
+	} else {
+		// 原有的默认逻辑：程序所在目录下的 data 文件夹
+		exe, err := os.Executable()
+		if err != nil {
+			exe = "."
+		}
+		root = filepath.Join(filepath.Dir(exe), "data")
 	}
-	root := filepath.Join(filepath.Dir(exe), "data")
+
+	// 创建目录
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
+
 	dd := &DataDir{Root: root}
 	if err := dd.loadOrCreateKey(); err != nil {
 		return nil, err
