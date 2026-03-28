@@ -1,16 +1,15 @@
-name: 测试
+name: 测试发布
 
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
-    # 新增：手动触发时允许输入版本号
     inputs:
       version:
-        description: '发布版本号 (例如: v1.0.0)'
-        required: true
-        default: 'test'
+        description: '手动指定版本号 (留空则自动生成时间戳)'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -24,13 +23,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 1. 确定版本号变量：如果是 Tag 触发则用 tag，手动触发则用输入的变量
+      # 1. 确定版本号：优先使用 Tag，其次使用输入值，最后使用当前时间
       - name: Set Version
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "RELEASE_VERSION=${{ github.ref_name }}" >> $GITHUB_ENV
+          elif [ -n "${{ github.event.inputs.version }}" ]; then
             echo "RELEASE_VERSION=${{ github.event.inputs.version }}" >> $GITHUB_ENV
           else
-            echo "RELEASE_VERSION=${{ github.ref_name }}" >> $GITHUB_ENV
+            # 格式：v2026.03.28-0734 (根据当前 UTC 时间)
+            echo "RELEASE_VERSION=v$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_ENV
           fi
 
       - name: Set up Go
@@ -63,7 +65,8 @@ jobs:
           GOARCH: arm64
           CGO_ENABLED: 0
         run: |
-          go build -ldflags="-s -w -X main.Version=${{ github.ref_name }}" \
+          # 修复：使用环境变量中的版本号写入二进制
+          go build -ldflags="-s -w -X main.Version=${{ env.RELEASE_VERSION }}" \
             -trimpath -o vane-linux-arm64 .
 
       - name: Checksum
@@ -72,11 +75,11 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          # 使用统一的变量名
           tag_name: ${{ env.RELEASE_VERSION }}
-          name: "Vane ${{ env.RELEASE_VERSION }}"
+          name: "Vane ${{ env.RELEASE_VERSION }} (Pre-release)"
           body: |
             ## 🌀 Vane ${{ env.RELEASE_VERSION }}
+            > 这是一个自动生成的预览版本。
 
             ### 下载
             | 平台 | 文件 |
@@ -94,4 +97,5 @@ jobs:
             vane-linux-arm64
             sha256sums.txt
           draft: false
-          prerelease: false
+          # 修改：默认发布为预发布版本
+          prerelease: true
