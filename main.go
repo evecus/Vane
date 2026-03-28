@@ -30,7 +30,11 @@ var Version = "dev"
 func main() {
 	// ── 0. Parse CLI flags ─────────────────────────────────────────────────
 	var disableFlag string
+	var configPath string // 新增：用于存储自定义配置路径
+
 	flag.StringVar(&disableFlag, "disable", "", "Comma-separated features to disable (e.g. systeminfo)")
+	// 新增 --config 参数定义
+	flag.StringVar(&configPath, "config", "", "Custom path for data and configuration (default: ./data)")
 	flag.Parse()
 
 	disabled := map[string]bool{}
@@ -43,7 +47,8 @@ func main() {
 	disableSysinfo := disabled["systeminfo"]
 
 	// ── 1. Init encrypted SQLite data directory ────────────────────────────
-	dd, err := config.NewDataDir()
+	// 修改：将 configPath 传给 NewDataDir
+	dd, err := config.NewDataDir(configPath)
 	if err != nil {
 		log.Fatalf("Failed to init data directory: %v", err)
 	}
@@ -74,10 +79,7 @@ func main() {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
-	// CORS: allow requests from the same port regardless of hostname.
-	// The admin panel is served by Vane itself, so any origin reaching
-	// the correct port is considered same-site. Fine-grained restriction
-	// can be applied via the VANE_CORS_ORIGIN environment variable.
+	// CORS 设置
 	allowedOrigin := os.Getenv("VANE_CORS_ORIGIN")
 	corsConfig := cors.Config{
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
@@ -87,7 +89,6 @@ func main() {
 	if allowedOrigin != "" {
 		corsConfig.AllowOrigins = []string{allowedOrigin}
 	} else {
-		// Allow any origin — the auth token is the real access control.
 		corsConfig.AllowAllOrigins = true
 	}
 	r.Use(cors.New(corsConfig))
@@ -139,7 +140,7 @@ func main() {
 	})
 
 	addr := fmt.Sprintf("0.0.0.0:%d", cfg.Admin.Port)
-	log.Printf("🌀 Vane %s  →  http://%s", Version, addr)
+	log.Printf("Vane %s  →  http://%s", Version, addr)
 	if err := r.Run(addr); err != nil {
 		log.Fatalf("Server error: %v", err)
 	}
@@ -152,10 +153,6 @@ func printBanner(cfg *config.Config, dd *config.DataDir) {
 	}
 	fmt.Printf(`
   ✨ Dashboard : http://0.0.0.0:%d%s
-  👤 Username  : %s
-  📦 Version   : %s
-  🔐 Storage   : SQLite + AES-256-GCM (%s/vane.db)
-  🌐 Web Svcs  : HTTPS only (HTTP auto-redirects to HTTPS)
 
 `, cfg.Admin.Port, entry, cfg.Admin.Username, Version, dd.Root)
 }
