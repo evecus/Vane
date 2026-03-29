@@ -347,7 +347,7 @@
                 </label>
               </div>
               <div class="flex gap-2 sm:gap-3">
-                <button class="btn-primary flex-1 sm:flex-none sm:min-w-[80px] justify-center" @click="saveRoute">{{ t('save') }}</button>
+                <button class="btn-primary flex-1 sm:flex-none sm:min-w-[80px] justify-center" @click="saveRoute" :disabled="routeSaving">{{ routeSaving ? t('saving') || '保存中…' : t('save') }}</button>
                 <button class="btn-secondary flex-1 sm:flex-none sm:min-w-[80px] justify-center" @click="routeModal=null">{{ t('cancel') }}</button>
               </div>
             </div>
@@ -467,6 +467,7 @@ const editingRoute = ref(false)
 const currentSvcID = ref('')
 const routeForm = ref({})
 const routeError = ref('')
+const routeSaving = ref(false)
 
 // 后端地址拆分为 scheme + host:port
 const routeScheme = ref('http://')
@@ -622,6 +623,7 @@ function openRouteModal(svcID, route = null) {
 }
 
 async function saveRoute() {
+  if (routeSaving.value) return
   routeError.value = ''
   routeForm.value.backend_url = routeScheme.value + routeHostPort.value
   // Validate auth fields
@@ -643,6 +645,7 @@ async function saveRoute() {
     auth_pass_hash: undefined, // never send hash back to backend
     auth_pass: routeAuthPass.value || undefined,
   }
+  routeSaving.value = true
   try {
     if (editingRoute.value) {
       await api.put(`/webservice/${id}/routes/${routeForm.value.id}`, payload)
@@ -652,7 +655,27 @@ async function saveRoute() {
     routeModal.value = false
     await load()
   } catch (e) {
+    // The backend restarts the web service after saving a route, which can
+    // drop the connection and trigger a network error even though the save
+    // succeeded. If we get a network error (no response), reload the list
+    // first; if the route now exists, treat it as success.
+    if (!e.response) {
+      try {
+        await load()
+        const svc = services.value.find(s => s.id === id)
+        const saved = svc?.routes?.some(r =>
+          r.name === routeForm.value.name &&
+          r.frontend_domain === routeForm.value.frontend_domain
+        )
+        if (saved) {
+          routeModal.value = false
+          return
+        }
+      } catch (_) { /* ignore secondary error */ }
+    }
     routeError.value = e.response?.data?.error || e.message
+  } finally {
+    routeSaving.value = false
   }
 }
 
