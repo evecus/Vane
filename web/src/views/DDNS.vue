@@ -95,6 +95,20 @@
               <span>{{ t('interval') }} {{ rule.interval || 60 }}s</span>
             </div>
 
+            <!-- 上次同步状态（持久化，刷新后仍显示） -->
+            <div v-if="!syncStatus[rule.id] && rule.last_sync_at" class="mt-1.5">
+              <div v-if="rule.last_sync_ok === false" class="flex items-start gap-1.5 text-xs">
+                <span class="flex-shrink-0 text-red-400 font-bold mt-px">✗</span>
+                <span class="text-red-400 break-all">{{ rule.last_sync_err || t('ipFetchFail') }}</span>
+                <span class="text-slate-300 ml-auto flex-shrink-0 whitespace-nowrap">{{ new Date(rule.last_sync_at).toLocaleString() }}</span>
+              </div>
+              <div v-else-if="rule.last_sync_ok === true" class="flex items-center gap-1.5 text-xs text-emerald-500">
+                <span class="flex-shrink-0 font-bold">✓</span>
+                <span>同步成功</span>
+                <span class="text-slate-300 ml-auto flex-shrink-0 whitespace-nowrap">{{ new Date(rule.last_sync_at).toLocaleString() }}</span>
+              </div>
+            </div>
+
             <!-- DNS 同步结果 -->
             <div v-if="syncStatus[rule.id] && !syncStatus[rule.id].ipErr" class="mt-1.5 space-y-0.5">
               <div v-for="(errMsg, fqdn) in syncStatus[rule.id].domains" :key="fqdn"
