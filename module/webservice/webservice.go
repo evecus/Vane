@@ -325,7 +325,7 @@ func (m *Manager) Start(id string) error {
 		}
 		// 直接用原始 listener，不走 sniff
 		go func() {
-			log.Printf("[webservice] HTTP :%d  (service %q)", svc.ListenPort, svc.Name)
+	
 			if err := httpSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
 				log.Printf("[webservice] HTTP error: %v", err)
 			}
@@ -376,7 +376,7 @@ func (m *Manager) Start(id string) error {
 		WriteTimeout: 10 * time.Second,
 	}
 	go func() {
-		log.Printf("[webservice] HTTP→HTTPS redirect on :%d  (service %q)", httpsPort, svc.Name)
+
 		if err := ms.httpSrv.Serve(httpLn); err != nil && err.Error() != "listener closed" {
 			log.Printf("[webservice] HTTP redirect error: %v", err)
 		}
@@ -416,7 +416,7 @@ func (m *Manager) Start(id string) error {
 		IdleTimeout:  120 * time.Second,
 	}
 	go func() {
-		log.Printf("[webservice] HTTPS :%d  (service %q)", httpsPort, svc.Name)
+
 		tlsLn := tls.NewListener(httpsLn, tlsCfg)
 		if err := ms.httpsSrv.Serve(tlsLn); err != nil && err != http.ErrServerClosed && err.Error() != "listener closed" {
 			log.Printf("[webservice] HTTPS error: %v", err)
@@ -446,7 +446,7 @@ func (m *Manager) Start(id string) error {
 			}
 			ms.http80Srv = srv80
 			go func() {
-				log.Printf("[webservice] :80 → :443 HTTPS redirect  (service %q)", svc.Name)
+
 				if err := srv80.Serve(ln80); err != nil && err != http.ErrServerClosed {
 					log.Printf("[webservice] :80 redirect error: %v", err)
 				}
