@@ -135,8 +135,8 @@
               </span>
             </div>
 
-            <!-- 路由操作：移动端始终可见 -->
-            <div class="flex items-center gap-1 flex-shrink-0 sm:opacity-0 sm:group-hover/route:opacity-100 transition-opacity">
+            <!-- 路由操作：始终可见 -->
+            <div class="flex items-center gap-1 flex-shrink-0">
               <label class="toggle scale-75">
                 <input type="checkbox" :checked="route.enabled" @change="toggleRoute(svc.id, route.id)" />
                 <div class="toggle-track"></div>
@@ -664,8 +664,8 @@ async function saveRoute() {
         await load()
         const svc = services.value.find(s => s.id === id)
         const saved = svc?.routes?.some(r =>
-          r.name === routeForm.value.name &&
-          r.frontend_domain === routeForm.value.frontend_domain
+          r.domain === routeForm.value.domain &&
+          r.backend_url === routeForm.value.backend_url
         )
         if (saved) {
           routeModal.value = false
@@ -680,7 +680,16 @@ async function saveRoute() {
 }
 
 async function toggleRoute(svcID, rid) {
-  await api.post(`/webservice/${svcID}/routes/${rid}/toggle`)
+  try {
+    await api.post(`/webservice/${svcID}/routes/${rid}/toggle`)
+  } catch (e) {
+    // Backend may restart nginx and drop the connection even on success.
+    // If no response body, treat as success and just reload.
+    if (e.response) {
+      alert(e.response?.data?.error || e.message)
+      return
+    }
+  }
   await load()
 }
 
