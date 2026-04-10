@@ -221,6 +221,9 @@ func (dd *DataDir) migrate() error {
 			last_ip TEXT NOT NULL DEFAULT '',
 			last_updated TEXT NOT NULL DEFAULT '',
 			ip_history_enc TEXT NOT NULL DEFAULT '',
+			last_sync_ok INTEGER,
+			last_sync_err TEXT NOT NULL DEFAULT '',
+			last_sync_at TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS web_services (
@@ -288,6 +291,10 @@ func (dd *DataDir) migrate() error {
 	_, _ = dd.db.Exec(`ALTER TABLE web_routes ADD COLUMN auth_pass_hash TEXT NOT NULL DEFAULT ''`)
 	// Migrate web_routes to add name column
 	_, _ = dd.db.Exec(`ALTER TABLE web_routes ADD COLUMN name TEXT NOT NULL DEFAULT ''`)
+	// Migrate ddns to add last sync status columns
+	_, _ = dd.db.Exec(`ALTER TABLE ddns ADD COLUMN last_sync_ok INTEGER`)
+	_, _ = dd.db.Exec(`ALTER TABLE ddns ADD COLUMN last_sync_err TEXT NOT NULL DEFAULT ''`)
+	_, _ = dd.db.Exec(`ALTER TABLE ddns ADD COLUMN last_sync_at TEXT NOT NULL DEFAULT ''`)
 	// Migrate web_services to drop tls_cert_id (SQLite can't DROP columns, just ignore it on load)
 	return nil
 }
@@ -499,7 +506,7 @@ func (c *Config) loadFromDB() error {
 	}
 
 	// DDNS
-	drows, err := db.Query(`SELECT id, name, provider, domains_enc, domain, sub_domain, ip_version, ip_detect_mode, ip_interface, ip_index, interval, enabled, provider_conf_enc, last_ip, last_updated, ip_history_enc, created_at FROM ddns ORDER BY created_at`)
+	drows, err := db.Query(`SELECT id, name, provider, domains_enc, domain, sub_domain, ip_version, ip_detect_mode, ip_interface, ip_index, interval, enabled, provider_conf_enc, last_ip, last_updated, ip_history_enc, last_sync_ok, last_sync_err, last_sync_at, created_at FROM ddns ORDER BY created_at`)
 	if err != nil {
 		return fmt.Errorf("load ddns: %w", err)
 	}
@@ -508,10 +515,16 @@ func (c *Config) loadFromDB() error {
 		var r DDNSRule
 		var enabledInt int
 		var domainsEnc, providerConfEnc, ipHistoryEnc string
+		var lastSyncOK sql.NullInt64
 		if err := drows.Scan(&r.ID, &r.Name, &r.Provider, &domainsEnc, &r.Domain, &r.SubDomain,
 			&r.IPVersion, &r.IPDetectMode, &r.IPInterface, &r.IPIndex, &r.Interval,
-			&enabledInt, &providerConfEnc, &r.LastIP, &r.LastUpdated, &ipHistoryEnc, &r.CreatedAt); err != nil {
+			&enabledInt, &providerConfEnc, &r.LastIP, &r.LastUpdated, &ipHistoryEnc,
+			&lastSyncOK, &r.LastSyncErr, &r.LastSyncAt, &r.CreatedAt); err != nil {
 			return err
+		}
+		if lastSyncOK.Valid {
+			v := lastSyncOK.Int64 == 1
+			r.LastSyncOK = &v
 		}
 		r.Enabled = enabledInt == 1
 		if domainsEnc != "" {
@@ -666,13 +679,22 @@ func (c *Config) SaveDDNS(r DDNSRule) error {
 	if err != nil {
 		return err
 	}
+	var lastSyncOKVal interface{}
+	if r.LastSyncOK != nil {
+		if *r.LastSyncOK {
+			lastSyncOKVal = 1
+		} else {
+			lastSyncOKVal = 0
+		}
+	}
 	_, err = c.dataDir.db.Exec(
-		`INSERT INTO ddns(id,name,provider,domains_enc,domain,sub_domain,ip_version,ip_detect_mode,ip_interface,ip_index,interval,enabled,provider_conf_enc,last_ip,last_updated,ip_history_enc,created_at)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-		 ON CONFLICT(id) DO UPDATE SET name=excluded.name, provider=excluded.provider, domains_enc=excluded.domains_enc, domain=excluded.domain, sub_domain=excluded.sub_domain, ip_version=excluded.ip_version, ip_detect_mode=excluded.ip_detect_mode, ip_interface=excluded.ip_interface, ip_index=excluded.ip_index, interval=excluded.interval, enabled=excluded.enabled, provider_conf_enc=excluded.provider_conf_enc, last_ip=excluded.last_ip, last_updated=excluded.last_updated, ip_history_enc=excluded.ip_history_enc`,
+		`INSERT INTO ddns(id,name,provider,domains_enc,domain,sub_domain,ip_version,ip_detect_mode,ip_interface,ip_index,interval,enabled,provider_conf_enc,last_ip,last_updated,ip_history_enc,last_sync_ok,last_sync_err,last_sync_at,created_at)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		 ON CONFLICT(id) DO UPDATE SET name=excluded.name, provider=excluded.provider, domains_enc=excluded.domains_enc, domain=excluded.domain, sub_domain=excluded.sub_domain, ip_version=excluded.ip_version, ip_detect_mode=excluded.ip_detect_mode, ip_interface=excluded.ip_interface, ip_index=excluded.ip_index, interval=excluded.interval, enabled=excluded.enabled, provider_conf_enc=excluded.provider_conf_enc, last_ip=excluded.last_ip, last_updated=excluded.last_updated, ip_history_enc=excluded.ip_history_enc, last_sync_ok=excluded.last_sync_ok, last_sync_err=excluded.last_sync_err, last_sync_at=excluded.last_sync_at`,
 		r.ID, r.Name, r.Provider, domainsEnc, r.Domain, r.SubDomain,
 		r.IPVersion, r.IPDetectMode, r.IPInterface, r.IPIndex, r.Interval,
-		boolToInt(r.Enabled), providerConfEnc, r.LastIP, r.LastUpdated, ipHistoryEnc, r.CreatedAt,
+		boolToInt(r.Enabled), providerConfEnc, r.LastIP, r.LastUpdated, ipHistoryEnc,
+		lastSyncOKVal, r.LastSyncErr, r.LastSyncAt, r.CreatedAt,
 	)
 	return err
 }
