@@ -12,6 +12,7 @@ const routes = [
       { path: 'portforward', name: 'portforward', component: () => import('@/views/PortForward.vue') },
       { path: 'ddns',        name: 'ddns',        component: () => import('@/views/DDNS.vue') },
       { path: 'webservice',  name: 'webservice',  component: () => import('@/views/WebService.vue') },
+      { path: 'ipfilter',    name: 'ipfilter',    component: () => import('@/views/IPFilter.vue') },
       { path: 'tls',         name: 'tls',         component: () => import('@/views/TLS.vue') },
       { path: 'settings',    name: 'settings',    component: () => import('@/views/Settings.vue') },
     ]

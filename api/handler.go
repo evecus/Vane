@@ -110,6 +110,14 @@ func (h *Handler) Register(r *gin.Engine) {
 	auth.POST("/tls/upload", h.uploadCert)
 	auth.GET("/tls/:id/download", h.downloadCert)
 	auth.GET("/tls/:id/pem", h.getCertPEM)
+
+	// IP Filter
+	auth.GET("/ipfilter", h.listIPFilterRules)
+	auth.POST("/ipfilter", h.createIPFilterRule)
+	auth.PUT("/ipfilter/:id", h.updateIPFilterRule)
+	auth.DELETE("/ipfilter/:id", h.deleteIPFilterRule)
+	auth.POST("/ipfilter/:id/toggle", h.toggleIPFilterRule)
+	auth.POST("/ipfilter/upload", h.uploadIPFilterFile)
 }
 
 // ─── Safe Entry Middleware ────────────────────────────────────────────────────
@@ -1744,4 +1752,222 @@ func (h *Handler) serveManifest(c *gin.Context) {
 			{"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"},
 		},
 	})
+}
+
+// ─── IP Filter Handlers ───────────────────────────────────────────────────────
+
+func (h *Handler) listIPFilterRules(c *gin.Context) {
+	h.cfg.RLock()
+	rules := append([]config.IPFilterRule{}, h.cfg.IPFilter...)
+	h.cfg.RUnlock()
+	c.JSON(200, rules)
+}
+
+func (h *Handler) createIPFilterRule(c *gin.Context) {
+	var body config.IPFilterRule
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Validate scopes not empty
+	if len(body.Scopes) == 0 {
+		c.JSON(400, gin.H{"error": "scopes cannot be empty"})
+		return
+	}
+
+	// Check scope uniqueness across existing rules
+	h.cfg.RLock()
+	existing := h.cfg.IPFilter
+	h.cfg.RUnlock()
+	if conflict := findScopeConflict(existing, "", body.Scopes); conflict != "" {
+		c.JSON(400, gin.H{"error": "scope already used by another rule: " + conflict})
+		return
+	}
+
+	body.ID = config.NewID()
+	body.CreatedAt = config.Now()
+	if body.Mode != "blacklist" {
+		body.Mode = "whitelist"
+	}
+	if body.ManualIPs == nil {
+		body.ManualIPs = []string{}
+	}
+	if body.Attachments == nil {
+		body.Attachments = []config.IPFilterAttachment{}
+	}
+
+	if err := h.cfg.SaveIPFilterRule(body); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+
+	h.cfg.Lock()
+	h.cfg.IPFilter = append(h.cfg.IPFilter, body)
+	h.cfg.Unlock()
+
+	c.JSON(200, body)
+}
+
+func (h *Handler) updateIPFilterRule(c *gin.Context) {
+	id := c.Param("id")
+	var body config.IPFilterRule
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	if len(body.Scopes) == 0 {
+		c.JSON(400, gin.H{"error": "scopes cannot be empty"})
+		return
+	}
+
+	h.cfg.RLock()
+	existing := h.cfg.IPFilter
+	h.cfg.RUnlock()
+
+	// Check rule exists
+	found := false
+	for _, r := range existing {
+		if r.ID == id {
+			found = true
+			break
+		}
+	}
+	if !found {
+		c.JSON(404, gin.H{"error": "rule not found"})
+		return
+	}
+
+	// Check scope uniqueness (exclude current rule)
+	if conflict := findScopeConflict(existing, id, body.Scopes); conflict != "" {
+		c.JSON(400, gin.H{"error": "scope already used by another rule: " + conflict})
+		return
+	}
+
+	body.ID = id
+	if body.Mode != "blacklist" {
+		body.Mode = "whitelist"
+	}
+	if body.ManualIPs == nil {
+		body.ManualIPs = []string{}
+	}
+	if body.Attachments == nil {
+		body.Attachments = []config.IPFilterAttachment{}
+	}
+
+	if err := h.cfg.SaveIPFilterRule(body); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+
+	h.cfg.Lock()
+	for i, r := range h.cfg.IPFilter {
+		if r.ID == id {
+			body.CreatedAt = r.CreatedAt
+			h.cfg.IPFilter[i] = body
+			break
+		}
+	}
+	h.cfg.Unlock()
+
+	c.JSON(200, body)
+}
+
+func (h *Handler) deleteIPFilterRule(c *gin.Context) {
+	id := c.Param("id")
+	if err := h.cfg.DeleteIPFilterRule(id); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	h.cfg.Lock()
+	newList := h.cfg.IPFilter[:0]
+	for _, r := range h.cfg.IPFilter {
+		if r.ID != id {
+			newList = append(newList, r)
+		}
+	}
+	h.cfg.IPFilter = newList
+	h.cfg.Unlock()
+	c.JSON(200, gin.H{"ok": true})
+}
+
+func (h *Handler) toggleIPFilterRule(c *gin.Context) {
+	id := c.Param("id")
+	h.cfg.Lock()
+	defer h.cfg.Unlock()
+	for i, r := range h.cfg.IPFilter {
+		if r.ID == id {
+			h.cfg.IPFilter[i].Enabled = !r.Enabled
+			if err := h.cfg.SaveIPFilterRule(h.cfg.IPFilter[i]); err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(200, h.cfg.IPFilter[i])
+			return
+		}
+	}
+	c.JSON(404, gin.H{"error": "rule not found"})
+}
+
+// uploadIPFilterFile parses an uploaded IP list file and returns the parsed IPs.
+// Supports one IP/CIDR per line; ignores blank lines and lines starting with '#'.
+func (h *Handler) uploadIPFilterFile(c *gin.Context) {
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(400, gin.H{"error": "no file uploaded"})
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		c.JSON(500, gin.H{"error": "failed to read file"})
+		return
+	}
+
+	ips := parseIPList(string(data))
+	c.JSON(200, gin.H{
+		"name": header.Filename,
+		"ips":  ips,
+	})
+}
+
+// parseIPList splits text into individual IP/CIDR entries, ignoring blanks and comments.
+func parseIPList(text string) []string {
+	seen := make(map[string]bool)
+	var result []string
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if !seen[line] {
+			seen[line] = true
+			result = append(result, line)
+		}
+	}
+	if result == nil {
+		result = []string{}
+	}
+	return result
+}
+
+// findScopeConflict checks if any scope in newScopes is already claimed by a rule
+// other than excludeID. Returns the conflicting scope name or "".
+func findScopeConflict(rules []config.IPFilterRule, excludeID string, newScopes []string) string {
+	claimed := make(map[string]bool)
+	for _, r := range rules {
+		if r.ID == excludeID {
+			continue
+		}
+		for _, s := range r.Scopes {
+			claimed[s] = true
+		}
+	}
+	for _, s := range newScopes {
+		if claimed[s] {
+			return s
+		}
+	}
+	return ""
 }

@@ -274,6 +274,15 @@ func (dd *DataDir) migrate() error {
 			data_enc TEXT NOT NULL,
 			created_at TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS ip_filter_rules (
+			id TEXT PRIMARY KEY,
+			enabled INTEGER NOT NULL DEFAULT 0,
+			mode TEXT NOT NULL DEFAULT 'whitelist',
+			scopes_enc TEXT NOT NULL DEFAULT '',
+			manual_ips_enc TEXT NOT NULL DEFAULT '',
+			attachments_enc TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL
+		)`,
 	}
 	for _, s := range stmts {
 		if _, err := dd.db.Exec(s); err != nil {
@@ -312,6 +321,28 @@ type Config struct {
 	DDNS         []DDNSRule        `json:"ddns"`
 	WebServices  []WebService      `json:"web_services"`
 	TLSCerts     []TLSCert         `json:"tls_certs"`
+	IPFilter     []IPFilterRule    `json:"ip_filter"`
+}
+
+// ─── IPFilter Types ───────────────────────────────────────────────────────────
+
+// IPFilterAttachment represents a single uploaded IP list file.
+type IPFilterAttachment struct {
+	Name string   `json:"name"`
+	IPs  []string `json:"ips"`
+}
+
+// IPFilterRule is one IP filtering policy applied to one or more scopes.
+// Scopes values: "admin" | "portforward" | "webservice"
+// Mode values:   "whitelist" | "blacklist"
+type IPFilterRule struct {
+	ID          string               `json:"id"`
+	Enabled     bool                 `json:"enabled"`
+	Mode        string               `json:"mode"`
+	Scopes      []string             `json:"scopes"`
+	ManualIPs   []string             `json:"manual_ips"`
+	Attachments []IPFilterAttachment `json:"attachments"`
+	CreatedAt   string               `json:"created_at"`
 }
 
 type AdminConfig struct {
@@ -627,6 +658,44 @@ func (c *Config) loadFromDB() error {
 	if c.TLSCerts == nil {
 		c.TLSCerts = []TLSCert{}
 	}
+
+	// IPFilter rules
+	irows, err := db.Query(`SELECT id, enabled, mode, scopes_enc, manual_ips_enc, attachments_enc, created_at FROM ip_filter_rules ORDER BY created_at`)
+	if err != nil {
+		return fmt.Errorf("load ip_filter_rules: %w", err)
+	}
+	defer irows.Close()
+	for irows.Next() {
+		var rule IPFilterRule
+		var enabledInt int
+		var scopesEnc, manualIPsEnc, attachmentsEnc string
+		if err := irows.Scan(&rule.ID, &enabledInt, &rule.Mode, &scopesEnc, &manualIPsEnc, &attachmentsEnc, &rule.CreatedAt); err != nil {
+			return err
+		}
+		rule.Enabled = enabledInt == 1
+		if scopesEnc != "" {
+			_ = decryptJSON(key, scopesEnc, &rule.Scopes)
+		}
+		if manualIPsEnc != "" {
+			_ = decryptJSON(key, manualIPsEnc, &rule.ManualIPs)
+		}
+		if attachmentsEnc != "" {
+			_ = decryptJSON(key, attachmentsEnc, &rule.Attachments)
+		}
+		if rule.Scopes == nil {
+			rule.Scopes = []string{}
+		}
+		if rule.ManualIPs == nil {
+			rule.ManualIPs = []string{}
+		}
+		if rule.Attachments == nil {
+			rule.Attachments = []IPFilterAttachment{}
+		}
+		c.IPFilter = append(c.IPFilter, rule)
+	}
+	if c.IPFilter == nil {
+		c.IPFilter = []IPFilterRule{}
+	}
 	return nil
 }
 
@@ -777,6 +846,33 @@ func (c *Config) DeleteTLSCert(id string) error {
 	return err
 }
 
+func (c *Config) SaveIPFilterRule(rule IPFilterRule) error {
+	key := c.dataDir.Key
+	scopesEnc, err := encryptJSON(key, rule.Scopes)
+	if err != nil {
+		return err
+	}
+	manualIPsEnc, err := encryptJSON(key, rule.ManualIPs)
+	if err != nil {
+		return err
+	}
+	attachmentsEnc, err := encryptJSON(key, rule.Attachments)
+	if err != nil {
+		return err
+	}
+	_, err = c.dataDir.db.Exec(
+		`INSERT INTO ip_filter_rules(id,enabled,mode,scopes_enc,manual_ips_enc,attachments_enc,created_at) VALUES(?,?,?,?,?,?,?)
+		 ON CONFLICT(id) DO UPDATE SET enabled=excluded.enabled, mode=excluded.mode, scopes_enc=excluded.scopes_enc, manual_ips_enc=excluded.manual_ips_enc, attachments_enc=excluded.attachments_enc`,
+		rule.ID, boolToInt(rule.Enabled), rule.Mode, scopesEnc, manualIPsEnc, attachmentsEnc, rule.CreatedAt,
+	)
+	return err
+}
+
+func (c *Config) DeleteIPFilterRule(id string) error {
+	_, err := c.dataDir.db.Exec(`DELETE FROM ip_filter_rules WHERE id=?`, id)
+	return err
+}
+
 // Save persists all in-memory state to the DB (used for bulk operations like restore).
 func (c *Config) Save() error {
 	c.mu.RLock()
@@ -785,6 +881,7 @@ func (c *Config) Save() error {
 	ddnsList := append([]DDNSRule{}, c.DDNS...)
 	wsList := append([]WebService{}, c.WebServices...)
 	tlsList := append([]TLSCert{}, c.TLSCerts...)
+	ipfList := append([]IPFilterRule{}, c.IPFilter...)
 	c.mu.RUnlock()
 
 	c.Admin = admin
@@ -816,6 +913,11 @@ func (c *Config) Save() error {
 			return err
 		}
 	}
+	for _, rule := range ipfList {
+		if err := c.SaveIPFilterRule(rule); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -835,6 +937,7 @@ type FullBackup struct {
 	DDNS         []DDNSRule        `json:"ddns"`
 	WebServices  []WebService      `json:"web_services"`
 	TLSCerts     []TLSCert         `json:"tls_certs"`
+	IPFilter     []IPFilterRule    `json:"ip_filter"`
 }
 
 // Export serialises the complete configuration (including admin account, port,
@@ -849,6 +952,7 @@ func (c *Config) Export() ([]byte, error) {
 		DDNS:         c.DDNS,
 		WebServices:  c.WebServices,
 		TLSCerts:     c.TLSCerts,
+		IPFilter:     c.IPFilter,
 	}
 	c.mu.RUnlock()
 	enc, err := encryptJSON(portableBackupKey, snap)
@@ -889,6 +993,11 @@ func (c *Config) Import(data []byte) error {
 	c.DDNS = snap.DDNS
 	c.WebServices = snap.WebServices
 	c.TLSCerts = snap.TLSCerts
+	if snap.IPFilter != nil {
+		c.IPFilter = snap.IPFilter
+	} else {
+		c.IPFilter = []IPFilterRule{}
+	}
 	c.mu.Unlock()
 	return c.Save()
 }
@@ -907,6 +1016,7 @@ func (c *Config) initDefaults() error {
 	c.DDNS = []DDNSRule{}
 	c.WebServices = []WebService{}
 	c.TLSCerts = []TLSCert{}
+	c.IPFilter = []IPFilterRule{}
 	return c.SaveAdmin()
 }
 

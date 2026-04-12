@@ -205,7 +205,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useI18n } from '@/stores/i18n'
 import { api } from '@/stores/auth'
 import {
-  LayoutDashboard, ArrowLeftRight, Globe, Server, Shield, Settings, LogOut, Menu, X, ScrollText, RefreshCw
+  LayoutDashboard, ArrowLeftRight, Globe, Server, Shield, Filter, Settings, LogOut, Menu, X, ScrollText, RefreshCw
 } from 'lucide-vue-next'
 
 const auth = useAuthStore()
@@ -267,6 +267,8 @@ const navItems = computed(() => [
     gradient: 'linear-gradient(135deg,#10b981,#059669)', shadow: '0 4px 15px rgba(16,185,129,0.4)' },
   { to: '/webservice',  label: i18n.t('webservice'),   icon: Server,
     gradient: 'linear-gradient(135deg,#8b5cf6,#ec4899)', shadow: '0 4px 15px rgba(139,92,246,0.4)' },
+  { to: '/ipfilter',   label: i18n.t('ipfilter'),     icon: Filter,
+    gradient: 'linear-gradient(135deg,#06b6d4,#3b82f6)', shadow: '0 4px 15px rgba(6,182,212,0.4)' },
   { to: '/tls',         label: i18n.t('tls'),           icon: Shield,
     gradient: 'linear-gradient(135deg,#f59e0b,#ef4444)', shadow: '0 4px 15px rgba(245,158,11,0.4)' },
 ])
