@@ -109,7 +109,7 @@ func (m *Manager) Start(id string) error {
 
 	var ws []*worker
 	for _, proto := range protocols {
-		w := newWorker(*rule, proto, st)
+		w := newWorker(*rule, proto, st, m.cfg)
 		ws = append(ws, w)
 		go w.run()
 	}
@@ -168,10 +168,11 @@ type worker struct {
 	stopCh   chan struct{}
 	listener net.Listener
 	udpConn  *net.UDPConn
+	cfg      *config.Config
 }
 
-func newWorker(rule config.PortForwardRule, proto string, stats *Stats) *worker {
-	return &worker{rule: rule, proto: proto, stats: stats, stopCh: make(chan struct{})}
+func newWorker(rule config.PortForwardRule, proto string, stats *Stats, cfg *config.Config) *worker {
+	return &worker{rule: rule, proto: proto, stats: stats, stopCh: make(chan struct{}), cfg: cfg}
 }
 
 func (w *worker) stop() {
@@ -211,6 +212,13 @@ func (w *worker) runTCP() {
 			default:
 				continue
 			}
+		}
+		// IP filter check
+		clientIP, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
+		if !w.cfg.CheckIPAllowed("portforward", clientIP) {
+			log.Printf("[portforward] TCP blocked %s → port %d", clientIP, w.rule.ListenPort)
+			conn.Close()
+			continue
 		}
 		w.stats.Conns.Add(1)
 		go w.handleTCP(conn)
@@ -276,6 +284,11 @@ func (w *worker) runUDP() {
 			default:
 				continue
 			}
+		}
+		// IP filter check
+		if !w.cfg.CheckIPAllowed("portforward", clientAddr.IP.String()) {
+			log.Printf("[portforward] UDP blocked %s → port %d", clientAddr.IP, w.rule.ListenPort)
+			continue
 		}
 		w.stats.BytesIn.Add(int64(n))
 		go w.handleUDP(conn, clientAddr, raddr, buf[:n])
