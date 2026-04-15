@@ -517,6 +517,20 @@ func (m *Manager) buildRouter(svc *config.WebService) http.Handler {
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// IP filter check
+		clientIP := r.RemoteAddr
+		if ip, _, err := net.SplitHostPort(clientIP); err == nil {
+			clientIP = ip
+		}
+		if xip := r.Header.Get("X-Real-IP"); xip != "" {
+			clientIP = xip
+		}
+		if !m.cfg.CheckIPAllowed("webservice", clientIP) {
+			log.Printf("[webservice] blocked %s", clientIP)
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+
 		host := r.Host
 		if h, _, err := net.SplitHostPort(host); err == nil {
 			host = h
