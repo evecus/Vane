@@ -44,6 +44,7 @@ func NewHandler(cfg *config.Config, pf *portforward.Manager, d *ddns.Manager,
 // Register wires all routes.
 func (h *Handler) Register(r *gin.Engine) {
 	api := r.Group("/api")
+	api.Use(h.ipFilterMiddleware("admin"))
 
 	// Public
 	api.POST("/login", h.rateLimitMiddleware(), h.login)
@@ -197,6 +198,18 @@ func init() {
 			loginMu.Unlock()
 		}
 	}()
+}
+
+// ─── IP Filter Middleware ─────────────────────────────────────────────────────
+
+func (h *Handler) ipFilterMiddleware(scope string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !h.cfg.CheckIPAllowed(scope, c.ClientIP()) {
+			c.AbortWithStatusJSON(403, gin.H{"error": "forbidden"})
+			return
+		}
+		c.Next()
+	}
 }
 
 func (h *Handler) rateLimitMiddleware() gin.HandlerFunc {
