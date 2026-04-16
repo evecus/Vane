@@ -21,7 +21,7 @@
 
 ```bash
 # 下载二进制
-wget https://github.com/yourusername/vane/releases/latest/download/vane-linux-amd64
+wget https://github.com/evecus/vane/releases/latest/download/vane-linux-amd64
 chmod +x vane-linux-amd64
 
 # 运行
@@ -42,7 +42,7 @@ cd web && npm install && npm run build && cd ..
 go build -o vane .
 
 # 3. 运行
-./vane
+./vane --config /path(可选)
 ```
 
 ## 📦 项目结构
