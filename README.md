@@ -25,7 +25,7 @@ wget https://github.com/evecus/vane/releases/latest/download/vane-linux-amd64
 chmod +x vane-linux-amd64
 
 # 运行
-./vane-linux-amd64
+./vane-linux-amd64 --config /path(可选)
 
 # 访问管理界面
 # http://your-ip:4455
