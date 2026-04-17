@@ -18,7 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/yourusername/vane/config"
+	"github.com/evecus/vane/config"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -517,18 +517,13 @@ func (m *Manager) buildRouter(svc *config.WebService) http.Handler {
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// IP filter check
+		// Extract the real client IP from the TCP connection only.
+		// We intentionally do NOT trust X-Real-IP or X-Forwarded-For from the
+		// incoming request — those headers can be forged by any client and would
+		// allow a blocked IP to bypass the IP filter by injecting a spoofed header.
 		clientIP := r.RemoteAddr
 		if ip, _, err := net.SplitHostPort(clientIP); err == nil {
 			clientIP = ip
-		}
-		if xip := r.Header.Get("X-Real-IP"); xip != "" {
-			clientIP = xip
-		}
-		if !m.cfg.CheckIPAllowed("webservice", clientIP) {
-			log.Printf("[webservice] blocked %s", clientIP)
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
 		}
 
 		host := r.Host
@@ -551,8 +546,8 @@ func (m *Manager) buildRouter(svc *config.WebService) http.Handler {
 				routeDomain := strings.TrimPrefix(strings.ToLower(route.Domain), "www.")
 				reqDomain := strings.TrimPrefix(strings.ToLower(host), "www.")
 				if routeDomain == reqDomain {
-					r := route
-					matchedRoute = &r
+					rv := route
+					matchedRoute = &rv
 					matchedBackend = route.BackendURL
 					break
 				}
@@ -565,6 +560,14 @@ func (m *Manager) buildRouter(svc *config.WebService) http.Handler {
 			log.Printf("[webservice] no matching route for host: %s (svc %s)", host, svcID)
 			http.Error(w, "No matching route for host: "+host, http.StatusBadGateway)
 			logAccess(svcID, "", "", host, r)
+			return
+		}
+
+		// IP filter check — performed after route matching so we can pass the
+		// specific route ID for per-route filtering rules.
+		if !m.cfg.CheckIPAllowed("webservice", matchedRoute.ID, clientIP) {
+			log.Printf("[webservice] blocked %s → route %s", clientIP, matchedRoute.ID)
+			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
 
@@ -707,10 +710,8 @@ func logAccess(svcID, routeID, routeName, domain string, r *http.Request) {
 	if ip, _, err := net.SplitHostPort(clientIP); err == nil {
 		clientIP = ip
 	}
-	// Prefer X-Real-IP set by our own proxy Director (already stripped of port)
-	if xip := r.Header.Get("X-Real-IP"); xip != "" {
-		clientIP = xip
-	}
+	// We use RemoteAddr only — do not trust X-Real-IP from the incoming request
+	// as it can be forged by the client.
 	ua := r.UserAgent()
 	browser := parseBrowser(ua)
 	today := time.Now().Format("2006-01-02")
