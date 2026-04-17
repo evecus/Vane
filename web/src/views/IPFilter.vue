@@ -8,7 +8,6 @@
         <p class="text-slate-400 text-sm mt-0.5">{{ t('ipfilterSubtitle') }}</p>
       </div>
       <button
-        v-if="rules.length < 3"
         class="btn-primary btn-sm sm:btn-normal"
         @click="openModal(null)"
       >
@@ -68,11 +67,11 @@
             <div class="flex flex-wrap gap-1 mb-2">
               <span
                 v-for="scope in rule.scopes"
-                :key="scope"
+                :key="scope.type + ':' + scope.target_id"
                 class="text-xs px-2 py-0.5 rounded-md font-medium"
-                :class="scopeBadgeClass(scope)"
+                :class="scopeBadgeClass(scope.type)"
               >
-                {{ scopeLabel(scope) }}
+                {{ scopeDisplayName(scope) }}
               </span>
             </div>
 
@@ -122,16 +121,11 @@
       </div>
     </div>
 
-    <!-- 最多3条提示 -->
-    <div v-if="rules.length >= 3" class="text-center text-xs text-slate-400 py-2">
-      已创建 3 条规则（每个作用范围最多绑定一条规则，上限已达）
-    </div>
-
   </div>
 
   <!-- ══ 编辑/新建 Modal ══════════════════════════════════════════════ -->
   <div v-if="modal" class="modal-overlay" @click.self="modal = null">
-    <div class="modal-box sm:max-w-xl">
+    <div class="modal-box sm:max-w-2xl">
 
       <!-- 拖动条（移动端） -->
       <div class="sm:hidden flex justify-center pt-3 pb-1 flex-shrink-0">
@@ -190,36 +184,44 @@
           </div>
         </div>
 
-        <!-- 作用范围多选 -->
+        <!-- 作用范围选择 -->
         <div>
           <label class="block text-sm font-medium text-slate-700 mb-2">{{ t('ipfScopes') }}</label>
-          <div class="flex flex-col gap-2">
-            <label
-              v-for="scope in allScopes"
-              :key="scope.value"
-              class="flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all select-none"
-              :class="isScopeDisabled(scope.value)
-                ? 'border-slate-100 bg-slate-50 cursor-not-allowed opacity-50'
-                : modal.scopes.includes(scope.value)
-                  ? 'border-cyan-300 bg-cyan-50'
-                  : 'border-slate-200 hover:border-slate-300 bg-white'"
-            >
-              <input
-                type="checkbox"
-                :value="scope.value"
-                :checked="modal.scopes.includes(scope.value)"
-                :disabled="isScopeDisabled(scope.value)"
-                @change="toggleScope(scope.value)"
-                class="w-4 h-4 rounded accent-cyan-500"
-              />
-              <component :is="scope.icon" :size="15" class="text-slate-500 flex-shrink-0" />
-              <div class="flex-1">
-                <span class="text-sm font-medium text-slate-700">{{ t(scope.labelKey) }}</span>
-                <span v-if="isScopeDisabled(scope.value)" class="ml-2 text-xs text-slate-400">
-                  {{ t('ipfScopeConflict') }}
-                </span>
+
+          <!-- 分组展示 -->
+          <div class="space-y-3">
+            <div v-for="group in targetGroups" :key="group.type">
+              <!-- 分组标题 -->
+              <div class="flex items-center gap-2 mb-1.5">
+                <component :is="group.icon" :size="13" class="text-slate-400" />
+                <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">{{ group.label }}</span>
               </div>
-            </label>
+              <!-- 分组选项 -->
+              <div class="grid gap-1.5 pl-1">
+                <label
+                  v-for="item in group.items"
+                  :key="item.type + ':' + item.target_id"
+                  class="flex items-center gap-3 px-3 py-2 rounded-lg border cursor-pointer transition-all select-none"
+                  :class="isScopeDisabled(item)
+                    ? 'border-slate-100 bg-slate-50 cursor-not-allowed opacity-50'
+                    : isScopeSelected(item)
+                      ? 'border-cyan-300 bg-cyan-50'
+                      : 'border-slate-200 hover:border-slate-300 bg-white'"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="isScopeSelected(item)"
+                    :disabled="isScopeDisabled(item)"
+                    @change="toggleScope(item)"
+                    class="w-4 h-4 rounded accent-cyan-500 flex-shrink-0"
+                  />
+                  <span class="flex-1 text-sm text-slate-700">{{ item.target_name }}</span>
+                  <span v-if="isScopeDisabled(item)" class="text-xs text-slate-400 flex-shrink-0">
+                    {{ t('ipfScopeConflict') }}
+                  </span>
+                </label>
+              </div>
+            </div>
           </div>
           <p v-if="scopeError" class="mt-1.5 text-xs text-red-500">{{ t('ipfScopesMustSelect') }}</p>
         </div>
@@ -328,68 +330,108 @@ const t = (k, v) => i18n.t(k, v)
 
 // ── 数据 ────────────────────────────────────────────────────────────────────
 const rules = ref([])
+const allTargets = ref([])   // [{type, target_id, target_name}] from /ipfilter/targets
 const toggling = ref(null)
 const saving = ref(false)
 const uploading = ref(false)
-const modal = ref(null)         // null | rule 对象（编辑态，含 manualIPsText）
-const confirmModal = ref(null)  // null | rule
+const modal = ref(null)
+const confirmModal = ref(null)
 const scopeError = ref(false)
 const fileInputRef = ref(null)
-
-// 所有可选 scope
-const allScopes = [
-  { value: 'admin',       labelKey: 'ipfScopeAdmin',       icon: LayoutDashboard },
-  { value: 'portforward', labelKey: 'ipfScopePortforward', icon: ArrowLeftRight  },
-  { value: 'webservice',  labelKey: 'ipfScopeWebservice',  icon: Server          },
-]
-
-// ── 计算已被其他规则占用的 scope ────────────────────────────────────────────
-const occupiedScopes = computed(() => {
-  const editingId = modal.value?.id || null
-  const set = new Set()
-  for (const r of rules.value) {
-    if (r.id === editingId) continue
-    for (const s of (r.scopes || [])) set.add(s)
-  }
-  return set
-})
-
-function isScopeDisabled(scopeVal) {
-  return occupiedScopes.value.has(scopeVal)
-}
 
 // ── 加载 ─────────────────────────────────────────────────────────────────────
 async function load() {
   try {
-    const { data } = await api.get('/ipfilter')
-    rules.value = data || []
+    const [rulesRes, targetsRes] = await Promise.all([
+      api.get('/ipfilter'),
+      api.get('/ipfilter/targets'),
+    ])
+    rules.value = rulesRes.data || []
+    allTargets.value = targetsRes.data || []
   } catch {}
 }
 load()
 
-// ── 总 IP 数（手动 + 所有附件） ─────────────────────────────────────────────
+// ── 分组目标列表（用于 Modal 中的分组展示）────────────────────────────────
+const targetGroups = computed(() => {
+  const typeConfig = {
+    admin:       { label: '管理后台', icon: LayoutDashboard },
+    portforward: { label: '端口转发', icon: ArrowLeftRight },
+    webservice:  { label: '网页服务', icon: Server },
+  }
+  const groups = {}
+  for (const item of allTargets.value) {
+    if (!groups[item.type]) {
+      groups[item.type] = {
+        type: item.type,
+        label: typeConfig[item.type]?.label || item.type,
+        icon: typeConfig[item.type]?.icon || Filter,
+        items: [],
+      }
+    }
+    groups[item.type].items.push(item)
+  }
+  return ['admin', 'portforward', 'webservice']
+    .filter(t => groups[t])
+    .map(t => groups[t])
+})
+
+// ── 已被其他规则占用的 scope key 集合 ────────────────────────────────────
+const occupiedScopeKeys = computed(() => {
+  const editingId = modal.value?.id || null
+  const set = new Set()
+  for (const r of rules.value) {
+    if (r.id === editingId) continue
+    for (const s of (r.scopes || [])) {
+      set.add(s.type + ':' + (s.target_id || ''))
+    }
+  }
+  return set
+})
+
+function scopeKey(item) {
+  return item.type + ':' + (item.target_id || '')
+}
+
+function isScopeDisabled(item) {
+  return occupiedScopeKeys.value.has(scopeKey(item))
+}
+
+function isScopeSelected(item) {
+  if (!modal.value) return false
+  return modal.value.scopes.some(s => s.type === item.type && (s.target_id || '') === (item.target_id || ''))
+}
+
+// ── 总 IP 数（手动 + 所有附件） ─────────────────────────────────────────
 function totalIPCount(rule) {
   const manual = (rule.manual_ips || []).length
   const att = (rule.attachments || []).reduce((s, a) => s + (a.ips || []).length, 0)
   return manual + att
 }
 
-// ── scope 标签 / 样式 ────────────────────────────────────────────────────────
-function scopeLabel(s) {
-  const map = { admin: t('ipfScopeAdmin'), portforward: t('ipfScopePortforward'), webservice: t('ipfScopeWebservice') }
-  return map[s] || s
+// ── scope 显示名 / 样式 ──────────────────────────────────────────────────
+function scopeDisplayName(scope) {
+  // Try to resolve from allTargets for live name
+  const found = allTargets.value.find(
+    t => t.type === scope.type && (t.target_id || '') === (scope.target_id || '')
+  )
+  if (found) return found.target_name
+  // Fallback to snapshot name stored in the rule
+  if (scope.target_name) return scope.target_name
+  const typeLabels = { admin: '管理后台', portforward: '端口转发', webservice: '网页服务' }
+  return typeLabels[scope.type] || scope.type
 }
 
-function scopeBadgeClass(s) {
+function scopeBadgeClass(type) {
   const map = {
     admin:       'bg-violet-50 text-violet-600 border border-violet-200',
     portforward: 'bg-blue-50   text-blue-600   border border-blue-200',
     webservice:  'bg-pink-50   text-pink-600   border border-pink-200',
   }
-  return map[s] || 'bg-slate-100 text-slate-500 border border-slate-200'
+  return map[type] || 'bg-slate-100 text-slate-500 border border-slate-200'
 }
 
-// ── 开关 ─────────────────────────────────────────────────────────────────────
+// ── 开关 ─────────────────────────────────────────────────────────────────
 async function toggle(rule) {
   toggling.value = rule.id
   try {
@@ -400,20 +442,24 @@ async function toggle(rule) {
   toggling.value = null
 }
 
-// ── 打开 Modal ────────────────────────────────────────────────────────────────
-function openModal(rule) {
+// ── 打开 Modal ────────────────────────────────────────────────────────────
+async function openModal(rule) {
   scopeError.value = false
+  // 每次打开时刷新目标列表，确保拿到最新的端口转发规则/路由
+  try {
+    const { data } = await api.get('/ipfilter/targets')
+    allTargets.value = data || []
+  } catch {}
+
   if (rule) {
-    // 编辑：把 manual_ips 数组转为文本
     modal.value = {
       id: rule.id,
       mode: rule.mode || 'whitelist',
-      scopes: [...(rule.scopes || [])],
+      scopes: JSON.parse(JSON.stringify(rule.scopes || [])),
       manualIPsText: (rule.manual_ips || []).join('\n'),
       attachments: JSON.parse(JSON.stringify(rule.attachments || [])),
     }
   } else {
-    // 新建
     modal.value = {
       id: null,
       mode: 'whitelist',
@@ -424,16 +470,25 @@ function openModal(rule) {
   }
 }
 
-// ── scope 多选切换 ────────────────────────────────────────────────────────────
-function toggleScope(val) {
-  if (isScopeDisabled(val)) return
-  const idx = modal.value.scopes.indexOf(val)
-  if (idx === -1) modal.value.scopes.push(val)
-  else            modal.value.scopes.splice(idx, 1)
+// ── scope 多选切换 ────────────────────────────────────────────────────────
+function toggleScope(item) {
+  if (isScopeDisabled(item)) return
+  const idx = modal.value.scopes.findIndex(
+    s => s.type === item.type && (s.target_id || '') === (item.target_id || '')
+  )
+  if (idx === -1) {
+    modal.value.scopes.push({
+      type: item.type,
+      target_id: item.target_id || '',
+      target_name: item.target_name,
+    })
+  } else {
+    modal.value.scopes.splice(idx, 1)
+  }
   scopeError.value = false
 }
 
-// ── 附件操作 ──────────────────────────────────────────────────────────────────
+// ── 附件操作 ──────────────────────────────────────────────────────────────
 function triggerFileInput() {
   fileInputRef.value?.click()
 }
@@ -449,14 +504,12 @@ async function handleFileUpload(e) {
       const { data } = await api.post('/ipfilter/upload', form, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
-      // 如果已有同名附件则替换，否则追加
       const existing = modal.value.attachments.findIndex(a => a.name === data.name)
       if (existing !== -1) modal.value.attachments[existing] = { name: data.name, ips: data.ips }
       else modal.value.attachments.push({ name: data.name, ips: data.ips })
     } catch {}
   }
   uploading.value = false
-  // 清空 input，允许重新选同一文件
   e.target.value = ''
 }
 
@@ -464,7 +517,7 @@ function removeAttachment(idx) {
   modal.value.attachments.splice(idx, 1)
 }
 
-// ── 保存 ─────────────────────────────────────────────────────────────────────
+// ── 保存 ─────────────────────────────────────────────────────────────────
 async function save() {
   if (!modal.value.scopes.length) {
     scopeError.value = true
@@ -472,7 +525,6 @@ async function save() {
   }
   saving.value = true
   try {
-    // 将文本框的 IP 解析为数组（去空行、去注释、去重）
     const manualIPs = parseIPText(modal.value.manualIPsText)
 
     const payload = {
@@ -500,7 +552,7 @@ async function save() {
   saving.value = false
 }
 
-// ── 删除 ─────────────────────────────────────────────────────────────────────
+// ── 删除 ─────────────────────────────────────────────────────────────────
 function confirmDel(rule) {
   confirmModal.value = rule
 }
@@ -515,7 +567,7 @@ async function doDelete() {
   } catch {}
 }
 
-// ── 工具：文本 → IP 数组 ──────────────────────────────────────────────────────
+// ── 工具：文本 → IP 数组 ──────────────────────────────────────────────────
 function parseIPText(text) {
   const seen = new Set()
   const result = []
