@@ -19,12 +19,12 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/yourusername/vane/config"
-	"github.com/yourusername/vane/module/ddns"
-	"github.com/yourusername/vane/module/portforward"
-	tlsmod "github.com/yourusername/vane/module/tls"
+	"github.com/evecus/vane/config"
+	"github.com/evecus/vane/module/ddns"
+	"github.com/evecus/vane/module/portforward"
+	tlsmod "github.com/evecus/vane/module/tls"
 	"golang.org/x/crypto/bcrypt"
-	"github.com/yourusername/vane/module/webservice"
+	"github.com/evecus/vane/module/webservice"
 )
 
 type Handler struct {
