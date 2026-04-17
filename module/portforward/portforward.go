@@ -215,7 +215,7 @@ func (w *worker) runTCP() {
 		}
 		// IP filter check
 		clientIP, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
-		if !w.cfg.CheckIPAllowed("portforward", clientIP) {
+		if !w.cfg.CheckIPAllowed("portforward", w.rule.ID, clientIP) {
 			log.Printf("[portforward] TCP blocked %s → port %d", clientIP, w.rule.ListenPort)
 			conn.Close()
 			continue
@@ -286,7 +286,7 @@ func (w *worker) runUDP() {
 			}
 		}
 		// IP filter check
-		if !w.cfg.CheckIPAllowed("portforward", clientAddr.IP.String()) {
+		if !w.cfg.CheckIPAllowed("portforward", w.rule.ID, clientAddr.IP.String()) {
 			log.Printf("[portforward] UDP blocked %s → port %d", clientAddr.IP, w.rule.ListenPort)
 			continue
 		}
