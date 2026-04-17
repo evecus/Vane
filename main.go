@@ -14,12 +14,12 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"github.com/yourusername/vane/api"
-	"github.com/yourusername/vane/config"
-	"github.com/yourusername/vane/module/ddns"
-	"github.com/yourusername/vane/module/portforward"
-	"github.com/yourusername/vane/module/tls"
-	"github.com/yourusername/vane/module/webservice"
+	"github.com/evecus/vane/api"
+	"github.com/evecus/vane/config"
+	"github.com/evecus/vane/module/ddns"
+	"github.com/evecus/vane/module/portforward"
+	"github.com/evecus/vane/module/tls"
+	"github.com/evecus/vane/module/webservice"
 )
 
 //go:embed web/dist
