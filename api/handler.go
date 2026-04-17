@@ -114,6 +114,7 @@ func (h *Handler) Register(r *gin.Engine) {
 
 	// IP Filter
 	auth.GET("/ipfilter", h.listIPFilterRules)
+	auth.GET("/ipfilter/targets", h.listIPFilterTargets)
 	auth.POST("/ipfilter", h.createIPFilterRule)
 	auth.PUT("/ipfilter/:id", h.updateIPFilterRule)
 	auth.DELETE("/ipfilter/:id", h.deleteIPFilterRule)
@@ -204,7 +205,9 @@ func init() {
 
 func (h *Handler) ipFilterMiddleware(scope string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !h.cfg.CheckIPAllowed(scope, c.ClientIP()) {
+		// admin scope has no sub-target; pass empty targetID which matches both
+		// global rules (TargetID=="") and any per-target rules for that type.
+		if !h.cfg.CheckIPAllowed(scope, "", c.ClientIP()) {
 			c.AbortWithStatusJSON(403, gin.H{"error": "forbidden"})
 			return
 		}
@@ -586,6 +589,20 @@ func (h *Handler) deletePortForward(c *gin.Context) {
 		c.JSON(500, gin.H{"error": "保存失败"})
 		return
 	}
+	// Cascade: remove any IP filter scope entries that referenced this rule.
+	modified := h.cfg.CleanScopesForDeletedTarget("portforward", id)
+	for _, ruleID := range modified {
+		h.cfg.RLock()
+		var rule config.IPFilterRule
+		for _, r := range h.cfg.IPFilter {
+			if r.ID == ruleID {
+				rule = r
+				break
+			}
+		}
+		h.cfg.RUnlock()
+		_ = h.cfg.SaveIPFilterRule(rule)
+	}
 	c.JSON(200, gin.H{"ok": true})
 }
 
@@ -919,6 +936,19 @@ func (h *Handler) updateWebService(c *gin.Context) {
 func (h *Handler) deleteWebService(c *gin.Context) {
 	id := c.Param("id")
 	h.ws.Stop(id)
+	// Collect route IDs before removing the service from memory.
+	h.cfg.RLock()
+	var routeIDs []string
+	for _, s := range h.cfg.WebServices {
+		if s.ID == id {
+			for _, rt := range s.Routes {
+				routeIDs = append(routeIDs, rt.ID)
+			}
+			break
+		}
+	}
+	h.cfg.RUnlock()
+
 	h.cfg.Lock()
 	for i, s := range h.cfg.WebServices {
 		if s.ID == id {
@@ -930,6 +960,25 @@ func (h *Handler) deleteWebService(c *gin.Context) {
 	if err := h.cfg.DeleteWebService(id); err != nil {
 		c.JSON(500, gin.H{"error": "保存失败"})
 		return
+	}
+	// Cascade: clean IP filter scopes for every route that belonged to this service.
+	modifiedSet := make(map[string]bool)
+	for _, rid := range routeIDs {
+		for _, ruleID := range h.cfg.CleanScopesForDeletedTarget("webservice", rid) {
+			modifiedSet[ruleID] = true
+		}
+	}
+	for ruleID := range modifiedSet {
+		h.cfg.RLock()
+		var rule config.IPFilterRule
+		for _, r := range h.cfg.IPFilter {
+			if r.ID == ruleID {
+				rule = r
+				break
+			}
+		}
+		h.cfg.RUnlock()
+		_ = h.cfg.SaveIPFilterRule(rule)
 	}
 	c.JSON(200, gin.H{"ok": true})
 }
@@ -1214,6 +1263,20 @@ func (h *Handler) deleteRoute(c *gin.Context) {
 	if err := h.cfg.DeleteWebRoute(rid); err != nil {
 		c.JSON(500, gin.H{"error": "保存失败"})
 		return
+	}
+	// Cascade: remove any IP filter scope entries that referenced this route.
+	modified := h.cfg.CleanScopesForDeletedTarget("webservice", rid)
+	for _, ruleID := range modified {
+		h.cfg.RLock()
+		var rule config.IPFilterRule
+		for _, r := range h.cfg.IPFilter {
+			if r.ID == ruleID {
+				rule = r
+				break
+			}
+		}
+		h.cfg.RUnlock()
+		_ = h.cfg.SaveIPFilterRule(rule)
 	}
 	h.ws.Stop(svcID)
 	_ = h.ws.Start(svcID)
@@ -1776,6 +1839,55 @@ func (h *Handler) listIPFilterRules(c *gin.Context) {
 	c.JSON(200, rules)
 }
 
+func (h *Handler) listIPFilterTargets(c *gin.Context) {
+	// Returns all selectable targets grouped by type, for use in the frontend
+	// scope picker. Each entry has: type, target_id (empty=global), target_name.
+	type TargetItem struct {
+		Type       string `json:"type"`
+		TargetID   string `json:"target_id"`
+		TargetName string `json:"target_name"`
+	}
+	var items []TargetItem
+
+	h.cfg.RLock()
+	defer h.cfg.RUnlock()
+
+	// admin is always a single global scope
+	items = append(items, TargetItem{Type: "admin", TargetID: "", TargetName: "管理后台（全局）"})
+
+	// portforward: one global + one per rule
+	items = append(items, TargetItem{Type: "portforward", TargetID: "", TargetName: "端口转发（全部规则）"})
+	for _, pf := range h.cfg.PortForwards {
+		name := pf.Name
+		if name == "" {
+			name = fmt.Sprintf("端口 %d", pf.ListenPort)
+		}
+		items = append(items, TargetItem{Type: "portforward", TargetID: pf.ID, TargetName: name})
+	}
+
+	// webservice: one global + one per route (across all services)
+	items = append(items, TargetItem{Type: "webservice", TargetID: "", TargetName: "网页服务（全部路由）"})
+	for _, svc := range h.cfg.WebServices {
+		svcName := svc.Name
+		if svcName == "" {
+			svcName = fmt.Sprintf("服务:%d", svc.ListenPort)
+		}
+		for _, rt := range svc.Routes {
+			rtName := rt.Name
+			if rtName == "" {
+				rtName = rt.Domain
+			}
+			items = append(items, TargetItem{
+				Type:       "webservice",
+				TargetID:   rt.ID,
+				TargetName: svcName + " / " + rtName,
+			})
+		}
+	}
+
+	c.JSON(200, items)
+}
+
 func (h *Handler) createIPFilterRule(c *gin.Context) {
 	var body config.IPFilterRule
 	if err := c.ShouldBindJSON(&body); err != nil {
@@ -1793,8 +1905,8 @@ func (h *Handler) createIPFilterRule(c *gin.Context) {
 	h.cfg.RLock()
 	existing := h.cfg.IPFilter
 	h.cfg.RUnlock()
-	if conflict := findScopeConflict(existing, "", body.Scopes); conflict != "" {
-		c.JSON(400, gin.H{"error": "scope already used by another rule: " + conflict})
+	if conflict := config.HasScopeConflict(existing, "", body.Scopes); conflict != "" {
+		c.JSON(400, gin.H{"error": "该范围已被其他规则占用: " + conflict})
 		return
 	}
 
@@ -1852,8 +1964,8 @@ func (h *Handler) updateIPFilterRule(c *gin.Context) {
 	}
 
 	// Check scope uniqueness (exclude current rule)
-	if conflict := findScopeConflict(existing, id, body.Scopes); conflict != "" {
-		c.JSON(400, gin.H{"error": "scope already used by another rule: " + conflict})
+	if conflict := config.HasScopeConflict(existing, id, body.Scopes); conflict != "" {
+		c.JSON(400, gin.H{"error": "该范围已被其他规则占用: " + conflict})
 		return
 	}
 
@@ -1965,22 +2077,5 @@ func parseIPList(text string) []string {
 	return result
 }
 
-// findScopeConflict checks if any scope in newScopes is already claimed by a rule
-// other than excludeID. Returns the conflicting scope name or "".
-func findScopeConflict(rules []config.IPFilterRule, excludeID string, newScopes []string) string {
-	claimed := make(map[string]bool)
-	for _, r := range rules {
-		if r.ID == excludeID {
-			continue
-		}
-		for _, s := range r.Scopes {
-			claimed[s] = true
-		}
-	}
-	for _, s := range newScopes {
-		if claimed[s] {
-			return s
-		}
-	}
-	return ""
-}
+
+
