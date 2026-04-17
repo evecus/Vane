@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yourusername/vane/config"
+	"github.com/evecus/vane/config"
 )
 
 // ─── Manager ──────────────────────────────────────────────────────────────────
