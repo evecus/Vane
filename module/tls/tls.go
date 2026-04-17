@@ -21,7 +21,7 @@ import (
 	"github.com/go-acme/lego/v4/lego"
 	cf "github.com/go-acme/lego/v4/providers/dns/cloudflare"
 	"github.com/go-acme/lego/v4/registration"
-	"github.com/yourusername/vane/config"
+	"github.com/evecus/vane/config"
 )
 
 // ACME CA directory URLs
