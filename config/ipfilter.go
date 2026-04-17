@@ -5,15 +5,24 @@ import (
 )
 
 // CheckIPAllowed checks whether the given client IP is allowed to access
-// the specified scope ("admin", "portforward", or "webservice").
+// the specified scope.
 //
-// Rules are evaluated in creation order. The first enabled rule whose
-// Scopes list contains the requested scope wins:
-//   - whitelist mode: allow only if the IP is in the combined IP list.
-//   - blacklist mode: block if the IP is in the combined IP list.
+// scopeType:  "admin" | "portforward" | "webservice"
+// targetID:   the specific portforward rule ID or webservice route ID being
+//             accessed; empty string means a global check with no specific target.
+//
+// Matching logic (rules evaluated in creation order, first match wins):
+//   A rule scope entry matches the request when:
+//     - scope.Type == scopeType, AND
+//     - scope.TargetID is empty (applies to ALL targets of that type), OR
+//       scope.TargetID == targetID (applies only to this specific target).
+//
+//   On match:
+//     - whitelist: allow only if the IP is in the combined IP list.
+//     - blacklist: block if the IP is in the combined IP list.
 //
 // If no enabled rule covers the scope, the request is allowed.
-func (c *Config) CheckIPAllowed(scope, clientIP string) bool {
+func (c *Config) CheckIPAllowed(scopeType, targetID, clientIP string) bool {
 	c.RLock()
 	rules := append([]IPFilterRule{}, c.IPFilter...)
 	c.RUnlock()
@@ -24,7 +33,7 @@ func (c *Config) CheckIPAllowed(scope, clientIP string) bool {
 		if !rule.Enabled {
 			continue
 		}
-		if !scopeMatches(rule.Scopes, scope) {
+		if !scopeMatches(rule.Scopes, scopeType, targetID) {
 			continue
 		}
 
@@ -48,13 +57,78 @@ func (c *Config) CheckIPAllowed(scope, clientIP string) bool {
 	return true
 }
 
-func scopeMatches(scopes []string, target string) bool {
+// scopeMatches returns true if any scope entry in the rule matches the
+// requested (scopeType, targetID) pair.
+func scopeMatches(scopes []IPFilterScope, scopeType, targetID string) bool {
 	for _, s := range scopes {
-		if s == target {
+		if s.Type != scopeType {
+			continue
+		}
+		// An empty TargetID in the rule means "all targets of this type".
+		if s.TargetID == "" || s.TargetID == targetID {
 			return true
 		}
 	}
 	return false
+}
+
+// HasScopeConflict checks whether the given scopes conflict with any existing
+// rule (excluding the rule with excludeID).
+//
+// Conflict means: another enabled rule already covers the exact same
+// (Type, TargetID) pair. Returns the conflicting scope description or "".
+func HasScopeConflict(rules []IPFilterRule, excludeID string, newScopes []IPFilterScope) string {
+	type key struct{ t, id string }
+	claimed := make(map[key]bool)
+	for _, r := range rules {
+		if r.ID == excludeID {
+			continue
+		}
+		for _, s := range r.Scopes {
+			claimed[key{s.Type, s.TargetID}] = true
+		}
+	}
+	for _, s := range newScopes {
+		if claimed[key{s.Type, s.TargetID}] {
+			if s.TargetID == "" {
+				return s.Type + " (全局)"
+			}
+			name := s.TargetName
+			if name == "" {
+				name = s.TargetID
+			}
+			return s.Type + ": " + name
+		}
+	}
+	return ""
+}
+
+// CleanScopesForDeletedTarget removes scope entries that reference a deleted
+// targetID of the given scopeType from all IPFilter rules in-memory.
+// Returns the list of rule IDs that were modified.
+func (c *Config) CleanScopesForDeletedTarget(scopeType, targetID string) []string {
+	c.Lock()
+	defer c.Unlock()
+	var modified []string
+	for i, rule := range c.IPFilter {
+		var kept []IPFilterScope
+		changed := false
+		for _, s := range rule.Scopes {
+			if s.Type == scopeType && s.TargetID == targetID {
+				changed = true
+				continue
+			}
+			kept = append(kept, s)
+		}
+		if changed {
+			if kept == nil {
+				kept = []IPFilterScope{}
+			}
+			c.IPFilter[i].Scopes = kept
+			modified = append(modified, rule.ID)
+		}
+	}
+	return modified
 }
 
 // ipInList reports whether ip matches any entry in list.

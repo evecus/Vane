@@ -332,14 +332,25 @@ type IPFilterAttachment struct {
 	IPs  []string `json:"ips"`
 }
 
+// IPFilterScope represents a single scope entry for an IP filter rule.
+// Type values:    "admin" | "portforward" | "webservice"
+// TargetID:       empty = applies to ALL rules under that type;
+//                 non-empty = applies only to the specific portforward rule ID
+//                 or webservice route ID.
+// TargetName:     display name snapshot (for UI, not used in matching logic).
+type IPFilterScope struct {
+	Type       string `json:"type"`
+	TargetID   string `json:"target_id,omitempty"`
+	TargetName string `json:"target_name,omitempty"`
+}
+
 // IPFilterRule is one IP filtering policy applied to one or more scopes.
-// Scopes values: "admin" | "portforward" | "webservice"
-// Mode values:   "whitelist" | "blacklist"
+// Mode values: "whitelist" | "blacklist"
 type IPFilterRule struct {
 	ID          string               `json:"id"`
 	Enabled     bool                 `json:"enabled"`
 	Mode        string               `json:"mode"`
-	Scopes      []string             `json:"scopes"`
+	Scopes      []IPFilterScope      `json:"scopes"`
 	ManualIPs   []string             `json:"manual_ips"`
 	Attachments []IPFilterAttachment `json:"attachments"`
 	CreatedAt   string               `json:"created_at"`
@@ -683,7 +694,7 @@ func (c *Config) loadFromDB() error {
 			_ = decryptJSON(key, attachmentsEnc, &rule.Attachments)
 		}
 		if rule.Scopes == nil {
-			rule.Scopes = []string{}
+			rule.Scopes = []IPFilterScope{}
 		}
 		if rule.ManualIPs == nil {
 			rule.ManualIPs = []string{}
