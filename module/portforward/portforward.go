@@ -8,8 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/yourusername/vane/config"
+	"github.com/evecus/vane/config"
 )
 
 // ─── Stats ───────────────────────────────────────────────────────────────────
