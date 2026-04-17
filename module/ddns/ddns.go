@@ -324,14 +324,10 @@ func noProxyClient(version string) *http.Client {
 
 // getPublicIP returns the machine's public IP.
 // mode: "api"   → query external service (proxy-free, forced tcp4/tcp6)
-//       "iface" → read IP from named network interface
+//       "iface" → read IP from named network interface; fails if no public IP found (no API fallback)
 func getPublicIP(version, mode, iface string, ipIndex int) (string, error) {
 	if mode == "iface" && iface != "" {
-		ip, err := getIPFromInterface(iface, version, ipIndex)
-		if err == nil {
-			return ip, nil
-		}
-		log.Printf("[ddns] iface %s read failed (%v), falling back to API", iface, err)
+		return getIPFromInterface(iface, version, ipIndex)
 	}
 	return getPublicIPViaAPI(version)
 }
@@ -381,8 +377,11 @@ func getPublicIPViaAPI(version string) (string, error) {
 	return "", fmt.Errorf("all %s IP detection endpoints failed", version)
 }
 
-// getIPFromInterface reads a suitable IP from a named network interface.
+// getIPFromInterface reads a suitable public IP from a named network interface.
 // ipIndex: for IPv6, selects the Nth global unicast address (0 = first).
+// Private/internal IPv4 addresses are explicitly rejected — if the interface
+// only carries private addresses (e.g. behind NAT), an error is returned
+// describing the situation so the caller can surface it to the user.
 func getIPFromInterface(ifaceName, version string, ipIndex int) (string, error) {
 	iface, err := net.InterfaceByName(ifaceName)
 	if err != nil {
@@ -393,7 +392,8 @@ func getIPFromInterface(ifaceName, version string, ipIndex int) (string, error) 
 		return "", err
 	}
 	wantV6 := version == "ipv6"
-	var candidates []string
+	var candidates []string    // public IPs only
+	var privateFound []string  // private IPs (for better error messages)
 	for _, addr := range addrs {
 		var ip net.IP
 		switch v := addr.(type) {
@@ -402,7 +402,7 @@ func getIPFromInterface(ifaceName, version string, ipIndex int) (string, error) 
 		case *net.IPAddr:
 			ip = v.IP
 		}
-		if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsPrivate() && !wantV6 {
+		if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
 			continue
 		}
 		isV6 := ip.To4() == nil
@@ -413,10 +413,19 @@ func getIPFromInterface(ifaceName, version string, ipIndex int) (string, error) 
 		if wantV6 && (ip[0]&0xfe) == 0xfc {
 			continue
 		}
+		// For IPv4: record private addresses separately, do not treat as candidates
+		if !wantV6 && ip.IsPrivate() {
+			privateFound = append(privateFound, ip.String())
+			continue
+		}
 		candidates = append(candidates, ip.String())
 	}
 	if len(candidates) == 0 {
-		return "", fmt.Errorf("no suitable %s address on interface %s", version, ifaceName)
+		if len(privateFound) > 0 {
+			return "", fmt.Errorf("网卡 %s 上未检测到公网IP（当前地址 %s 为内网地址，设备可能处于NAT环境）",
+				ifaceName, strings.Join(privateFound, ", "))
+		}
+		return "", fmt.Errorf("网卡 %s 上未找到可用的 %s 地址", ifaceName, version)
 	}
 	if ipIndex < 0 || ipIndex >= len(candidates) {
 		ipIndex = 0
@@ -424,7 +433,8 @@ func getIPFromInterface(ifaceName, version string, ipIndex int) (string, error) 
 	return candidates[ipIndex], nil
 }
 
-// ListInterfaceIPs returns all suitable IPs on an interface for the given version.
+// ListInterfaceIPs returns all public IPs on an interface for the given version.
+// Private IPv4 addresses are excluded — only addresses suitable for DDNS are returned.
 // Used by the API to let the user preview which addresses are available.
 func ListInterfaceIPs(ifaceName, version string) ([]string, error) {
 	iface, err := net.InterfaceByName(ifaceName)
@@ -454,6 +464,10 @@ func ListInterfaceIPs(ifaceName, version string) ([]string, error) {
 		}
 		if wantV6 && (ip[0]&0xfe) == 0xfc {
 			continue // skip ULA
+		}
+		// Skip private IPv4 — these cannot be used for DDNS
+		if !wantV6 && ip.IsPrivate() {
+			continue
 		}
 		result = append(result, ip.String())
 	}
