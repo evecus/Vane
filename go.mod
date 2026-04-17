@@ -1,4 +1,4 @@
-module github.com/yourusername/vane
+module github.com/evecus/vane
 
 go 1.22
 
