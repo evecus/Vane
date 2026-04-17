@@ -394,7 +394,20 @@ function scopeKey(item) {
 }
 
 function isScopeDisabled(item) {
-  return occupiedScopeKeys.value.has(scopeKey(item))
+  // 精确冲突：该条目本身已被其他规则占用
+  if (occupiedScopeKeys.value.has(scopeKey(item))) return true
+  // 全局条目（target_id 为空）：同类型下只要有任何具体条目被占用，就禁用
+  if (!item.target_id) {
+    for (const key of occupiedScopeKeys.value) {
+      const colonIdx = key.indexOf(':')
+      const t = key.slice(0, colonIdx)
+      const id = key.slice(colonIdx + 1)
+      if (t === item.type && id) return true
+    }
+  }
+  // 具体条目：如果同类型的"全部规则"已被占用，也禁用
+  if (item.target_id && occupiedScopeKeys.value.has(item.type + ':')) return true
+  return false
 }
 
 function isScopeSelected(item) {
