@@ -473,16 +473,30 @@ async function openModal(rule) {
 // ── scope 多选切换 ────────────────────────────────────────────────────────
 function toggleScope(item) {
   if (isScopeDisabled(item)) return
+  const isGlobal = !item.target_id  // target_id 为空 = 全局
+
   const idx = modal.value.scopes.findIndex(
     s => s.type === item.type && (s.target_id || '') === (item.target_id || '')
   )
+
   if (idx === -1) {
+    // 即将选中
+    if (isGlobal) {
+      // 选"全部规则" → 移除同类型下所有具体规则
+      modal.value.scopes = modal.value.scopes.filter(s => s.type !== item.type)
+    } else {
+      // 选具体规则 → 移除同类型的"全部规则"
+      modal.value.scopes = modal.value.scopes.filter(
+        s => !(s.type === item.type && !s.target_id)
+      )
+    }
     modal.value.scopes.push({
       type: item.type,
       target_id: item.target_id || '',
       target_name: item.target_name,
     })
   } else {
+    // 取消勾选
     modal.value.scopes.splice(idx, 1)
   }
   scopeError.value = false
