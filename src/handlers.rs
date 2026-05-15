@@ -1191,7 +1191,7 @@ pub async fn proxy_webservice_http(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((id, tail)): Path<(String, String)>,
-    mut req: Request,
+    req: Request,
 ) -> Response {
     if !authorized(&state, &headers).await {
         return unauthorized();
@@ -1244,6 +1244,9 @@ pub async fn proxy_webservice_http(
         rb = rb.header("authorization", v);
     }
     rb = rb.header("x-forwarded-host", svc.domain.clone());
+    if let Some(v) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        rb = rb.header("x-forwarded-for", v);
+    }
 
     let resp = match rb.send().await {
         Ok(r) => r,
@@ -1265,7 +1268,7 @@ pub async fn proxy_webservice_http(
         d.access_logs.push(crate::models::AccessLog {
             ts: chrono::Utc::now().to_rfc3339(),
             service_id: id.clone(),
-            route_id: "".into(),
+            route_id: matched_route_id,
             client_ip: headers
                 .get("x-forwarded-for")
                 .and_then(|x| x.to_str().ok())
