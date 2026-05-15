@@ -53,6 +53,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/ddns", get(list_ddns).post(create_ddns))
         .route("/api/ddns/:id", put(update_ddns).delete(delete_ddns))
         .route("/api/ddns/:id/toggle", post(toggle_ddns))
+        .route("/api/ddns/interfaces", get(list_interfaces))
+        .route("/api/ddns/iface-ips", get(list_iface_ips))
+        .route("/api/ddns/:id/refresh", post(refresh_ddns))
         .route(
             "/api/webservice",
             get(list_webservices).post(create_webservice),
@@ -62,9 +65,23 @@ async fn main() -> anyhow::Result<()> {
             put(update_webservice).delete(delete_webservice),
         )
         .route("/api/webservice/:id/toggle", post(toggle_webservice))
+        .route(
+            "/api/webservice/:id/routes",
+            get(list_routes).post(create_route),
+        )
+        .route(
+            "/api/webservice/:id/routes/:rid",
+            axum::routing::delete(delete_route),
+        )
+        .route("/api/webservice/:id/logs", get(get_access_logs))
+        .route("/api/webservice/logs", get(get_all_access_logs))
         .route("/api/tls", get(list_tls).post(create_tls))
         .route("/api/tls/:id", put(update_tls).delete(delete_tls))
         .route("/api/tls/:id/toggle", post(toggle_tls))
+        .route("/api/tls/:id/issue", post(issue_tls))
+        .route("/api/tls/upload", post(upload_tls))
+        .route("/api/tls/:id/download", get(download_tls))
+        .route("/api/tls/:id/pem", get(get_tls_pem))
         .route("/api/ipfilter", get(list_ipfilters).post(create_ipfilter))
         .route(
             "/api/ipfilter/:id",

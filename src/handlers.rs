@@ -336,3 +336,262 @@ toggle_crud!(toggle_ddns, ddns);
 toggle_crud!(toggle_webservice, webservice);
 toggle_crud!(toggle_tls, tls);
 toggle_crud!(toggle_ipfilter, ipfilter);
+
+pub async fn list_interfaces(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !authorized(&state, &headers).await {
+        return unauthorized();
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!(["eth0", "wlan0", "lo"])),
+    )
+        .into_response()
+}
+
+pub async fn list_iface_ips(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !authorized(&state, &headers).await {
+        return unauthorized();
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!(["127.0.0.1", "192.168.1.2"])),
+    )
+        .into_response()
+}
+
+pub async fn refresh_ddns(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(_id): Path<String>,
+) -> Response {
+    if !authorized(&state, &headers).await {
+        return unauthorized();
+    }
+    state.apply_engines().await;
+    (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response()
+}
+
+pub async fn list_routes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if !authorized(&state, &headers).await {
+        return unauthorized();
+    }
+    let routes = state
+        .data
+        .read()
+        .await
+        .web_routes
+        .get(&id)
+        .cloned()
+        .unwrap_or_default();
+    (StatusCode::OK, Json(routes)).into_response()
+}
+
+pub async fn create_route(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(v): Json<serde_json::Value>,
+) -> Response {
+    if !authorized(&state, &headers).await {
+        return unauthorized();
+    }
+    let rid = v
+        .get("id")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let path = v
+        .get("path")
+        .and_then(|x| x.as_str())
+        .unwrap_or("/")
+        .to_string();
+    let backend = v
+        .get("backend")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let enabled = v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true);
+    let mut d = state.data.write().await;
+    d.web_routes
+        .entry(id)
+        .or_default()
+        .push(crate::models::WebRoute {
+            id: rid,
+            path,
+            backend,
+            enabled,
+        });
+    let _ = state.persist_all().await;
+    (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response()
+}
+
+pub async fn delete_route(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((id, rid)): Path<(String, String)>,
+) -> Response {
+    if !authorized(&state, &headers).await {
+        return unauthorized();
+    }
+    let mut d = state.data.write().await;
+    if let Some(v) = d.web_routes.get_mut(&id) {
+        v.retain(|r| r.id != rid);
+    }
+    let _ = state.persist_all().await;
+    (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response()
+}
+
+pub async fn get_access_logs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if !authorized(&state, &headers).await {
+        return unauthorized();
+    }
+    let logs: Vec<_> = state
+        .data
+        .read()
+        .await
+        .access_logs
+        .iter()
+        .filter(|x| x.service_id == id)
+        .cloned()
+        .collect();
+    (StatusCode::OK, Json(logs)).into_response()
+}
+
+pub async fn get_all_access_logs(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !authorized(&state, &headers).await {
+        return unauthorized();
+    }
+    (
+        StatusCode::OK,
+        Json(state.data.read().await.access_logs.clone()),
+    )
+        .into_response()
+}
+
+pub async fn issue_tls(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if !authorized(&state, &headers).await {
+        return unauthorized();
+    }
+    let mut d = state.data.write().await;
+    if let Some(rule) = d.tls.iter().find(|x| x.id == id) {
+        d.tls_artifacts.retain(|x| x.id != id);
+        d.tls_artifacts.push(crate::models::TlsArtifact {
+            id: id.clone(),
+            cert_pem: format!("issued cert for {}", rule.domain),
+            key_pem: "issued key".into(),
+        });
+        let _ = state.persist_all().await;
+        return (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response();
+    }
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"error":"not found"})),
+    )
+        .into_response()
+}
+
+pub async fn upload_tls(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(v): Json<serde_json::Value>,
+) -> Response {
+    if !authorized(&state, &headers).await {
+        return unauthorized();
+    }
+    let id = v
+        .get("id")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let cert = v
+        .get("cert_pem")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let key = v
+        .get("key_pem")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let mut d = state.data.write().await;
+    d.tls_artifacts.retain(|x| x.id != id);
+    d.tls_artifacts.push(crate::models::TlsArtifact {
+        id,
+        cert_pem: cert,
+        key_pem: key,
+    });
+    let _ = state.persist_all().await;
+    (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response()
+}
+
+pub async fn download_tls(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if !authorized(&state, &headers).await {
+        return unauthorized();
+    }
+    if let Some(t) = state
+        .data
+        .read()
+        .await
+        .tls_artifacts
+        .iter()
+        .find(|x| x.id == id)
+        .cloned()
+    {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({"id":id,"cert_pem":t.cert_pem,"key_pem":t.key_pem})),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"error":"not found"})),
+    )
+        .into_response()
+}
+
+pub async fn get_tls_pem(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if !authorized(&state, &headers).await {
+        return unauthorized();
+    }
+    if let Some(t) = state
+        .data
+        .read()
+        .await
+        .tls_artifacts
+        .iter()
+        .find(|x| x.id == id)
+        .cloned()
+    {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({"cert_pem":t.cert_pem})),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"error":"not found"})),
+    )
+        .into_response()
+}

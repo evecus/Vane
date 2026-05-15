@@ -66,6 +66,9 @@ pub struct RuntimeData {
     pub webservice: Vec<WebServiceRule>,
     pub tls: Vec<TlsRule>,
     pub ipfilter: Vec<IpFilterRule>,
+    pub web_routes: std::collections::HashMap<String, Vec<WebRoute>>,
+    pub access_logs: Vec<AccessLog>,
+    pub tls_artifacts: Vec<TlsArtifact>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
@@ -74,4 +77,29 @@ pub struct PortForwardStats {
     pub bytes_in: u64,
     pub bytes_out: u64,
     pub connections: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct WebRoute {
+    pub id: String,
+    pub path: String,
+    pub backend: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct AccessLog {
+    pub ts: String,
+    pub service_id: String,
+    pub route_id: String,
+    pub client_ip: String,
+    pub path: String,
+    pub status: u16,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct TlsArtifact {
+    pub id: String,
+    pub cert_pem: String,
+    pub key_pem: String,
 }
