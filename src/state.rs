@@ -72,8 +72,8 @@ impl AppState {
     pub async fn apply_engines(&self) {
         let d = self.data.read().await.clone();
         self.engines.apply_portforwards(&d.portforward).await;
-        tokio::spawn(crate::engines::run_ddns(d.ddns));
-        tokio::spawn(crate::engines::run_webservice(d.webservice));
-        tokio::spawn(crate::engines::run_tls(d.tls));
+        self.engines.apply_ddns(&d.ddns).await;
+        self.engines.apply_webservice(&d.webservice).await;
+        self.engines.apply_tls(&d.tls).await;
     }
 }
