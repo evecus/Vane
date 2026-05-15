@@ -1,4 +1,9 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::Context;
 use tokio::{fs, sync::RwLock};
@@ -14,6 +19,8 @@ pub struct AppState {
     pub config: Arc<RwLock<Config>>,
     pub data: Arc<RwLock<RuntimeData>>,
     pub sessions: Arc<RwLock<HashMap<String, String>>>,
+    pub session_expiry: Arc<RwLock<HashMap<String, i64>>>,
+    pub login_attempts: Arc<RwLock<HashMap<String, (u32, Instant)>>>,
     pub engines: RuntimeEngines,
     pub root: PathBuf,
 }
@@ -48,6 +55,8 @@ impl AppState {
             config: Arc::new(RwLock::new(cfg)),
             data: Arc::new(RwLock::new(data)),
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            session_expiry: Arc::new(RwLock::new(HashMap::new())),
+            login_attempts: Arc::new(RwLock::new(HashMap::new())),
             engines: RuntimeEngines::default(),
             root,
         })
@@ -75,5 +84,25 @@ impl AppState {
         self.engines.apply_ddns(&d.ddns).await;
         self.engines.apply_webservice(&d.webservice).await;
         self.engines.apply_tls(&d.tls).await;
+    }
+}
+
+impl AppState {
+    pub async fn cleanup_security_state(&self) {
+        let now = chrono::Utc::now().timestamp();
+        let mut exp = self.session_expiry.write().await;
+        let mut sess = self.sessions.write().await;
+        let expired: Vec<String> = exp
+            .iter()
+            .filter(|(_, v)| **v <= now)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for t in expired {
+            exp.remove(&t);
+            sess.remove(&t);
+        }
+
+        let mut la = self.login_attempts.write().await;
+        la.retain(|_, (_, ts)| ts.elapsed() < Duration::from_secs(1800));
     }
 }

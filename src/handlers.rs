@@ -22,6 +22,14 @@ fn unauthorized() -> Response {
     StatusCode::UNAUTHORIZED.into_response()
 }
 
+fn client_key(headers: &HeaderMap) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
 fn client_ip(headers: &HeaderMap) -> Option<IpAddr> {
     headers
         .get("x-forwarded-for")
@@ -91,9 +99,19 @@ async fn ipfilter_pass(
 }
 
 async fn authorized(state: &AppState, headers: &HeaderMap) -> bool {
-    bearer(headers)
-        .map(|t| state.sessions.read().await.contains_key(&t))
-        .unwrap_or(false)
+    state.cleanup_security_state().await;
+    if let Some(t) = bearer(headers) {
+        let has = state.sessions.read().await.contains_key(&t);
+        let ok_exp = state
+            .session_expiry
+            .read()
+            .await
+            .get(&t)
+            .map(|x| *x > chrono::Utc::now().timestamp())
+            .unwrap_or(false);
+        return has && ok_exp;
+    }
+    false
 }
 
 #[derive(Deserialize)]
@@ -102,11 +120,37 @@ pub struct LoginReq {
     password: String,
 }
 
-pub async fn login(State(state): State<AppState>, Json(req): Json<LoginReq>) -> Response {
+pub async fn login(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<LoginReq>,
+) -> Response {
+    state.cleanup_security_state().await;
+    let key = client_key(&headers);
+    {
+        let attempts = state.login_attempts.read().await;
+        if let Some((count, ts)) = attempts.get(&key) {
+            if *count >= 10 && ts.elapsed().as_secs() < 600 {
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(serde_json::json!({"error":"too many login attempts"})),
+                )
+                    .into_response();
+            }
+        }
+    }
     let cfg = state.config.read().await;
     if req.username != cfg.admin.username
         || !verify_password(&req.password, &cfg.admin.password_hash)
     {
+        {
+            let mut a = state.login_attempts.write().await;
+            let e = a
+                .entry(key.clone())
+                .or_insert((0, std::time::Instant::now()));
+            e.0 += 1;
+            e.1 = std::time::Instant::now();
+        }
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({"error":"用户名或密码错误"})),
@@ -125,6 +169,7 @@ pub async fn login(State(state): State<AppState>, Json(req): Json<LoginReq>) -> 
         .await
         .insert(token.clone(), req.username.clone());
     {
+        state.session_expiry.write().await.remove(&t);
         let mut d = state.data.write().await;
         d.sessions_meta.push(crate::models::SessionInfo {
             token: token.clone(),
@@ -137,12 +182,25 @@ pub async fn login(State(state): State<AppState>, Json(req): Json<LoginReq>) -> 
         }
     }
     let _ = state.persist_all().await;
-    (StatusCode::OK, Json(serde_json::json!({"token": token}))).into_response()
+    {
+        state
+            .session_expiry
+            .write()
+            .await
+            .insert(token.clone(), chrono::Utc::now().timestamp() + 86400);
+        state.login_attempts.write().await.remove(&key);
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"token": token, "expires_in":86400})),
+    )
+        .into_response()
 }
 
 pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Some(t) = bearer(&headers) {
         state.sessions.write().await.remove(&t);
+        state.session_expiry.write().await.remove(&t);
         let mut d = state.data.write().await;
         d.sessions_meta.retain(|x| x.token != t);
         let _ = state.persist_all().await;
@@ -369,7 +427,11 @@ pub async fn get_port_forward_stats(
     }
     (
         StatusCode::OK,
-        Json({ let d=state.data.read().await; let c=d.access_logs.iter().filter(|x|x.service_id==id).count() as u64; serde_json::json!({"id":id,"bytes_in":c*512,"bytes_out":c*1024,"connections":c}) }),
+        Json({
+            let d = state.data.read().await;
+            let c = d.access_logs.iter().filter(|x| x.service_id == id).count() as u64;
+            serde_json::json!({"id":id,"bytes_in":c*512,"bytes_out":c*1024,"connections":c})
+        }),
     )
         .into_response()
 }
@@ -1118,6 +1180,7 @@ pub async fn revoke_session(
             .into_response();
     }
     state.sessions.write().await.remove(&token);
+    state.session_expiry.write().await.remove(&token);
     let mut d = state.data.write().await;
     d.sessions_meta.retain(|x| x.token != token);
     let _ = state.persist_all().await;
@@ -1197,6 +1260,7 @@ pub async fn proxy_webservice_http(
     let bytes = resp.bytes().await.unwrap_or_default();
 
     {
+        state.session_expiry.write().await.remove(&t);
         let mut d = state.data.write().await;
         d.access_logs.push(crate::models::AccessLog {
             ts: chrono::Utc::now().to_rfc3339(),
@@ -1261,28 +1325,65 @@ RENEWED:{}
         .into_response()
 }
 
-
-pub async fn query_access_logs(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<std::collections::HashMap<String,String>>) -> Response {
-    if !authorized(&state, &headers).await { return unauthorized(); }
-    if !ipfilter_pass(&state, &headers, "admin", "").await { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error":"forbidden by ipfilter"}))).into_response(); }
+pub async fn query_access_logs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if !authorized(&state, &headers).await {
+        return unauthorized();
+    }
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error":"forbidden by ipfilter"})),
+        )
+            .into_response();
+    }
     let service = q.get("service_id").cloned().unwrap_or_default();
     let path_kw = q.get("path").cloned().unwrap_or_default();
-    let limit: usize = q.get("limit").and_then(|x|x.parse().ok()).unwrap_or(100).min(1000);
+    let limit: usize = q
+        .get("limit")
+        .and_then(|x| x.parse().ok())
+        .unwrap_or(100)
+        .min(1000);
     let mut logs = state.data.read().await.access_logs.clone();
-    if !service.is_empty() { logs.retain(|x| x.service_id == service); }
-    if !path_kw.is_empty() { logs.retain(|x| x.path.contains(&path_kw)); }
+    if !service.is_empty() {
+        logs.retain(|x| x.service_id == service);
+    }
+    if !path_kw.is_empty() {
+        logs.retain(|x| x.path.contains(&path_kw));
+    }
     logs.reverse();
     logs.truncate(limit);
     (StatusCode::OK, Json(logs)).into_response()
 }
 
-pub async fn query_admin_logs(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<std::collections::HashMap<String,String>>) -> Response {
-    if !authorized(&state, &headers).await { return unauthorized(); }
-    if !ipfilter_pass(&state, &headers, "admin", "").await { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error":"forbidden by ipfilter"}))).into_response(); }
+pub async fn query_admin_logs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if !authorized(&state, &headers).await {
+        return unauthorized();
+    }
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error":"forbidden by ipfilter"})),
+        )
+            .into_response();
+    }
     let action = q.get("action").cloned().unwrap_or_default();
-    let limit: usize = q.get("limit").and_then(|x|x.parse().ok()).unwrap_or(100).min(1000);
+    let limit: usize = q
+        .get("limit")
+        .and_then(|x| x.parse().ok())
+        .unwrap_or(100)
+        .min(1000);
     let mut logs = state.data.read().await.admin_logs.clone();
-    if !action.is_empty() { logs.retain(|x| x.action.contains(&action)); }
+    if !action.is_empty() {
+        logs.retain(|x| x.action.contains(&action));
+    }
     logs.reverse();
     logs.truncate(limit);
     (StatusCode::OK, Json(logs)).into_response()
