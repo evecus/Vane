@@ -36,23 +36,60 @@ fn client_ip(headers: &HeaderMap) -> Option<IpAddr> {
         })
 }
 
-async fn ipfilter_pass(state: &AppState, headers: &HeaderMap) -> bool {
+async fn ipfilter_pass(
+    state: &AppState,
+    headers: &HeaderMap,
+    scope: &str,
+    target_id: &str,
+) -> bool {
     let ip = match client_ip(headers) {
         Some(ip) => ip,
         None => return true,
     };
+
     let rules = state.data.read().await.ipfilter.clone();
-    let enabled: Vec<_> = rules.into_iter().filter(|r| r.enabled).collect();
+    let enabled: Vec<_> = rules
+        .into_iter()
+        .filter(|r| {
+            r.enabled
+                && (r.target == scope || r.target == "admin")
+                && (r.target_id.is_empty() || r.target_id == target_id)
+        })
+        .collect();
     if enabled.is_empty() {
         return true;
     }
-    enabled.iter().any(|r| {
-        r.cidr
-            .parse::<IpNet>()
-            .map(|n| n.contains(&ip))
-            .unwrap_or(false)
-    })
+
+    let mut has_allow = false;
+    let mut allowed = false;
+    for r in enabled {
+        if let Ok(net) = r.cidr.parse::<IpNet>() {
+            let hit = net.contains(&ip);
+            let action = if r.action.is_empty() {
+                "allow"
+            } else {
+                r.action.as_str()
+            };
+            if action.eq_ignore_ascii_case("allow") {
+                has_allow = true;
+                if hit {
+                    allowed = true;
+                }
+            } else if action.eq_ignore_ascii_case("deny") {
+                if hit {
+                    return false;
+                }
+            }
+        }
+    }
+
+    if has_allow {
+        allowed
+    } else {
+        true
+    }
 }
+
 async fn authorized(state: &AppState, headers: &HeaderMap) -> bool {
     bearer(headers)
         .map(|t| state.sessions.read().await.contains_key(&t))
@@ -116,7 +153,7 @@ pub async fn get_dashboard(State(state): State<AppState>, headers: HeaderMap) ->
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
-    if !ipfilter_pass(&state, &headers).await {
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error":"forbidden by ipfilter"})),
@@ -133,7 +170,7 @@ pub async fn get_settings(State(state): State<AppState>, headers: HeaderMap) -> 
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
-    if !ipfilter_pass(&state, &headers).await {
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error":"forbidden by ipfilter"})),
@@ -150,7 +187,7 @@ pub async fn update_settings(
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
-    if !ipfilter_pass(&state, &headers).await {
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error":"forbidden by ipfilter"})),
@@ -166,7 +203,7 @@ pub async fn backup_settings(State(state): State<AppState>, headers: HeaderMap) 
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
-    if !ipfilter_pass(&state, &headers).await {
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error":"forbidden by ipfilter"})),
@@ -183,7 +220,7 @@ pub async fn restore_settings(
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
-    if !ipfilter_pass(&state, &headers).await {
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error":"forbidden by ipfilter"})),
@@ -209,10 +246,10 @@ pub async fn restore_settings(
 
 macro_rules! crud {
 ($list:ident,$create:ident,$update:ident,$delete:ident,$field:ident,$ty:ty) => {
-pub async fn $list(State(state): State<AppState>, headers: HeaderMap) -> Response { if !authorized(&state, &headers).await { return unauthorized(); } if !ipfilter_pass(&state, &headers).await { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error":"forbidden by ipfilter"}))).into_response(); } (StatusCode::OK, Json(state.data.read().await.$field.clone())).into_response() }
-pub async fn $create(State(state): State<AppState>, headers: HeaderMap, Json(v): Json<$ty>) -> Response { if !authorized(&state, &headers).await { return unauthorized(); } if !ipfilter_pass(&state, &headers).await { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error":"forbidden by ipfilter"}))).into_response(); } state.data.write().await.$field.push(v); let _ = state.persist_all().await; state.apply_engines().await; (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response() }
-pub async fn $update(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Json(v): Json<$ty>) -> Response { if !authorized(&state, &headers).await { return unauthorized(); } if !ipfilter_pass(&state, &headers).await { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error":"forbidden by ipfilter"}))).into_response(); } let mut d = state.data.write().await; if let Some(x) = d.$field.iter_mut().find(|x| x.id == id) { *x=v; let _ = state.persist_all().await; state.apply_engines().await; return (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response(); } (StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"not found"}))).into_response() }
-pub async fn $delete(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Response { if !authorized(&state, &headers).await { return unauthorized(); } if !ipfilter_pass(&state, &headers).await { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error":"forbidden by ipfilter"}))).into_response(); } let mut d=state.data.write().await; d.$field.retain(|x| x.id != id); let _ = state.persist_all().await; state.apply_engines().await; (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response() }
+pub async fn $list(State(state): State<AppState>, headers: HeaderMap) -> Response { if !authorized(&state, &headers).await { return unauthorized(); } if !ipfilter_pass(&state, &headers, stringify!($field), "").await { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error":"forbidden by ipfilter"}))).into_response(); } (StatusCode::OK, Json(state.data.read().await.$field.clone())).into_response() }
+pub async fn $create(State(state): State<AppState>, headers: HeaderMap, Json(v): Json<$ty>) -> Response { if !authorized(&state, &headers).await { return unauthorized(); } if !ipfilter_pass(&state, &headers, stringify!($field), "").await { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error":"forbidden by ipfilter"}))).into_response(); } state.data.write().await.$field.push(v); let _ = state.persist_all().await; state.apply_engines().await; (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response() }
+pub async fn $update(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Json(v): Json<$ty>) -> Response { if !authorized(&state, &headers).await { return unauthorized(); } if !ipfilter_pass(&state, &headers, stringify!($field), &id).await { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error":"forbidden by ipfilter"}))).into_response(); } let mut d = state.data.write().await; if let Some(x) = d.$field.iter_mut().find(|x| x.id == id) { *x=v; let _ = state.persist_all().await; state.apply_engines().await; return (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response(); } (StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"not found"}))).into_response() }
+pub async fn $delete(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Response { if !authorized(&state, &headers).await { return unauthorized(); } if !ipfilter_pass(&state, &headers, stringify!($field), &id).await { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error":"forbidden by ipfilter"}))).into_response(); } let mut d=state.data.write().await; d.$field.retain(|x| x.id != id); let _ = state.persist_all().await; state.apply_engines().await; (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response() }
 }; }
 
 crud!(
@@ -287,7 +324,7 @@ pub async fn toggle_port_forward(
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
-    if !ipfilter_pass(&state, &headers).await {
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error":"forbidden by ipfilter"})),
@@ -323,7 +360,7 @@ pub async fn get_port_forward_stats(
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
-    if !ipfilter_pass(&state, &headers).await {
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error":"forbidden by ipfilter"})),
@@ -341,7 +378,7 @@ macro_rules! toggle_crud {
 ($fn:ident,$field:ident) => {
 pub async fn $fn(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Json(v): Json<serde_json::Value>) -> Response {
 if !authorized(&state, &headers).await { return unauthorized(); }
-if !ipfilter_pass(&state, &headers).await { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error":"forbidden by ipfilter"}))).into_response(); }
+if !ipfilter_pass(&state, &headers, "admin", "").await { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error":"forbidden by ipfilter"}))).into_response(); }
 let Some(enabled)=parse_enabled(&v) else { return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"enabled required"}))).into_response(); };
 let mut d=state.data.write().await;
 if let Some(x)=d.$field.iter_mut().find(|x|x.id==id){ x.enabled=enabled; let _=state.persist_all().await; state.apply_engines().await; return (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response(); }
@@ -695,7 +732,7 @@ pub async fn update_ddns_refresh_now(
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
-    if !ipfilter_pass(&state, &headers).await {
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error":"forbidden by ipfilter"})),
@@ -730,7 +767,7 @@ pub async fn append_access_log(
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
-    if !ipfilter_pass(&state, &headers).await {
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error":"forbidden by ipfilter"})),
@@ -783,7 +820,7 @@ pub async fn clear_access_logs(
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
-    if !ipfilter_pass(&state, &headers).await {
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error":"forbidden by ipfilter"})),
@@ -804,7 +841,7 @@ pub async fn restore_from_backup_blob(
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
-    if !ipfilter_pass(&state, &headers).await {
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error":"forbidden by ipfilter"})),
@@ -853,7 +890,7 @@ pub async fn export_backup_blob(State(state): State<AppState>, headers: HeaderMa
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
-    if !ipfilter_pass(&state, &headers).await {
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error":"forbidden by ipfilter"})),
@@ -873,7 +910,7 @@ pub async fn get_admin_logs(State(state): State<AppState>, headers: HeaderMap) -
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
-    if !ipfilter_pass(&state, &headers).await {
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error":"forbidden by ipfilter"})),
@@ -895,7 +932,7 @@ pub async fn append_admin_log(
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
-    if !ipfilter_pass(&state, &headers).await {
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error":"forbidden by ipfilter"})),
@@ -934,7 +971,7 @@ pub async fn list_ipfilter_targets(State(state): State<AppState>, headers: Heade
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
-    if !ipfilter_pass(&state, &headers).await {
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error":"forbidden by ipfilter"})),
@@ -966,7 +1003,7 @@ pub async fn upload_ipfilter_file(
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
-    if !ipfilter_pass(&state, &headers).await {
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error":"forbidden by ipfilter"})),
@@ -984,7 +1021,9 @@ pub async fn upload_ipfilter_file(
         d.ipfilter.push(crate::models::IpFilterRule {
             id: format!("upload-{}-{}", target, idx),
             target: target.to_string(),
+            target_id: String::new(),
             cidr: cidr.to_string(),
+            action: "allow".to_string(),
             enabled: true,
         });
     }
@@ -1000,7 +1039,7 @@ pub async fn check_port(
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
-    if !ipfilter_pass(&state, &headers).await {
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error":"forbidden by ipfilter"})),
@@ -1028,7 +1067,7 @@ pub async fn mark_welcome_shown(State(state): State<AppState>, headers: HeaderMa
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
-    if !ipfilter_pass(&state, &headers).await {
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error":"forbidden by ipfilter"})),
@@ -1049,7 +1088,7 @@ pub async fn list_sessions(State(state): State<AppState>, headers: HeaderMap) ->
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
-    if !ipfilter_pass(&state, &headers).await {
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error":"forbidden by ipfilter"})),
@@ -1071,7 +1110,7 @@ pub async fn revoke_session(
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
-    if !ipfilter_pass(&state, &headers).await {
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error":"forbidden by ipfilter"})),
@@ -1094,7 +1133,7 @@ pub async fn proxy_webservice_http(
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
-    if !ipfilter_pass(&state, &headers).await {
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error":"forbidden by ipfilter"})),
@@ -1189,7 +1228,7 @@ pub async fn renew_tls(
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
-    if !ipfilter_pass(&state, &headers).await {
+    if !ipfilter_pass(&state, &headers, "admin", "").await {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error":"forbidden by ipfilter"})),

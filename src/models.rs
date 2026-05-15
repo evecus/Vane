@@ -55,7 +55,9 @@ pub struct TlsRule {
 pub struct IpFilterRule {
     pub id: String,
     pub target: String,
+    pub target_id: String,
     pub cidr: String,
+    pub action: String,
     pub enabled: bool,
 }
 
