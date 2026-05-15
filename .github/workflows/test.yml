@@ -23,7 +23,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 1. 确定版本号：优先使用 Tag，其次使用输入值，最后使用当前时间
       - name: Set Version
         run: |
           if [ "${{ github.event_name }}" = "push" ]; then
@@ -31,43 +30,38 @@ jobs:
           elif [ -n "${{ github.event.inputs.version }}" ]; then
             echo "RELEASE_VERSION=${{ github.event.inputs.version }}" >> $GITHUB_ENV
           else
-            # 格式：v2026.03.28-0734 (根据当前 UTC 时间)
             echo "RELEASE_VERSION=v$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_ENV
           fi
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          go-version: '1.22'
-          cache: true
+          targets: aarch64-unknown-linux-musl
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
       - name: Install frontend dependencies
         working-directory: web
-        run: npm install
+        run: npm ci
 
       - name: Build frontend
         working-directory: web
         run: npm run build
 
-      - name: Download Go dependencies
-        run: |
-          go mod tidy
-          go mod download
-
       - name: Build linux/arm64
-        env:
-          GOOS: linux
-          GOARCH: arm64
-          CGO_ENABLED: 0
-        run: |
-          # 修复：使用环境变量中的版本号写入二进制
-          go build -ldflags="-s -w -X main.Version=${{ env.RELEASE_VERSION }}" \
-            -trimpath -o vane-linux-arm64 .
+        uses: houseabsolute/actions-rust-cross@v1
+        with:
+          command: build
+          target: aarch64-unknown-linux-musl
+          args: "--release"
+
+      - name: Pack binary
+        run: cp target/aarch64-unknown-linux-musl/release/vane vane-linux-arm64
 
       - name: Checksum
         run: sha256sum vane-linux-arm64 > sha256sums.txt
@@ -77,25 +71,8 @@ jobs:
         with:
           tag_name: ${{ env.RELEASE_VERSION }}
           name: "Vane ${{ env.RELEASE_VERSION }} (Pre-release)"
-          body: |
-            ## 🌀 Vane ${{ env.RELEASE_VERSION }}
-            > 这是一个自动生成的预览版本。
-
-            ### 下载
-            | 平台 | 文件 |
-            |------|------|
-            | Linux ARM64 | `vane-linux-arm64` |
-
-            ### 快速开始
-            ```bash
-            chmod +x vane-linux-arm64
-            ./vane-linux-arm64
-            ```
-            访问: http://your-ip:4455
-            账号: admin / admin
           files: |
             vane-linux-arm64
             sha256sums.txt
           draft: false
-          # 修改：默认发布为预发布版本
           prerelease: true
