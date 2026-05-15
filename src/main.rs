@@ -37,6 +37,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/login", post(login))
         .route("/api/logout", post(logout))
         .route("/api/dashboard", get(get_dashboard))
+        .route("/api/sessions", get(list_sessions))
+        .route(
+            "/api/sessions/:token",
+            axum::routing::delete(revoke_session),
+        )
         .route(
             "/api/admin/logs",
             get(get_admin_logs).post(append_admin_log),

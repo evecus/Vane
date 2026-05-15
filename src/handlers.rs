@@ -85,13 +85,29 @@ pub async fn login(State(state): State<AppState>, Json(req): Json<LoginReq>) -> 
         .sessions
         .write()
         .await
-        .insert(token.clone(), req.username);
+        .insert(token.clone(), req.username.clone());
+    {
+        let mut d = state.data.write().await;
+        d.sessions_meta.push(crate::models::SessionInfo {
+            token: token.clone(),
+            username: req.username,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        });
+        if d.sessions_meta.len() > 1000 {
+            let drain = d.sessions_meta.len() - 1000;
+            d.sessions_meta.drain(0..drain);
+        }
+    }
+    let _ = state.persist_all().await;
     (StatusCode::OK, Json(serde_json::json!({"token": token}))).into_response()
 }
 
 pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Some(t) = bearer(&headers) {
         state.sessions.write().await.remove(&t);
+        let mut d = state.data.write().await;
+        d.sessions_meta.retain(|x| x.token != t);
+        let _ = state.persist_all().await;
     }
     (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response()
 }
@@ -1007,6 +1023,46 @@ pub async fn mark_welcome_shown(State(state): State<AppState>, headers: HeaderMa
     if let Ok(new_cfg) = serde_json::from_value(value) {
         *cfg = new_cfg;
     }
+    let _ = state.persist_all().await;
+    (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response()
+}
+
+pub async fn list_sessions(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !authorized(&state, &headers).await {
+        return unauthorized();
+    }
+    if !ipfilter_pass(&state, &headers).await {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error":"forbidden by ipfilter"})),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::OK,
+        Json(state.data.read().await.sessions_meta.clone()),
+    )
+        .into_response()
+}
+
+pub async fn revoke_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(token): Path<String>,
+) -> Response {
+    if !authorized(&state, &headers).await {
+        return unauthorized();
+    }
+    if !ipfilter_pass(&state, &headers).await {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error":"forbidden by ipfilter"})),
+        )
+            .into_response();
+    }
+    state.sessions.write().await.remove(&token);
+    let mut d = state.data.write().await;
+    d.sessions_meta.retain(|x| x.token != token);
     let _ = state.persist_all().await;
     (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response()
 }

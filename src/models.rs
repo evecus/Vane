@@ -70,6 +70,7 @@ pub struct RuntimeData {
     pub access_logs: Vec<AccessLog>,
     pub tls_artifacts: Vec<TlsArtifact>,
     pub admin_logs: Vec<AdminLogRecord>,
+    pub sessions_meta: Vec<SessionInfo>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
@@ -111,4 +112,11 @@ pub struct AdminLogRecord {
     pub ip: String,
     pub action: String,
     pub success: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct SessionInfo {
+    pub token: String,
+    pub username: String,
+    pub created_at: String,
 }
