@@ -48,8 +48,11 @@ async fn main() -> anyhow::Result<()> {
             "/api/portforward/:id",
             put(update_port_forward).delete(delete_port_forward),
         )
+        .route("/api/portforward/:id/toggle", post(toggle_port_forward))
+        .route("/api/portforward/:id/stats", get(get_port_forward_stats))
         .route("/api/ddns", get(list_ddns).post(create_ddns))
         .route("/api/ddns/:id", put(update_ddns).delete(delete_ddns))
+        .route("/api/ddns/:id/toggle", post(toggle_ddns))
         .route(
             "/api/webservice",
             get(list_webservices).post(create_webservice),
@@ -58,13 +61,16 @@ async fn main() -> anyhow::Result<()> {
             "/api/webservice/:id",
             put(update_webservice).delete(delete_webservice),
         )
+        .route("/api/webservice/:id/toggle", post(toggle_webservice))
         .route("/api/tls", get(list_tls).post(create_tls))
         .route("/api/tls/:id", put(update_tls).delete(delete_tls))
+        .route("/api/tls/:id/toggle", post(toggle_tls))
         .route("/api/ipfilter", get(list_ipfilters).post(create_ipfilter))
         .route(
             "/api/ipfilter/:id",
             put(update_ipfilter).delete(delete_ipfilter),
         )
+        .route("/api/ipfilter/:id/toggle", post(toggle_ipfilter))
         .fallback(spa_fallback)
         .with_state(state)
         .layer(

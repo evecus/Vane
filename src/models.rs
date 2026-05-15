@@ -67,3 +67,11 @@ pub struct RuntimeData {
     pub tls: Vec<TlsRule>,
     pub ipfilter: Vec<IpFilterRule>,
 }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct PortForwardStats {
+    pub id: String,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+    pub connections: u64,
+}

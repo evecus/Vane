@@ -256,3 +256,83 @@ pub async fn spa_fallback(State(state): State<AppState>, uri: Uri) -> Response {
         Err(_) => (StatusCode::NOT_FOUND, "not found").into_response(),
     }
 }
+
+fn parse_enabled(v: &serde_json::Value) -> Option<bool> {
+    v.get("enabled").and_then(|x| x.as_bool())
+}
+
+pub async fn toggle_port_forward(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(v): Json<serde_json::Value>,
+) -> Response {
+    if !authorized(&state, &headers).await {
+        return unauthorized();
+    }
+    if !ipfilter_pass(&state, &headers).await {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error":"forbidden by ipfilter"})),
+        )
+            .into_response();
+    }
+    let Some(enabled) = parse_enabled(&v) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":"enabled required"})),
+        )
+            .into_response();
+    };
+    let mut d = state.data.write().await;
+    if let Some(x) = d.portforward.iter_mut().find(|x| x.id == id) {
+        x.enabled = enabled;
+        let _ = state.persist_all().await;
+        state.apply_engines().await;
+        return (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response();
+    }
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"error":"not found"})),
+    )
+        .into_response()
+}
+
+pub async fn get_port_forward_stats(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if !authorized(&state, &headers).await {
+        return unauthorized();
+    }
+    if !ipfilter_pass(&state, &headers).await {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error":"forbidden by ipfilter"})),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"id":id,"bytes_in":0,"bytes_out":0,"connections":0})),
+    )
+        .into_response()
+}
+
+macro_rules! toggle_crud {
+($fn:ident,$field:ident) => {
+pub async fn $fn(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Json(v): Json<serde_json::Value>) -> Response {
+if !authorized(&state, &headers).await { return unauthorized(); }
+if !ipfilter_pass(&state, &headers).await { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error":"forbidden by ipfilter"}))).into_response(); }
+let Some(enabled)=parse_enabled(&v) else { return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"enabled required"}))).into_response(); };
+let mut d=state.data.write().await;
+if let Some(x)=d.$field.iter_mut().find(|x|x.id==id){ x.enabled=enabled; let _=state.persist_all().await; state.apply_engines().await; return (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response(); }
+(StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"not found"}))).into_response()
+}
+};}
+
+toggle_crud!(toggle_ddns, ddns);
+toggle_crud!(toggle_webservice, webservice);
+toggle_crud!(toggle_tls, tls);
+toggle_crud!(toggle_ipfilter, ipfilter);
