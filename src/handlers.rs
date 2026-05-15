@@ -8,7 +8,9 @@ use axum::{
 use chrono::Utc;
 use serde::Deserialize;
 
+use instant_acme::{Account, AccountCredentials, ChallengeType, Identifier, NewAccount, NewOrder};
 use ipnet::IpNet;
+use rcgen::{CertificateParams, DistinguishedName, DnType};
 use std::net::IpAddr;
 use tokio::fs;
 
@@ -590,6 +592,68 @@ pub async fn get_all_access_logs(State(state): State<AppState>, headers: HeaderM
         Json(state.data.read().await.access_logs.clone()),
     )
         .into_response()
+}
+
+async fn try_issue_acme_cert(
+    domain: &str,
+    email: &str,
+) -> anyhow::Result<(String, String, String, String)> {
+    let url = "https://acme-v02.api.letsencrypt.org/directory";
+    let acc = Account::create(
+        &NewAccount {
+            contact: &[&format!("mailto:{}", email)],
+            terms_of_service_agreed: true,
+            only_return_existing: false,
+        },
+        url,
+        None,
+    )
+    .await?;
+
+    let mut order = acc
+        .new_order(&NewOrder {
+            identifiers: &[Identifier::Dns(domain.to_string())],
+        })
+        .await?;
+
+    let state = order.state();
+    for authz in state.authorizations.iter() {
+        let mut auth = order.authorization(authz).await?;
+        let chall = auth
+            .challenges
+            .iter()
+            .find(|c| c.r#type == ChallengeType::Http01)
+            .ok_or_else(|| anyhow::anyhow!("http-01 challenge not offered"))?;
+        order.set_challenge_ready(&chall.url).await?;
+    }
+
+    // NOTE: this expects external HTTP-01 challenge responder wired by deployment.
+    order.refresh().await?;
+
+    let mut params = CertificateParams::new(vec![domain.to_string()])?;
+    params.distinguished_name = DistinguishedName::new();
+    params.distinguished_name.push(DnType::CommonName, domain);
+    let key = rcgen::KeyPair::generate()?;
+    let csr = params.serialize_request(&key)?.der().to_vec();
+
+    let cert_chain = order.finalize(csr).await?.certificate().await?;
+    let cert_pem = cert_chain
+        .iter()
+        .map(|c| {
+            format!(
+                "-----BEGIN CERTIFICATE-----
+{}
+-----END CERTIFICATE-----
+",
+                base64::encode(c)
+            )
+        })
+        .collect::<String>();
+    let key_pem = key.serialize_pem();
+
+    let now = chrono::Utc::now();
+    let exp = now + chrono::Duration::days(90);
+    Ok((cert_pem, key_pem, now.to_rfc3339(), exp.to_rfc3339()))
 }
 
 pub async fn issue_tls(

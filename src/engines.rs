@@ -236,6 +236,7 @@ async fn run_tls(rule: TlsRule, mut stop: oneshot::Receiver<()>) {
             _ = time::sleep(Duration::from_secs(3600)) => {
                 let _ = tokio::fs::metadata(&rule.cert_path).await;
                 let _ = tokio::fs::metadata(&rule.key_path).await;
+                // auto renew tls artifacts nearing expiry is triggered by API-level renew endpoint scheduler integration
             }
         }
     }
