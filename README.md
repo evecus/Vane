@@ -36,10 +36,11 @@ chmod +x vane-linux-amd64
 
 ```bash
 # 1. 构建前端
-cd web && npm install && npm run build && cd ..
+cd web && npm ci && npm run build && cd ..
 
-# 2. 构建 Go 二进制
-go build -o vane .
+# 2. 构建 Rust 二进制
+cargo build --release
+cp target/release/vane ./vane
 
 # 3. 运行
 ./vane --config /path(可选)
@@ -49,14 +50,7 @@ go build -o vane .
 
 ```
 vane/
-├── main.go              # 入口
-├── config/              # 配置管理 (vane.json)
-├── module/
-│   ├── portforward/     # 端口转发
-│   ├── ddns/            # DDNS
-│   ├── webservice/      # 反向代理
-│   └── tls/             # 证书管理
-├── api/                 # REST API
+├── src/main.rs          # Rust 入口
 ├── web/                 # Vue3 前端
 └── .github/workflows/   # CI/CD
 ```
