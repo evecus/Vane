@@ -46,6 +46,7 @@ async fn main() -> anyhow::Result<()> {
             "/api/admin/logs",
             get(get_admin_logs).post(append_admin_log),
         )
+        .route("/api/admin/logs/query", get(query_admin_logs))
         .route("/api/settings", get(get_settings).put(update_settings))
         .route("/api/settings/backup", get(backup_settings))
         .route("/api/settings/export", get(export_backup_blob))
@@ -94,6 +95,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/api/webservice/:id/logs/clear", post(clear_access_logs))
         .route("/api/webservice/logs", get(get_all_access_logs))
+        .route("/api/webservice/logs/query", get(query_access_logs))
         .route("/api/webservice/logs/append", post(append_access_log))
         .route("/api/tls", get(list_tls).post(create_tls))
         .route("/api/tls/:id", put(update_tls).delete(delete_tls))

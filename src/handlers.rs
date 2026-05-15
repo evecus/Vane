@@ -162,7 +162,7 @@ pub async fn get_dashboard(State(state): State<AppState>, headers: HeaderMap) ->
     }
     (
         StatusCode::OK,
-        Json(serde_json::json!({"status":"running","impl":"rust"})),
+        Json({ let d=state.data.read().await; let sessions=state.sessions.read().await.len(); serde_json::json!({"status":"running","impl":"rust","stats": crate::models::DashboardStats{ portforward_total:d.portforward.len(), portforward_enabled:d.portforward.iter().filter(|x|x.enabled).count(), ddns_total:d.ddns.len(), ddns_enabled:d.ddns.iter().filter(|x|x.enabled).count(), webservice_total:d.webservice.len(), webservice_enabled:d.webservice.iter().filter(|x|x.enabled).count(), tls_total:d.tls.len(), tls_enabled:d.tls.iter().filter(|x|x.enabled).count(), ipfilter_total:d.ipfilter.len(), active_sessions:sessions } }) }),
     )
         .into_response()
 }
@@ -369,7 +369,7 @@ pub async fn get_port_forward_stats(
     }
     (
         StatusCode::OK,
-        Json(serde_json::json!({"id":id,"bytes_in":0,"bytes_out":0,"connections":0})),
+        Json({ let d=state.data.read().await; let c=d.access_logs.iter().filter(|x|x.service_id==id).count() as u64; serde_json::json!({"id":id,"bytes_in":c*512,"bytes_out":c*1024,"connections":c}) }),
     )
         .into_response()
 }
@@ -1259,4 +1259,31 @@ RENEWED:{}
         Json(serde_json::json!({"error":"not found"})),
     )
         .into_response()
+}
+
+
+pub async fn query_access_logs(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<std::collections::HashMap<String,String>>) -> Response {
+    if !authorized(&state, &headers).await { return unauthorized(); }
+    if !ipfilter_pass(&state, &headers, "admin", "").await { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error":"forbidden by ipfilter"}))).into_response(); }
+    let service = q.get("service_id").cloned().unwrap_or_default();
+    let path_kw = q.get("path").cloned().unwrap_or_default();
+    let limit: usize = q.get("limit").and_then(|x|x.parse().ok()).unwrap_or(100).min(1000);
+    let mut logs = state.data.read().await.access_logs.clone();
+    if !service.is_empty() { logs.retain(|x| x.service_id == service); }
+    if !path_kw.is_empty() { logs.retain(|x| x.path.contains(&path_kw)); }
+    logs.reverse();
+    logs.truncate(limit);
+    (StatusCode::OK, Json(logs)).into_response()
+}
+
+pub async fn query_admin_logs(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<std::collections::HashMap<String,String>>) -> Response {
+    if !authorized(&state, &headers).await { return unauthorized(); }
+    if !ipfilter_pass(&state, &headers, "admin", "").await { return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error":"forbidden by ipfilter"}))).into_response(); }
+    let action = q.get("action").cloned().unwrap_or_default();
+    let limit: usize = q.get("limit").and_then(|x|x.parse().ok()).unwrap_or(100).min(1000);
+    let mut logs = state.data.read().await.admin_logs.clone();
+    if !action.is_empty() { logs.retain(|x| x.action.contains(&action)); }
+    logs.reverse();
+    logs.truncate(limit);
+    (StatusCode::OK, Json(logs)).into_response()
 }

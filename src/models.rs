@@ -122,3 +122,6 @@ pub struct SessionInfo {
     pub username: String,
     pub created_at: String,
 }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct DashboardStats { pub portforward_total: usize, pub portforward_enabled: usize, pub ddns_total: usize, pub ddns_enabled: usize, pub webservice_total: usize, pub webservice_enabled: usize, pub tls_total: usize, pub tls_enabled: usize, pub ipfilter_total: usize, pub active_sessions: usize }
