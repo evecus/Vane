@@ -88,6 +88,10 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/api/webservice/:id/routes/:rid/toggle", post(toggle_route))
         .route("/api/webservice/:id/logs", get(get_access_logs))
+        .route(
+            "/api/webservice/:id/proxy/*tail",
+            axum::routing::any(proxy_webservice_http),
+        )
         .route("/api/webservice/:id/logs/clear", post(clear_access_logs))
         .route("/api/webservice/logs", get(get_all_access_logs))
         .route("/api/webservice/logs/append", post(append_access_log))

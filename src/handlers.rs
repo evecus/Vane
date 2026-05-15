@@ -1,5 +1,6 @@
 use axum::{
-    extract::{Path, State},
+    body::Body,
+    extract::{Path, Request, State},
     http::{HeaderMap, StatusCode, Uri},
     response::{Html, IntoResponse, Response},
     Json,
@@ -1065,4 +1066,100 @@ pub async fn revoke_session(
     d.sessions_meta.retain(|x| x.token != token);
     let _ = state.persist_all().await;
     (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response()
+}
+
+pub async fn proxy_webservice_http(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((id, tail)): Path<(String, String)>,
+    mut req: Request,
+) -> Response {
+    if !authorized(&state, &headers).await {
+        return unauthorized();
+    }
+    if !ipfilter_pass(&state, &headers).await {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error":"forbidden by ipfilter"})),
+        )
+            .into_response();
+    }
+
+    let data = state.data.read().await.clone();
+    let Some(svc) = data.webservice.iter().find(|x| x.id == id && x.enabled) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error":"service not found"})),
+        )
+            .into_response();
+    };
+
+    let mut backend = svc.backend.clone();
+    if let Some(routes) = data.web_routes.get(&id) {
+        if let Some(rt) = routes
+            .iter()
+            .find(|r| r.enabled && tail.starts_with(r.path.trim_start_matches('/')))
+        {
+            backend = rt.backend.clone();
+        }
+    }
+
+    let uri_tail = if tail.is_empty() {
+        String::new()
+    } else {
+        format!("/{}", tail)
+    };
+    let url = format!("http://{}{}", backend.trim_end_matches('/'), uri_tail);
+
+    let client = reqwest::Client::new();
+    let method = req.method().clone();
+    let body_bytes = axum::body::to_bytes(req.body_mut(), 8 * 1024 * 1024)
+        .await
+        .unwrap_or_default();
+
+    let mut rb = client.request(method, &url).body(body_bytes.to_vec());
+    if let Some(v) = headers.get("content-type").and_then(|v| v.to_str().ok()) {
+        rb = rb.header("content-type", v);
+    }
+    if let Some(v) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
+        rb = rb.header("authorization", v);
+    }
+    rb = rb.header("x-forwarded-host", svc.domain.clone());
+
+    let resp = match rb.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": format!("proxy failed: {}", e)})),
+            )
+                .into_response()
+        }
+    };
+
+    let status = resp.status();
+    let bytes = resp.bytes().await.unwrap_or_default();
+
+    {
+        let mut d = state.data.write().await;
+        d.access_logs.push(crate::models::AccessLog {
+            ts: chrono::Utc::now().to_rfc3339(),
+            service_id: id.clone(),
+            route_id: "".into(),
+            client_ip: headers
+                .get("x-forwarded-for")
+                .and_then(|x| x.to_str().ok())
+                .unwrap_or("")
+                .to_string(),
+            path: format!("/{}", tail),
+            status: status.as_u16(),
+        });
+        if d.access_logs.len() > 5000 {
+            let n = d.access_logs.len() - 5000;
+            d.access_logs.drain(0..n);
+        }
+        let _ = state.persist_all().await;
+    }
+
+    (status, Body::from(bytes)).into_response()
 }
