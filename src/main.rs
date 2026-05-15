@@ -1,4 +1,5 @@
 mod auth;
+mod engines;
 mod handlers;
 mod models;
 mod state;
@@ -28,6 +29,7 @@ async fn main() -> anyhow::Result<()> {
     fs::create_dir_all(&root).await?;
 
     let state = AppState::load(root).await?;
+    state.apply_engines().await;
 
     let port = state.config.read().await.admin.port;
 

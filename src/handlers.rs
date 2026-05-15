@@ -86,6 +86,7 @@ pub async fn update_settings(
     }
     *state.config.write().await = cfg;
     let _ = state.persist_all().await;
+    state.apply_engines().await;
     (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response()
 }
 pub async fn backup_settings(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -115,15 +116,16 @@ pub async fn restore_settings(
         *state.data.write().await = d;
     }
     let _ = state.persist_all().await;
+    state.apply_engines().await;
     (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response()
 }
 
 macro_rules! crud {
 ($list:ident,$create:ident,$update:ident,$delete:ident,$field:ident,$ty:ty) => {
 pub async fn $list(State(state): State<AppState>, headers: HeaderMap) -> Response { if !authorized(&state, &headers).await { return unauthorized(); } (StatusCode::OK, Json(state.data.read().await.$field.clone())).into_response() }
-pub async fn $create(State(state): State<AppState>, headers: HeaderMap, Json(v): Json<$ty>) -> Response { if !authorized(&state, &headers).await { return unauthorized(); } state.data.write().await.$field.push(v); let _ = state.persist_all().await; (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response() }
-pub async fn $update(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Json(v): Json<$ty>) -> Response { if !authorized(&state, &headers).await { return unauthorized(); } let mut d = state.data.write().await; if let Some(x) = d.$field.iter_mut().find(|x| x.id == id) { *x=v; let _ = state.persist_all().await; return (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response(); } (StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"not found"}))).into_response() }
-pub async fn $delete(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Response { if !authorized(&state, &headers).await { return unauthorized(); } let mut d=state.data.write().await; d.$field.retain(|x| x.id != id); let _ = state.persist_all().await; (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response() }
+pub async fn $create(State(state): State<AppState>, headers: HeaderMap, Json(v): Json<$ty>) -> Response { if !authorized(&state, &headers).await { return unauthorized(); } state.data.write().await.$field.push(v); let _ = state.persist_all().await; state.apply_engines().await; (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response() }
+pub async fn $update(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Json(v): Json<$ty>) -> Response { if !authorized(&state, &headers).await { return unauthorized(); } let mut d = state.data.write().await; if let Some(x) = d.$field.iter_mut().find(|x| x.id == id) { *x=v; let _ = state.persist_all().await; state.apply_engines().await; return (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response(); } (StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"not found"}))).into_response() }
+pub async fn $delete(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Response { if !authorized(&state, &headers).await { return unauthorized(); } let mut d=state.data.write().await; d.$field.retain(|x| x.id != id); let _ = state.persist_all().await; state.apply_engines().await; (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response() }
 }; }
 
 crud!(

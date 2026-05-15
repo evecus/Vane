@@ -5,6 +5,7 @@ use tokio::{fs, sync::RwLock};
 
 use crate::{
     auth::hash_password,
+    engines::RuntimeEngines,
     models::{AdminConfig, Config, RuntimeData},
 };
 
@@ -13,6 +14,7 @@ pub struct AppState {
     pub config: Arc<RwLock<Config>>,
     pub data: Arc<RwLock<RuntimeData>>,
     pub sessions: Arc<RwLock<HashMap<String, String>>>,
+    pub engines: RuntimeEngines,
     pub root: PathBuf,
 }
 
@@ -46,6 +48,7 @@ impl AppState {
             config: Arc::new(RwLock::new(cfg)),
             data: Arc::new(RwLock::new(data)),
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            engines: RuntimeEngines::default(),
             root,
         })
     }
@@ -62,5 +65,15 @@ impl AppState {
         )
         .await?;
         Ok(())
+    }
+}
+
+impl AppState {
+    pub async fn apply_engines(&self) {
+        let d = self.data.read().await.clone();
+        self.engines.apply_portforwards(&d.portforward).await;
+        tokio::spawn(crate::engines::run_ddns(d.ddns));
+        tokio::spawn(crate::engines::run_webservice(d.webservice));
+        tokio::spawn(crate::engines::run_tls(d.tls));
     }
 }
