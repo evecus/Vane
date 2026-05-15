@@ -30,6 +30,8 @@ pub struct DdnsRule {
     pub record_type: String,
     pub token: String,
     pub zone: String,
+    pub record_name: String,
+    pub proxied: bool,
     pub enabled: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -37,6 +39,7 @@ pub struct WebServiceRule {
     pub id: String,
     pub domain: String,
     pub backend: String,
+    pub listen: String,
     pub force_https: bool,
     pub enabled: bool,
 }
