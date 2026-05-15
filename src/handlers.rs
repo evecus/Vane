@@ -1213,6 +1213,20 @@ pub async fn proxy_webservice_http(
             .into_response();
     };
 
+    let proto = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("http");
+    if svc.force_https && !proto.eq_ignore_ascii_case("https") {
+        let location = format!("https://{}{}", svc.domain, req.uri());
+        return (
+            StatusCode::MOVED_PERMANENTLY,
+            [("location", location)],
+            Body::empty(),
+        )
+            .into_response();
+    }
+
     let mut backend = svc.backend.clone();
     if let Some(routes) = data.web_routes.get(&id) {
         if let Some(rt) = routes
