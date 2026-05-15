@@ -3,7 +3,7 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use reqwest::Client;
 use tokio::{
     io,
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, TcpStream, UdpSocket},
     sync::{oneshot, RwLock},
     time,
 };
@@ -98,9 +98,6 @@ async fn reconcile_spawn<T: Clone + Send + 'static>(
 }
 
 async fn run_forwarder(rule: PortForwardRule, mut stop: oneshot::Receiver<()>) {
-    if !rule.protocol.eq_ignore_ascii_case("tcp") {
-        return;
-    }
     let listen: SocketAddr = match rule.listen.parse() {
         Ok(v) => v,
         Err(_) => return,
@@ -109,6 +106,16 @@ async fn run_forwarder(rule: PortForwardRule, mut stop: oneshot::Receiver<()>) {
         Ok(v) => v,
         Err(_) => return,
     };
+
+    if rule.protocol.eq_ignore_ascii_case("udp") {
+        run_udp_forwarder(listen, target, stop).await;
+        return;
+    }
+
+    if !rule.protocol.eq_ignore_ascii_case("tcp") {
+        return;
+    }
+
     let listener = match TcpListener::bind(listen).await {
         Ok(v) => v,
         Err(_) => return,
@@ -210,6 +217,43 @@ async fn run_tls(rule: TlsRule, mut stop: oneshot::Receiver<()>) {
             _ = time::sleep(Duration::from_secs(3600)) => {
                 let _ = tokio::fs::metadata(&rule.cert_path).await;
                 let _ = tokio::fs::metadata(&rule.key_path).await;
+            }
+        }
+    }
+}
+
+async fn run_udp_forwarder(
+    listen: SocketAddr,
+    target: SocketAddr,
+    mut stop: oneshot::Receiver<()>,
+) {
+    let inbound = match UdpSocket::bind(listen).await {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let outbound = match UdpSocket::bind("0.0.0.0:0").await {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let mut buf = vec![0u8; 65535];
+    let mut last_client: Option<SocketAddr> = None;
+
+    loop {
+        tokio::select! {
+            _ = &mut stop => break,
+            r = inbound.recv_from(&mut buf) => {
+                if let Ok((n, client)) = r {
+                    last_client = Some(client);
+                    let _ = outbound.send_to(&buf[..n], target).await;
+                }
+            }
+            r = outbound.recv_from(&mut buf) => {
+                if let Ok((n, _src)) = r {
+                    if let Some(client) = last_client {
+                        let _ = inbound.send_to(&buf[..n], client).await;
+                    }
+                }
             }
         }
     }
