@@ -811,7 +811,7 @@ pub async fn update_ddns_refresh_now(
         .cloned()
     {
         let client = reqwest::Client::new();
-        let _ = crate::engines::sync_cloudflare_manual(&client, &rule).await;
+        let _ = crate::engines::sync_ddns_provider(&client, &rule).await;
         return (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response();
     }
     (

@@ -137,10 +137,29 @@ async fn run_ddns(rule: DdnsRule, mut stop: oneshot::Receiver<()>) {
         tokio::select! {
             _ = &mut stop => break,
             _ = time::sleep(Duration::from_secs(300)) => {
-                let _ = sync_cloudflare_manual(&client, &rule).await;
+                let _ = sync_ddns_provider(&client, &rule).await;
             }
         }
     }
+}
+
+pub async fn sync_ddns_provider(client: &Client, rule: &DdnsRule) -> anyhow::Result<()> {
+    if rule.provider.eq_ignore_ascii_case("cloudflare") {
+        return sync_cloudflare_manual(client, rule).await;
+    }
+    if rule.provider.eq_ignore_ascii_case("alidns")
+        || rule.provider.eq_ignore_ascii_case("aliyun")
+        || rule.provider.contains("阿里")
+    {
+        return sync_alidns_manual(client, rule).await;
+    }
+    if rule.provider.eq_ignore_ascii_case("dnspod") || rule.provider.contains("DNSPod") {
+        return sync_dnspod_manual(client, rule).await;
+    }
+    if rule.provider.eq_ignore_ascii_case("tencent") || rule.provider.contains("腾讯") {
+        return sync_tencent_manual(client, rule).await;
+    }
+    Ok(())
 }
 
 pub async fn sync_cloudflare_manual(client: &Client, rule: &DdnsRule) -> anyhow::Result<()> {
@@ -257,4 +276,84 @@ async fn run_udp_forwarder(
             }
         }
     }
+}
+
+pub async fn sync_alidns_manual(client: &Client, rule: &DdnsRule) -> anyhow::Result<()> {
+    if rule.token.is_empty() || rule.record_name.is_empty() {
+        return Ok(());
+    }
+    let ip = client
+        .get("https://api.ipify.org")
+        .send()
+        .await?
+        .text()
+        .await?;
+
+    let _ = client
+        .post("https://alidns.aliyuncs.com/")
+        .header("x-vane-provider", "alidns")
+        .header("authorization", format!("Bearer {}", rule.token))
+        .json(&serde_json::json!({
+            "Action":"UpdateDomainRecord",
+            "DomainName": rule.domain,
+            "RR": rule.record_name,
+            "Type": rule.record_type,
+            "Value": ip.trim()
+        }))
+        .send()
+        .await?;
+    Ok(())
+}
+
+pub async fn sync_dnspod_manual(client: &Client, rule: &DdnsRule) -> anyhow::Result<()> {
+    if rule.token.is_empty() || rule.record_name.is_empty() {
+        return Ok(());
+    }
+    let ip = client
+        .get("https://api.ipify.org")
+        .send()
+        .await?
+        .text()
+        .await?;
+
+    let _ = client
+        .post("https://dnsapi.cn/Record.Ddns")
+        .form(&[
+            ("login_token", rule.token.as_str()),
+            ("format", "json"),
+            ("domain", rule.domain.as_str()),
+            ("sub_domain", rule.record_name.as_str()),
+            ("record_type", rule.record_type.as_str()),
+            ("value", ip.trim()),
+        ])
+        .send()
+        .await?;
+    Ok(())
+}
+
+pub async fn sync_tencent_manual(client: &Client, rule: &DdnsRule) -> anyhow::Result<()> {
+    if rule.token.is_empty() || rule.record_name.is_empty() {
+        return Ok(());
+    }
+    let ip = client
+        .get("https://api.ipify.org")
+        .send()
+        .await?
+        .text()
+        .await?;
+
+    let _ = client
+        .post("https://dnspod.tencentcloudapi.com/")
+        .header("x-vane-provider", "tencentcloud")
+        .header("authorization", format!("Bearer {}", rule.token))
+        .json(&serde_json::json!({
+            "Action":"ModifyDynamicDNS",
+            "Domain": rule.domain,
+            "SubDomain": rule.record_name,
+            "RecordType": rule.record_type,
+            "Value": ip.trim()
+        }))
+        .send()
+        .await?;
+    Ok(())
 }
