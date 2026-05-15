@@ -99,6 +99,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/tls/:id", put(update_tls).delete(delete_tls))
         .route("/api/tls/:id/toggle", post(toggle_tls))
         .route("/api/tls/:id/issue", post(issue_tls))
+        .route("/api/tls/:id/renew", post(renew_tls))
         .route("/api/tls/upload", post(upload_tls))
         .route("/api/tls/:id/download", get(download_tls))
         .route("/api/tls/:id/pem", get(get_tls_pem))

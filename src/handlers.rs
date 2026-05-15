@@ -504,10 +504,22 @@ pub async fn issue_tls(
     let mut d = state.data.write().await;
     if let Some(rule) = d.tls.iter().find(|x| x.id == id) {
         d.tls_artifacts.retain(|x| x.id != id);
+        let now = chrono::Utc::now();
+        let exp = now + chrono::Duration::days(90);
         d.tls_artifacts.push(crate::models::TlsArtifact {
             id: id.clone(),
-            cert_pem: format!("issued cert for {}", rule.domain),
-            key_pem: "issued key".into(),
+            cert_pem: format!(
+                "-----BEGIN CERTIFICATE-----\nSELF-SIGNED:{}:{}\n-----END CERTIFICATE-----",
+                rule.domain,
+                now.to_rfc3339()
+            ),
+            key_pem: format!(
+                "-----BEGIN PRIVATE KEY-----\nKEY:{}\n-----END PRIVATE KEY-----",
+                now.timestamp()
+            ),
+            issued_at: now.to_rfc3339(),
+            expires_at: exp.to_rfc3339(),
+            auto_renew: true,
         });
         let _ = state.persist_all().await;
         return (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response();
@@ -544,10 +556,15 @@ pub async fn upload_tls(
         .to_string();
     let mut d = state.data.write().await;
     d.tls_artifacts.retain(|x| x.id != id);
+    let now = chrono::Utc::now();
+    let exp = now + chrono::Duration::days(90);
     d.tls_artifacts.push(crate::models::TlsArtifact {
         id,
         cert_pem: cert,
         key_pem: key,
+        issued_at: now.to_rfc3339(),
+        expires_at: exp.to_rfc3339(),
+        auto_renew: true,
     });
     let _ = state.persist_all().await;
     (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response()
@@ -1162,4 +1179,45 @@ pub async fn proxy_webservice_http(
     }
 
     (status, Body::from(bytes)).into_response()
+}
+
+pub async fn renew_tls(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if !authorized(&state, &headers).await {
+        return unauthorized();
+    }
+    if !ipfilter_pass(&state, &headers).await {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error":"forbidden by ipfilter"})),
+        )
+            .into_response();
+    }
+    let mut d = state.data.write().await;
+    if let Some(t) = d.tls_artifacts.iter_mut().find(|x| x.id == id) {
+        let now = chrono::Utc::now();
+        let exp = now + chrono::Duration::days(90);
+        t.issued_at = now.to_rfc3339();
+        t.expires_at = exp.to_rfc3339();
+        t.cert_pem = format!(
+            "-----BEGIN CERTIFICATE-----
+RENEWED:{}
+-----END CERTIFICATE-----",
+            now.to_rfc3339()
+        );
+        let _ = state.persist_all().await;
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({"ok":true,"expires_at":t.expires_at})),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"error":"not found"})),
+    )
+        .into_response()
 }
