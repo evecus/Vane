@@ -6,6 +6,9 @@ use axum::{
 };
 use chrono::Utc;
 use serde::Deserialize;
+
+use ipnet::IpNet;
+use std::net::IpAddr;
 use tokio::fs;
 
 use crate::{
@@ -16,6 +19,38 @@ use crate::{
 
 fn unauthorized() -> Response {
     StatusCode::UNAUTHORIZED.into_response()
+}
+
+fn client_ip(headers: &HeaderMap) -> Option<IpAddr> {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .and_then(|v| v.trim().parse().ok())
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse().ok())
+        })
+}
+
+async fn ipfilter_pass(state: &AppState, headers: &HeaderMap) -> bool {
+    let ip = match client_ip(headers) {
+        Some(ip) => ip,
+        None => return true,
+    };
+    let rules = state.data.read().await.ipfilter.clone();
+    let enabled: Vec<_> = rules.into_iter().filter(|r| r.enabled).collect();
+    if enabled.is_empty() {
+        return true;
+    }
+    enabled.iter().any(|r| {
+        r.cidr
+            .parse::<IpNet>()
+            .map(|n| n.contains(&ip))
+            .unwrap_or(false)
+    })
 }
 async fn authorized(state: &AppState, headers: &HeaderMap) -> bool {
     bearer(headers)
@@ -64,6 +99,13 @@ pub async fn get_dashboard(State(state): State<AppState>, headers: HeaderMap) ->
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
+    if !ipfilter_pass(&state, &headers).await {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error":"forbidden by ipfilter"})),
+        )
+            .into_response();
+    }
     (
         StatusCode::OK,
         Json(serde_json::json!({"status":"running","impl":"rust"})),
@@ -73,6 +115,13 @@ pub async fn get_dashboard(State(state): State<AppState>, headers: HeaderMap) ->
 pub async fn get_settings(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if !authorized(&state, &headers).await {
         return unauthorized();
+    }
+    if !ipfilter_pass(&state, &headers).await {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error":"forbidden by ipfilter"})),
+        )
+            .into_response();
     }
     (StatusCode::OK, Json(state.config.read().await.clone())).into_response()
 }
@@ -84,6 +133,13 @@ pub async fn update_settings(
     if !authorized(&state, &headers).await {
         return unauthorized();
     }
+    if !ipfilter_pass(&state, &headers).await {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error":"forbidden by ipfilter"})),
+        )
+            .into_response();
+    }
     *state.config.write().await = cfg;
     let _ = state.persist_all().await;
     state.apply_engines().await;
@@ -92,6 +148,13 @@ pub async fn update_settings(
 pub async fn backup_settings(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if !authorized(&state, &headers).await {
         return unauthorized();
+    }
+    if !ipfilter_pass(&state, &headers).await {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error":"forbidden by ipfilter"})),
+        )
+            .into_response();
     }
     (StatusCode::OK, Json(serde_json::json!({"config": state.config.read().await.clone(), "runtime": state.data.read().await.clone()}))).into_response()
 }
@@ -102,6 +165,13 @@ pub async fn restore_settings(
 ) -> Response {
     if !authorized(&state, &headers).await {
         return unauthorized();
+    }
+    if !ipfilter_pass(&state, &headers).await {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error":"forbidden by ipfilter"})),
+        )
+            .into_response();
     }
     if let Some(c) = v
         .get("config")
