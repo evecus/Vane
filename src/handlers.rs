@@ -957,3 +957,56 @@ pub async fn upload_ipfilter_file(
     let _ = state.persist_all().await;
     (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response()
 }
+
+pub async fn check_port(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(v): Json<serde_json::Value>,
+) -> Response {
+    if !authorized(&state, &headers).await {
+        return unauthorized();
+    }
+    if !ipfilter_pass(&state, &headers).await {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error":"forbidden by ipfilter"})),
+        )
+            .into_response();
+    }
+    let port = v.get("port").and_then(|x| x.as_u64()).unwrap_or(0) as u16;
+    if port == 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error":"invalid port"})),
+        )
+            .into_response();
+    }
+    let addr = format!("0.0.0.0:{}", port);
+    let ok = tokio::net::TcpListener::bind(&addr).await.is_ok();
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"port":port,"available":ok})),
+    )
+        .into_response()
+}
+
+pub async fn mark_welcome_shown(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !authorized(&state, &headers).await {
+        return unauthorized();
+    }
+    if !ipfilter_pass(&state, &headers).await {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error":"forbidden by ipfilter"})),
+        )
+            .into_response();
+    }
+    let mut cfg = state.config.write().await;
+    let mut value = serde_json::to_value(cfg.clone()).unwrap_or_default();
+    value["admin"]["welcome_shown"] = serde_json::json!(true);
+    if let Ok(new_cfg) = serde_json::from_value(value) {
+        *cfg = new_cfg;
+    }
+    let _ = state.persist_all().await;
+    (StatusCode::OK, Json(serde_json::json!({"ok":true}))).into_response()
+}

@@ -46,6 +46,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/settings/export", get(export_backup_blob))
         .route("/api/settings/restore", post(restore_settings))
         .route("/api/settings/restore-blob", post(restore_from_backup_blob))
+        .route("/api/settings/welcome-shown", post(mark_welcome_shown))
+        .route("/api/check-port", post(check_port))
         .route(
             "/api/portforward",
             get(list_port_forwards).post(create_port_forward),
