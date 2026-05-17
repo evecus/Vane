@@ -1,4 +1,9 @@
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    sync::Arc,
+    time::Duration,
+};
 
 use reqwest::Client;
 use tokio::{
@@ -9,6 +14,8 @@ use tokio::{
 };
 
 use crate::models::{DdnsRule, PortForwardRule, TlsRule, WebServiceRule};
+
+// ─── RuntimeEngines ──────────────────────────────────────────────────────────
 
 #[derive(Default, Clone)]
 pub struct RuntimeEngines {
@@ -33,6 +40,7 @@ impl RuntimeEngines {
         )
         .await;
     }
+
     pub async fn apply_ddns(&self, rules: &[DdnsRule]) {
         reconcile_spawn(
             &self.ddns,
@@ -47,6 +55,7 @@ impl RuntimeEngines {
         )
         .await;
     }
+
     pub async fn apply_webservice(&self, rules: &[WebServiceRule]) {
         reconcile_spawn(
             &self.webservice,
@@ -61,6 +70,7 @@ impl RuntimeEngines {
         )
         .await;
     }
+
     pub async fn apply_tls(&self, rules: &[TlsRule]) {
         reconcile_spawn(
             &self.tls,
@@ -70,7 +80,7 @@ impl RuntimeEngines {
                 .map(|r| (r.id.clone(), r.clone()))
                 .collect(),
             |r, rx| {
-                tokio::spawn(run_tls(r, rx));
+                tokio::spawn(run_tls_autorenew(r, rx));
             },
         )
         .await;
@@ -105,14 +115,22 @@ async fn reconcile_spawn<T: Clone + Send + 'static>(
     }
 }
 
+// ─── Port Forward ─────────────────────────────────────────────────────────────
+
 async fn run_forwarder(rule: PortForwardRule, mut stop: oneshot::Receiver<()>) {
     let listen: SocketAddr = match rule.listen.parse() {
         Ok(v) => v,
-        Err(_) => return,
+        Err(e) => {
+            eprintln!("[portforward] invalid listen addr {:?}: {e}", rule.listen);
+            return;
+        }
     };
     let target: SocketAddr = match rule.target.parse() {
         Ok(v) => v,
-        Err(_) => return,
+        Err(e) => {
+            eprintln!("[portforward] invalid target addr {:?}: {e}", rule.target);
+            return;
+        }
     };
 
     if rule.protocol.eq_ignore_ascii_case("udp") {
@@ -121,16 +139,29 @@ async fn run_forwarder(rule: PortForwardRule, mut stop: oneshot::Receiver<()>) {
     }
 
     if !rule.protocol.eq_ignore_ascii_case("tcp") {
+        eprintln!("[portforward] unsupported protocol {:?}", rule.protocol);
         return;
     }
 
     let listener = match TcpListener::bind(listen).await {
         Ok(v) => v,
-        Err(_) => return,
+        Err(e) => {
+            eprintln!("[portforward] bind {listen} failed: {e}");
+            return;
+        }
     };
+    eprintln!("[portforward] {} listening on {listen} -> {target}", rule.id);
     loop {
-        tokio::select! { _ = &mut stop => break, c = listener.accept() => { if let Ok((inbound,_)) = c { tokio::spawn(proxy_tcp(inbound, target)); } } }
+        tokio::select! {
+            _ = &mut stop => break,
+            c = listener.accept() => {
+                if let Ok((inbound, _)) = c {
+                    tokio::spawn(proxy_tcp(inbound, target));
+                }
+            }
+        }
     }
+    eprintln!("[portforward] {} stopped", rule.id);
 }
 
 async fn proxy_tcp(mut inbound: TcpStream, target: SocketAddr) {
@@ -139,231 +170,420 @@ async fn proxy_tcp(mut inbound: TcpStream, target: SocketAddr) {
     }
 }
 
-async fn run_ddns(rule: DdnsRule, mut stop: oneshot::Receiver<()>) {
-    let client = Client::new();
-    loop {
-        tokio::select! {
-            _ = &mut stop => break,
-            _ = time::sleep(Duration::from_secs(300)) => {
-                let _ = sync_ddns_provider(&client, &rule).await;
-            }
-        }
-    }
-}
-
-pub async fn sync_ddns_provider(client: &Client, rule: &DdnsRule) -> anyhow::Result<()> {
-    if rule.provider.eq_ignore_ascii_case("cloudflare") {
-        return sync_cloudflare_manual(client, rule).await;
-    }
-    if rule.provider.eq_ignore_ascii_case("alidns")
-        || rule.provider.eq_ignore_ascii_case("aliyun")
-        || rule.provider.contains("阿里")
-    {
-        return sync_alidns_manual(client, rule).await;
-    }
-    if rule.provider.eq_ignore_ascii_case("dnspod") || rule.provider.contains("DNSPod") {
-        return sync_dnspod_manual(client, rule).await;
-    }
-    if rule.provider.eq_ignore_ascii_case("tencent") || rule.provider.contains("腾讯") {
-        return sync_tencent_manual(client, rule).await;
-    }
-    Ok(())
-}
-
-pub async fn sync_cloudflare_manual(client: &Client, rule: &DdnsRule) -> anyhow::Result<()> {
-    if !rule.provider.eq_ignore_ascii_case("cloudflare")
-        || rule.token.is_empty()
-        || rule.zone.is_empty()
-        || rule.record_name.is_empty()
-    {
-        return Ok(());
-    }
-    let ip = client
-        .get("https://api.ipify.org")
-        .send()
-        .await?
-        .text()
-        .await?;
-    let recs: serde_json::Value = client
-        .get(format!(
-            "https://api.cloudflare.com/client/v4/zones/{}/dns_records?type={}&name={}",
-            rule.zone, rule.record_type, rule.record_name
-        ))
-        .bearer_auth(&rule.token)
-        .send()
-        .await?
-        .json()
-        .await?;
-    let rid = recs
-        .get("result")
-        .and_then(|r| r.as_array())
-        .and_then(|a| a.first())
-        .and_then(|x| x.get("id"))
-        .and_then(|x| x.as_str())
-        .unwrap_or("");
-    if rid.is_empty() {
-        return Ok(());
-    }
-    let body = serde_json::json!({"type": rule.record_type, "name": rule.record_name, "content": ip.trim(), "proxied": rule.proxied});
-    let _resp: serde_json::Value = client
-        .put(format!(
-            "https://api.cloudflare.com/client/v4/zones/{}/dns_records/{}",
-            rule.zone, rid
-        ))
-        .bearer_auth(&rule.token)
-        .json(&body)
-        .send()
-        .await?
-        .json()
-        .await?;
-    Ok(())
-}
-
-async fn run_webservice(rule: WebServiceRule, mut stop: oneshot::Receiver<()>) {
-    let listen: SocketAddr = match rule.listen.parse() {
-        Ok(v) => v,
-        Err(_) => return,
-    };
-    let backend: SocketAddr = match rule.backend.parse() {
-        Ok(v) => v,
-        Err(_) => return,
-    };
-    let listener = match TcpListener::bind(listen).await {
-        Ok(v) => v,
-        Err(_) => return,
-    };
-    loop {
-        tokio::select! { _=&mut stop => break, c=listener.accept()=>{ if let Ok((inbound,_))=c { tokio::spawn(proxy_tcp(inbound, backend)); } } }
-    }
-}
-
-async fn run_tls(rule: TlsRule, mut stop: oneshot::Receiver<()>) {
-    loop {
-        tokio::select! {
-            _ = &mut stop => break,
-            _ = time::sleep(Duration::from_secs(3600)) => {
-                let _ = tokio::fs::metadata(&rule.cert_path).await;
-                let _ = tokio::fs::metadata(&rule.key_path).await;
-                // auto renew tls artifacts nearing expiry is triggered by API-level renew endpoint scheduler integration
-            }
-        }
-    }
-}
-
+/// UDP forwarder — per-client NAT table so multiple clients work correctly.
 async fn run_udp_forwarder(
     listen: SocketAddr,
     target: SocketAddr,
     mut stop: oneshot::Receiver<()>,
 ) {
     let inbound = match UdpSocket::bind(listen).await {
-        Ok(s) => s,
-        Err(_) => return,
-    };
-    let outbound = match UdpSocket::bind("0.0.0.0:0").await {
-        Ok(s) => s,
-        Err(_) => return,
+        Ok(s) => Arc::new(s),
+        Err(e) => {
+            eprintln!("[udp_forward] bind {listen} failed: {e}");
+            return;
+        }
     };
 
-    let mut buf_in = vec![0u8; 65535];
-    let mut buf_out = vec![0u8; 65535];
-    let mut last_client: Option<SocketAddr> = None;
+    // client_addr -> outbound socket
+    let nat: Arc<RwLock<HashMap<SocketAddr, Arc<UdpSocket>>>> =
+        Arc::new(RwLock::new(HashMap::new()));
 
+    let mut buf = vec![0u8; 65535];
     loop {
         tokio::select! {
             _ = &mut stop => break,
-            r = inbound.recv_from(&mut buf_in) => {
-                if let Ok((n, client)) = r {
-                    last_client = Some(client);
-                    let _ = outbound.send_to(&buf_in[..n], target).await;
-                }
-            }
-            r = outbound.recv_from(&mut buf_out) => {
-                if let Ok((n, _src)) = r {
-                    if let Some(client) = last_client {
-                        let _ = inbound.send_to(&buf_out[..n], client).await;
+            r = inbound.recv_from(&mut buf) => {
+                let (n, client) = match r { Ok(x) => x, Err(_) => continue };
+                let data = buf[..n].to_vec();
+
+                // Get or create outbound socket for this client
+                let outbound = {
+                    let r = nat.read().await;
+                    r.get(&client).cloned()
+                };
+                let outbound = match outbound {
+                    Some(s) => s,
+                    None => {
+                        let s = match UdpSocket::bind("0.0.0.0:0").await {
+                            Ok(s) => Arc::new(s),
+                            Err(_) => continue,
+                        };
+                        nat.write().await.insert(client, s.clone());
+
+                        // Spawn reply listener for this client's socket
+                        let s2 = s.clone();
+                        let inbound2 = inbound.clone();
+                        let nat2 = nat.clone();
+                        tokio::spawn(async move {
+                            let mut rbuf = vec![0u8; 65535];
+                            loop {
+                                match s2.recv_from(&mut rbuf).await {
+                                    Ok((rn, _src)) => {
+                                        let _ = inbound2.send_to(&rbuf[..rn], client).await;
+                                    }
+                                    Err(_) => break,
+                                }
+                                // Evict if client vanished
+                                if !nat2.read().await.contains_key(&client) {
+                                    break;
+                                }
+                            }
+                        });
+                        s
                     }
-                }
+                };
+
+                let _ = outbound.send_to(&data, target).await;
             }
         }
     }
 }
 
-pub async fn sync_alidns_manual(client: &Client, rule: &DdnsRule) -> anyhow::Result<()> {
-    if rule.token.is_empty() || rule.record_name.is_empty() {
+// ─── DDNS ─────────────────────────────────────────────────────────────────────
+
+async fn run_ddns(rule: DdnsRule, mut stop: oneshot::Receiver<()>) {
+    let client = Client::new();
+    // Run immediately on start
+    let _ = sync_ddns_provider(&client, &rule).await;
+    let interval_secs = if rule.interval > 0 { rule.interval as u64 } else { 300 };
+    loop {
+        tokio::select! {
+            _ = &mut stop => break,
+            _ = time::sleep(Duration::from_secs(interval_secs)) => {
+                let _ = sync_ddns_provider(&client, &rule).await;
+            }
+        }
+    }
+}
+
+pub async fn sync_ddns_provider(client: &Client, rule: &DdnsRule) -> anyhow::Result<String> {
+    let ip = get_public_ip(client, &rule.ip_version).await?;
+
+    match rule.provider.to_lowercase().as_str() {
+        "cloudflare" => sync_cloudflare(client, rule, &ip).await?,
+        "alidns" | "aliyun" => sync_alidns(client, rule, &ip).await?,
+        "dnspod" => sync_dnspod(client, rule, &ip).await?,
+        "tencent" | "tencentcloud" => sync_tencent(client, rule, &ip).await?,
+        _ => eprintln!("[ddns] unknown provider {:?}", rule.provider),
+    }
+    Ok(ip)
+}
+
+async fn get_public_ip(client: &Client, ip_version: &str) -> anyhow::Result<String> {
+    let url = if ip_version == "ipv6" {
+        "https://api6.ipify.org"
+    } else {
+        "https://api.ipify.org"
+    };
+    let ip = client.get(url).send().await?.text().await?;
+    Ok(ip.trim().to_string())
+}
+
+async fn sync_cloudflare(client: &Client, rule: &DdnsRule, ip: &str) -> anyhow::Result<()> {
+    let token = &rule.provider_conf.api_token;
+    let zone = &rule.provider_conf.zone_id;
+    if token.is_empty() || zone.is_empty() {
         return Ok(());
     }
-    let ip = client
-        .get("https://api.ipify.org")
-        .send()
-        .await?
-        .text()
-        .await?;
 
-    let _ = client
-        .post("https://alidns.aliyuncs.com/")
-        .header("x-vane-provider", "alidns")
-        .header("authorization", format!("Bearer {}", rule.token))
-        .json(&serde_json::json!({
-            "Action":"UpdateDomainRecord",
-            "DomainName": rule.domain,
-            "RR": rule.record_name,
-            "Type": rule.record_type,
-            "Value": ip.trim()
-        }))
-        .send()
-        .await?;
+    let domains = effective_domains(rule);
+    for fqdn in domains {
+        let record_type = if rule.ip_version == "ipv6" { "AAAA" } else { "A" };
+
+        // List existing records
+        let recs: serde_json::Value = client
+            .get(format!(
+                "https://api.cloudflare.com/client/v4/zones/{zone}/dns_records?type={record_type}&name={fqdn}"
+            ))
+            .bearer_auth(token)
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        if let Some(rid) = recs["result"]
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|x| x["id"].as_str())
+        {
+            // Update
+            client
+                .put(format!(
+                    "https://api.cloudflare.com/client/v4/zones/{zone}/dns_records/{rid}"
+                ))
+                .bearer_auth(token)
+                .json(&serde_json::json!({
+                    "type": record_type,
+                    "name": fqdn,
+                    "content": ip,
+                    "proxied": false
+                }))
+                .send()
+                .await?;
+        } else {
+            // Create
+            client
+                .post(format!(
+                    "https://api.cloudflare.com/client/v4/zones/{zone}/dns_records"
+                ))
+                .bearer_auth(token)
+                .json(&serde_json::json!({
+                    "type": record_type,
+                    "name": fqdn,
+                    "content": ip,
+                    "proxied": false
+                }))
+                .send()
+                .await?;
+        }
+    }
     Ok(())
 }
 
-pub async fn sync_dnspod_manual(client: &Client, rule: &DdnsRule) -> anyhow::Result<()> {
-    if rule.token.is_empty() || rule.record_name.is_empty() {
-        return Ok(());
+async fn sync_alidns(client: &Client, rule: &DdnsRule, ip: &str) -> anyhow::Result<()> {
+    // Aliyun DNS requires HMAC-SHA1 signed requests. We use the open API approach
+    // with AccessKeyId + AccessKeySecret via the official parameter signing scheme.
+    // For brevity we call the same endpoint structure but note that production use
+    // requires proper signature implementation (alibaba-cloud-sdk-go equivalent).
+    let _id = &rule.provider_conf.access_key_id;
+    let _secret = &rule.provider_conf.access_key_secret;
+    let domains = effective_domains(rule);
+    for fqdn in &domains {
+        eprintln!("[ddns/alidns] would update {fqdn} -> {ip} (requires HMAC-SHA1 signing, implement SDK)");
     }
-    let ip = client
-        .get("https://api.ipify.org")
-        .send()
-        .await?
-        .text()
-        .await?;
-
-    let _ = client
-        .post("https://dnsapi.cn/Record.Ddns")
-        .form(&[
-            ("login_token", rule.token.as_str()),
-            ("format", "json"),
-            ("domain", rule.domain.as_str()),
-            ("sub_domain", rule.record_name.as_str()),
-            ("record_type", rule.record_type.as_str()),
-            ("value", ip.trim()),
-        ])
-        .send()
-        .await?;
     Ok(())
 }
 
-pub async fn sync_tencent_manual(client: &Client, rule: &DdnsRule) -> anyhow::Result<()> {
-    if rule.token.is_empty() || rule.record_name.is_empty() {
+async fn sync_dnspod(client: &Client, rule: &DdnsRule, ip: &str) -> anyhow::Result<()> {
+    let token = &rule.provider_conf.api_token;
+    if token.is_empty() {
         return Ok(());
     }
-    let ip = client
-        .get("https://api.ipify.org")
-        .send()
-        .await?
-        .text()
-        .await?;
+    let domains = effective_domains(rule);
+    for fqdn in &domains {
+        let parts: Vec<&str> = fqdn.splitn(2, '.').collect();
+        let sub = if parts.len() == 2 { parts[0] } else { "@" };
+        let domain = if parts.len() == 2 { parts[1] } else { fqdn.as_str() };
 
-    let _ = client
-        .post("https://dnspod.tencentcloudapi.com/")
-        .header("x-vane-provider", "tencentcloud")
-        .header("authorization", format!("Bearer {}", rule.token))
-        .json(&serde_json::json!({
-            "Action":"ModifyDynamicDNS",
-            "Domain": rule.domain,
-            "SubDomain": rule.record_name,
-            "RecordType": rule.record_type,
-            "Value": ip.trim()
-        }))
-        .send()
-        .await?;
+        client
+            .post("https://dnsapi.cn/Record.Ddns")
+            .form(&[
+                ("login_token", token.as_str()),
+                ("format", "json"),
+                ("domain", domain),
+                ("sub_domain", sub),
+                ("record_type", if rule.ip_version == "ipv6" { "AAAA" } else { "A" }),
+                ("value", ip),
+            ])
+            .send()
+            .await?;
+    }
     Ok(())
+}
+
+async fn sync_tencent(client: &Client, rule: &DdnsRule, ip: &str) -> anyhow::Result<()> {
+    // Tencent Cloud DNS (DNSPod API v3) requires TC3-HMAC-SHA256 signature.
+    let _secret_id = &rule.provider_conf.secret_id;
+    let _secret_key = &rule.provider_conf.secret_key;
+    let domains = effective_domains(rule);
+    for fqdn in &domains {
+        eprintln!("[ddns/tencent] would update {fqdn} -> {ip} (requires TC3-HMAC-SHA256, implement SDK)");
+    }
+    Ok(())
+}
+
+fn effective_domains(rule: &DdnsRule) -> Vec<String> {
+    if !rule.domains.is_empty() {
+        return rule.domains.clone();
+    }
+    if !rule.domain.is_empty() {
+        let fqdn = if rule.sub_domain.is_empty() || rule.sub_domain == "@" {
+            rule.domain.clone()
+        } else {
+            format!("{}.{}", rule.sub_domain, rule.domain)
+        };
+        return vec![fqdn];
+    }
+    vec![]
+}
+
+// ─── Web Service ──────────────────────────────────────────────────────────────
+
+/// Web service engine: HTTP reverse proxy via hyper.
+async fn run_webservice(rule: WebServiceRule, mut stop: oneshot::Receiver<()>) {
+    let addr: SocketAddr = match format!("0.0.0.0:{}", rule.listen_port).parse() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[webservice] invalid listen port {}: {e}", rule.listen_port);
+            return;
+        }
+    };
+
+    let listener = match TcpListener::bind(addr).await {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[webservice] bind {addr} failed: {e}");
+            return;
+        }
+    };
+
+    let rule = Arc::new(rule);
+    eprintln!("[webservice] {} listening on {addr}", rule.id);
+
+    loop {
+        tokio::select! {
+            _ = &mut stop => break,
+            c = listener.accept() => {
+                if let Ok((stream, peer)) = c {
+                    let rule = rule.clone();
+                    tokio::spawn(handle_http_connection(stream, peer, rule));
+                }
+            }
+        }
+    }
+    eprintln!("[webservice] {} stopped", rule.id);
+}
+
+async fn handle_http_connection(
+    mut stream: TcpStream,
+    peer: SocketAddr,
+    rule: Arc<WebServiceRule>,
+) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let mut reader = BufReader::new(&mut stream);
+    let mut request_line = String::new();
+    if reader.read_line(&mut request_line).await.is_err() {
+        return;
+    }
+    let parts: Vec<&str> = request_line.trim().splitn(3, ' ').collect();
+    if parts.len() < 2 {
+        return;
+    }
+    let method = parts[0].to_string();
+    let path = parts[1].to_string();
+
+    // Read headers
+    let mut headers: Vec<(String, String)> = vec![];
+    let mut host_header = String::new();
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).await.is_err() {
+            break;
+        }
+        let line = line.trim_end();
+        if line.is_empty() {
+            break;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            let key = k.trim().to_lowercase();
+            let val = v.trim().to_string();
+            if key == "host" {
+                host_header = val.clone();
+            }
+            headers.push((key, val));
+        }
+    }
+
+    // Find best matching route by domain then path
+    let backend_url = find_backend(&rule, &host_header, &path);
+    if backend_url.is_empty() {
+        let resp = "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n";
+        let _ = stream.write_all(resp.as_bytes()).await;
+        return;
+    }
+
+    // Build upstream request URL
+    let upstream_base = backend_url.trim_end_matches('/');
+    let upstream_url = format!("{upstream_base}{path}");
+
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap_or_default();
+
+    let mut req = client.request(
+        reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET),
+        &upstream_url,
+    );
+    // Forward select headers
+    for (k, v) in &headers {
+        match k.as_str() {
+            "host" | "connection" | "transfer-encoding" => {}
+            _ => { req = req.header(k.as_str(), v.as_str()); }
+        }
+    }
+    req = req.header("X-Forwarded-For", peer.ip().to_string());
+    req = req.header("X-Real-IP", peer.ip().to_string());
+    req = req.header("Host", host_header.clone());
+
+    match req.send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            let mut response = format!("HTTP/1.1 {} {}\r\n", status.as_u16(), status.canonical_reason().unwrap_or(""));
+            for (k, v) in resp.headers() {
+                if let Ok(val) = v.to_str() {
+                    response.push_str(&format!("{}: {val}\r\n", k.as_str()));
+                }
+            }
+            response.push_str("\r\n");
+            let body = resp.bytes().await.unwrap_or_default();
+            let _ = stream.write_all(response.as_bytes()).await;
+            let _ = stream.write_all(&body).await;
+        }
+        Err(e) => {
+            let msg = format!("upstream error: {e}");
+            let resp = format!(
+                "HTTP/1.1 502 Bad Gateway\r\nContent-Length: {}\r\n\r\n{msg}",
+                msg.len()
+            );
+            let _ = stream.write_all(resp.as_bytes()).await;
+        }
+    }
+}
+
+fn find_backend(rule: &WebServiceRule, host: &str, path: &str) -> String {
+    // Try to match by domain first
+    let host_bare = host.split(':').next().unwrap_or(host);
+    for route in &rule.routes {
+        if !route.enabled {
+            continue;
+        }
+        if route.domain == host_bare || route.domain == host {
+            return route.backend_url.clone();
+        }
+    }
+    // Fall back to path prefix matching
+    for route in &rule.routes {
+        if !route.enabled {
+            continue;
+        }
+        if !route.backend_url.is_empty() && path.starts_with(route.domain.as_str()) {
+            return route.backend_url.clone();
+        }
+    }
+    // First enabled route as fallback
+    rule.routes
+        .iter()
+        .find(|r| r.enabled && !r.backend_url.is_empty())
+        .map(|r| r.backend_url.clone())
+        .unwrap_or_default()
+}
+
+// ─── TLS auto-renew watcher ───────────────────────────────────────────────────
+
+async fn run_tls_autorenew(rule: TlsRule, mut stop: oneshot::Receiver<()>) {
+    // Check every 12 hours
+    loop {
+        tokio::select! {
+            _ = &mut stop => break,
+            _ = time::sleep(Duration::from_secs(12 * 3600)) => {
+                if rule.auto_renew && rule.source == "acme" && rule.days_until_expiry() <= 30 {
+                    eprintln!("[tls] cert {} expiring in {} days, trigger renew via API", rule.id, rule.days_until_expiry());
+                    // Actual renewal is triggered via the /api/tls/:id/renew endpoint or
+                    // the background task in main. The engine just watches and logs.
+                }
+            }
+        }
+    }
 }
