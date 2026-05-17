@@ -20,9 +20,9 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub struct AppState {
     pub config: Arc<RwLock<Config>>,
     pub data: Arc<RwLock<RuntimeData>>,
-    pub sessions: Arc<RwLock<HashMap<String, String>>>,
-    pub session_expiry: Arc<RwLock<HashMap<String, i64>>>,
-    pub login_attempts: Arc<RwLock<HashMap<String, (u32, Instant)>>>,
+    pub sessions: Arc<RwLock<HashMap<String, String>>>,      // token -> username
+    pub session_expiry: Arc<RwLock<HashMap<String, i64>>>,   // token -> unix timestamp
+    pub login_attempts: Arc<RwLock<HashMap<String, (u32, Instant)>>>, // ip -> (count, window_start)
     pub engines: RuntimeEngines,
     pub root: PathBuf,
 }
@@ -79,15 +79,16 @@ impl AppState {
         Ok(())
     }
 
+    /// Apply all enabled engine rules (reconcile running tasks vs config).
     pub async fn apply_engines(&self) {
         let d = self.data.read().await.clone();
         self.engines.apply_portforwards(&d.portforward).await;
-        self.engines.apply_ddns(&d.ddns).await;
+        self.engines.apply_ddns(&d.ddns, self.data.clone()).await;
         self.engines.apply_webservice(&d.webservice).await;
-        self.engines.apply_tls(&d.tls).await;
+        self.engines.apply_tls(&d.tls, self.data.clone(), self.config.read().await.clone()).await;
     }
 
-    /// Expire old sessions and clean up stale login attempt windows.
+    /// Expire old sessions and clean up stale login-attempt windows.
     pub async fn cleanup_security_state(&self) {
         let now = chrono::Utc::now().timestamp();
         let mut exp = self.session_expiry.write().await;
@@ -102,11 +103,12 @@ impl AppState {
             sess.remove(&t);
         }
 
+        // Clean login attempts older than 30 minutes
         let mut la = self.login_attempts.write().await;
         la.retain(|_, (_, ts)| ts.elapsed() < Duration::from_secs(1800));
     }
 
-    /// Extend session expiry (sliding window, 24h).
+    /// Extend session expiry (sliding 24h window).
     pub async fn touch_session(&self, token: &str) {
         let new_exp = chrono::Utc::now().timestamp() + 86400;
         self.session_expiry
@@ -115,10 +117,12 @@ impl AppState {
             .insert(token.to_string(), new_exp);
     }
 
-    /// Clear all active sessions (used after port/safe_entry change).
+    /// Clear all active sessions (called after port/safe_entry change).
     pub async fn clear_all_sessions(&self) {
         self.sessions.write().await.clear();
         self.session_expiry.write().await.clear();
+        // Also clear sessions_meta so the UI sessions list is in sync
+        self.data.write().await.sessions_meta.clear();
     }
 }
 
