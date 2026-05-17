@@ -29,22 +29,37 @@ pub struct SettingsView {
 
 // ─── Port Forward ─────────────────────────────────────────────────────────────
 
+/// listen / target can be "0.0.0.0:8080" or just a port number.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PortForwardRule {
     #[serde(default)]
     pub id: String,
     #[serde(default)]
     pub name: String,
+    /// "tcp" | "udp"
     #[serde(default)]
     pub protocol: String,
+    /// Either "addr:port" or just "port"
     #[serde(default)]
     pub listen: String,
+    /// Destination "addr:port"
     #[serde(default)]
     pub target: String,
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
     pub created_at: String,
+}
+
+impl PortForwardRule {
+    /// Parse the listen port number from the listen field.
+    pub fn listen_port(&self) -> u16 {
+        self.listen
+            .rsplit(':')
+            .next()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(0)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -71,6 +86,7 @@ pub struct ProviderConf {
     pub secret_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub secret_key: String,
+    /// ZeroSSL EAB key ID
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub zerossl_api_key: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -91,20 +107,27 @@ pub struct DdnsRule {
     pub name: String,
     #[serde(default)]
     pub provider: String,
+    /// Multi-domain list (preferred over domain+sub_domain when non-empty)
     #[serde(default)]
     pub domains: Vec<String>,
+    /// Single domain root (e.g. "example.com")
     #[serde(default)]
     pub domain: String,
+    /// Sub-domain prefix (e.g. "home")
     #[serde(default)]
     pub sub_domain: String,
+    /// "ipv4" | "ipv6"
     #[serde(default)]
     pub ip_version: String,
+    /// "api" | "interface"
     #[serde(default)]
     pub ip_detect_mode: String,
     #[serde(default)]
     pub ip_interface: String,
+    /// Index into interface IP list when using interface mode
     #[serde(default)]
     pub ip_index: i32,
+    /// Sync interval in seconds (0 => 300)
     #[serde(default)]
     pub interval: i32,
     #[serde(default)]
@@ -153,8 +176,10 @@ pub struct WebRoute {
     pub id: String,
     #[serde(default)]
     pub name: String,
+    /// SNI / Host header to match
     #[serde(default)]
     pub domain: String,
+    /// Upstream URL
     #[serde(default)]
     pub backend_url: String,
     #[serde(default)]
@@ -167,7 +192,8 @@ pub struct WebRoute {
     pub auth_enabled: bool,
     #[serde(default)]
     pub auth_user: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    /// bcrypt hash — never exposed in list responses (replaced with "set")
+    #[serde(default)]
     pub auth_pass_hash: String,
     #[serde(default)]
     pub created_at: String,
@@ -209,14 +235,18 @@ pub struct TlsRule {
     pub domains: Vec<String>,
     #[serde(default)]
     pub domain: String,
+    /// "acme" | "manual"
     #[serde(default)]
     pub source: String,
+    /// "letsencrypt" | "zerossl" | "buypass"
     #[serde(default)]
     pub ca_provider: String,
+    /// DNS provider for DNS-01 challenge
     #[serde(default)]
     pub provider: String,
     #[serde(default)]
     pub provider_conf: ProviderConf,
+    /// Full chain PEM (never sent in list views, only in /pem and /download)
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub cert_pem: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -229,6 +259,7 @@ pub struct TlsRule {
     pub auto_renew: bool,
     #[serde(default)]
     pub email: String,
+    /// "pending" | "active" | "error"
     #[serde(default)]
     pub status: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -245,13 +276,12 @@ impl TlsRule {
             return -1;
         }
         chrono::DateTime::parse_from_rfc3339(&self.expires_at)
-            .map(|t| {
-                t.signed_duration_since(chrono::Utc::now()).num_days()
-            })
+            .map(|t| t.signed_duration_since(chrono::Utc::now()).num_days())
             .unwrap_or(-1)
     }
 }
 
+/// Safe view of a TLS cert — never includes cert_pem / key_pem.
 #[derive(Debug, Clone, Serialize)]
 pub struct TlsCertView {
     pub id: String,
@@ -271,6 +301,7 @@ pub struct TlsCertView {
     pub error_msg: String,
     pub days_left: i64,
     pub created_at: String,
+    /// True when a cert PEM is stored (signals frontend that download is possible)
     pub has_cert: bool,
     pub enabled: bool,
 }
@@ -312,8 +343,10 @@ pub struct IpFilterAttachment {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IpFilterScope {
+    /// "admin" | "portforward" | "webservice"
     #[serde(rename = "type", default)]
     pub scope_type: String,
+    /// Empty string = global (all instances of this type)
     #[serde(default)]
     pub target_id: String,
     #[serde(default)]
@@ -326,6 +359,7 @@ pub struct IpFilterRule {
     pub id: String,
     #[serde(default)]
     pub enabled: bool,
+    /// "whitelist" | "blacklist"
     #[serde(default)]
     pub mode: String,
     #[serde(default)]
