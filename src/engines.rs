@@ -16,7 +16,7 @@ use tokio::{
 };
 
 use crate::models::{
-    AdminConfig, Config, DdnsRule, IpRecord, PortForwardRule, TlsRule, WebRoute, WebServiceRule,
+    Config, DdnsRule, IpRecord, PortForwardRule, TlsRule, WebRoute, WebServiceRule,
 };
 use crate::state::now_rfc3339;
 
@@ -439,7 +439,7 @@ async fn sync_alidns(client: &Client, rule: &DdnsRule, ip: &str) -> anyhow::Resu
     Ok(())
 }
 
-fn build_aliyun_params<'a>(key_id: &'a str, action: &'a str, extra: &[(&'a str, &'a str)]) -> Vec<(String, String)> {
+pub fn build_aliyun_params<'a>(key_id: &'a str, action: &'a str, extra: &[(&'a str, &'a str)]) -> Vec<(String, String)> {
     let nonce = {
         use rand_core::RngCore;
         let mut buf = [0u8; 8];
@@ -461,7 +461,8 @@ fn build_aliyun_params<'a>(key_id: &'a str, action: &'a str, extra: &[(&'a str, 
     params
 }
 
-fn sign_aliyun_params(params: &[(String, String)], secret: &str) -> Vec<(String, String)> {
+pub fn sign_aliyun_params(params: &[(String, String)], secret: &str) -> Vec<(String, String)> {
+    use base64::Engine;
     use hmac::{Hmac, Mac};
     use sha1::Sha1;
 
@@ -586,7 +587,7 @@ pub fn cert_domain_matches(cert_domain: &str, req_domain: &str) -> bool {
 /// Build a rustls ServerConfig from matched TLS rules for the given set of routes.
 pub fn build_tls_config(routes: &[WebRoute], tls_rules: &[TlsRule]) -> Option<Arc<rustls::ServerConfig>> {
     use rustls::ServerConfig;
-    use rustls_pemfile::{certs, pkcs8_private_keys, rsa_private_keys};
+    use rustls_pemfile::{certs, pkcs8_private_keys, rsa_private_keys, read_one, Item};
     use std::io::BufReader;
 
     let mut cert_resolver = rustls::server::ResolvesServerCertUsingSni::new();
@@ -610,30 +611,28 @@ pub fn build_tls_config(routes: &[WebRoute], tls_rules: &[TlsRule]) -> Option<Ar
         };
 
         let private_key: rustls::pki_types::PrivateKeyDer = {
+            // rustls-pemfile 2.x: read_one returns items, or use private_key helper
             let mut reader = BufReader::new(tls_cert.key_pem.as_bytes());
-            // Try PKCS8 first, then RSA
-            let mut key_bytes = pkcs8_private_keys(&mut reader)
-                .ok()
-                .and_then(|ks| ks.into_iter().next())
-                .map(|k| rustls::pki_types::PrivateKeyDer::Pkcs8(rustls::pki_types::PrivatePkcs8KeyDer::from(k.secret_pkcs8_der().to_vec())));
-
-            if key_bytes.is_none() {
-                let mut reader2 = BufReader::new(tls_cert.key_pem.as_bytes());
-                key_bytes = rsa_private_keys(&mut reader2)
-                    .ok()
-                    .and_then(|ks| ks.into_iter().next())
-                    .map(|k| rustls::pki_types::PrivateKeyDer::Pkcs1(rustls::pki_types::PrivatePkcs1KeyDer::from(k.secret_pkcs1_der().to_vec())));
+            let mut found: Option<rustls::pki_types::PrivateKeyDer> = None;
+            while let Ok(Some(item)) = read_one(&mut reader) {
+                match item {
+                    Item::Pkcs8Key(k) => { found = Some(rustls::pki_types::PrivateKeyDer::Pkcs8(k)); break; }
+                    Item::Pkcs1Key(k) => { found = Some(rustls::pki_types::PrivateKeyDer::Pkcs1(k)); break; }
+                    Item::Sec1Key(k) => { found = Some(rustls::pki_types::PrivateKeyDer::Sec1(k)); break; }
+                    _ => {}
+                }
             }
-
-            match key_bytes {
+            match found {
                 Some(k) => k,
                 None => continue,
             }
         };
 
-        let certified_key = match rustls::sign::CertifiedKey::new(cert_chain, rustls::crypto::ring::sign::any_supported_type(&private_key).ok()?) {
-            ck => Arc::new(ck),
+        let signing_key = match rustls::crypto::ring::sign::any_supported_type(&private_key) {
+            Ok(k) => k,
+            Err(_) => continue,
         };
+        let certified_key = Arc::new(rustls::sign::CertifiedKey::new(cert_chain, signing_key));
 
         let domain = route.domain.to_lowercase();
         // Register exact domain
@@ -761,7 +760,6 @@ pub fn find_route_for_request<'a>(
 }
 
 async fn run_webservice(rule: WebServiceRule, mut stop: oneshot::Receiver<()>, tls_rules: Vec<TlsRule>) {
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
     use tokio_rustls::TlsAcceptor;
 
     let addr: SocketAddr = match format!("0.0.0.0:{}", rule.listen_port).parse() {
