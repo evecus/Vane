@@ -25,3 +25,11 @@ pub fn verify_password(p: &str, h: &str) -> bool {
         .and_then(|ph| Pbkdf2.verify_password(p.as_bytes(), &ph).ok())
         .is_some()
 }
+
+/// Generate a cryptographically random token (32 bytes hex).
+pub fn generate_token() -> String {
+    use rand_core::RngCore;
+    let mut buf = [0u8; 32];
+    OsRng.fill_bytes(&mut buf);
+    hex::encode(buf)
+}
