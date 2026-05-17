@@ -15,7 +15,7 @@ chrono = { version = "0.4", features = ["serde"] }
 password-hash = "0.5"
 pbkdf2 = { version = "0.12", features = ["simple"] }
 rand_core = { version = "0.6", features = ["std"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "form", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart", "stream"] }
 ipnet = "2"
 instant-acme = "0.7"
 rcgen = "0.13"
