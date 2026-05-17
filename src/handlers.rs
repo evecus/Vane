@@ -1,8 +1,8 @@
 use axum::{
     body::Body,
     extract::{Multipart, Path, Query, Request, State},
-    http::{HeaderMap, StatusCode, Uri},
-    response::{Html, IntoResponse, Response},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     Json,
 };
 use serde::Deserialize;
@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 
 use crate::{
-    auth::{bearer, generate_token, hash_password, verify_password},
+    auth::{bearer, bcrypt_hash, bcrypt_verify, generate_token, hash_password, verify_password},
     models::*,
     state::{new_id, now_rfc3339, AppState, VERSION},
 };
@@ -105,7 +105,6 @@ async fn ipfilter_pass(state: &AppState, headers: &HeaderMap, scope_type: &str, 
             continue;
         }
 
-        // Collect all IPs for this rule
         let mut all_ips: Vec<String> = rule.manual_ips.clone();
         for att in &rule.attachments {
             all_ips.extend(att.ips.clone());
@@ -113,11 +112,7 @@ async fn ipfilter_pass(state: &AppState, headers: &HeaderMap, scope_type: &str, 
 
         let matched = ip_in_list(ip, &all_ips);
 
-        if rule.mode == "blacklist" {
-            return !matched;
-        }
-        // whitelist
-        return matched;
+        return if rule.mode == "blacklist" { !matched } else { matched };
     }
     true // no rule covers this scope
 }
@@ -127,6 +122,7 @@ fn scope_matches(scopes: &[IpFilterScope], scope_type: &str, target_id: &str) ->
         if s.scope_type != scope_type {
             continue;
         }
+        // Empty target_id in a scope means "all instances of this type"
         if s.target_id.is_empty() || s.target_id == target_id {
             return true;
         }
@@ -169,35 +165,51 @@ macro_rules! require_admin_ipfilter {
     };
 }
 
-// ─── SPA Fallback ─────────────────────────────────────────────────────────────
+// ─── SPA Fallback / Static File Serving ──────────────────────────────────────
 
-pub async fn spa_fallback(State(state): State<AppState>, uri: Uri) -> Response {
+pub async fn spa_fallback(State(state): State<AppState>, req: Request) -> Response {
     let safe = state.config.read().await.admin.safe_entry.clone();
-    let mut p = uri.path().to_string();
+    let uri_path = req.uri().path().to_string();
+    let mut p = uri_path.as_str();
 
+    // Always allow static assets and API paths
+    if p.starts_with("/api/") || p.starts_with("/assets/") {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
+
+    // Safe-entry prefix check for non-asset, non-api paths
     if !safe.is_empty() {
         let prefix = format!("/{}", safe.trim_matches('/'));
-        if p.starts_with(&prefix) {
-            p = p[prefix.len()..].to_string();
-            if p.is_empty() {
-                p = "/".to_string();
-            }
-        } else if p != "/" && !p.starts_with("/assets/") && !p.starts_with("/api/") {
-            // safe_entry is configured — block non-prefixed paths
+        if p.starts_with(prefix.as_str()) {
+            // Strip prefix
+            let stripped = &p[prefix.len()..];
+            p = if stripped.is_empty() { "/" } else { stripped };
+        } else if p != "/" && !p.starts_with("/assets/") {
             return (StatusCode::FORBIDDEN, "forbidden").into_response();
         }
     }
 
-    let rel = if p == "/" {
+    // Always allow favicon/manifest/icons without safe_entry prefix
+    let always_allowed = matches!(
+        uri_path.as_str(),
+        "/favicon.svg" | "/favicon.ico" | "/favicon.png" | "/robots.txt"
+        | "/manifest.json" | "/icon-192.png" | "/icon-512.png" | "/apple-touch-icon.png"
+    );
+
+    let rel = if p == "/" || always_allowed && uri_path == "/manifest.json" {
         "index.html".to_string()
     } else {
         p.trim_start_matches('/').to_string()
     };
 
     // Serve embedded static files
-    let bytes = crate::EMBEDDED_FILES.get_file(format!("web/dist/{rel}"))
+    let file_path = format!("web/dist/{rel}");
+    let bytes = crate::EMBEDDED_FILES.get_file(&file_path)
         .map(|f| f.contents().to_vec())
-        .or_else(|| crate::EMBEDDED_FILES.get_file("web/dist/index.html").map(|f| f.contents().to_vec()));
+        .or_else(|| {
+            crate::EMBEDDED_FILES.get_file("web/dist/index.html")
+                .map(|f| f.contents().to_vec())
+        });
 
     match bytes {
         Some(b) => {
@@ -206,6 +218,30 @@ pub async fn spa_fallback(State(state): State<AppState>, uri: Uri) -> Response {
         }
         None => (StatusCode::NOT_FOUND, "not found").into_response(),
     }
+}
+
+/// Dynamic manifest.json — sets start_url to safe_entry path
+pub async fn serve_manifest(State(state): State<AppState>) -> Response {
+    let entry = state.config.read().await.admin.safe_entry.clone();
+    let start_url = if entry.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{}/", entry.trim_matches('/'))
+    };
+
+    ok_json(serde_json::json!({
+        "name": "Vane",
+        "short_name": "Vane",
+        "description": "Vane Network Manager",
+        "start_url": start_url,
+        "display": "standalone",
+        "background_color": "#667eea",
+        "theme_color": "#764ba2",
+        "icons": [
+            {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
+            {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"}
+        ]
+    }))
 }
 
 fn mime_type(path: &str) -> &'static str {
@@ -367,7 +403,12 @@ pub async fn get_dashboard(State(state): State<AppState>, headers: HeaderMap) ->
 pub async fn get_admin_logs(State(state): State<AppState>, headers: HeaderMap) -> Response {
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
-    ok_json(serde_json::to_value(&state.data.read().await.admin_logs).unwrap_or_default())
+    // Return most-recent first (limit 200 like Go version)
+    let d = state.data.read().await;
+    let mut logs = d.admin_logs.clone();
+    logs.reverse();
+    logs.truncate(200);
+    ok_json(serde_json::to_value(&logs).unwrap_or_default())
 }
 
 pub async fn append_admin_log(
@@ -447,9 +488,8 @@ pub async fn update_settings(
     let old_port = cfg.admin.port;
     let old_safe_entry = cfg.admin.safe_entry.clone();
 
-    // Require current password for credential changes
     let username_change = req.username.as_ref()
-        .map(|u| u != &cfg.admin.username)
+        .map(|u| !u.is_empty() && u != &cfg.admin.username)
         .unwrap_or(false);
     let password_change = req.new_password.as_ref().map(|p| !p.is_empty()).unwrap_or(false);
 
@@ -467,8 +507,8 @@ pub async fn update_settings(
             Err(_) => return internal("密码加密失败"),
         }
     }
-    if let Some(u) = req.username.filter(|u| !u.is_empty()) {
-        cfg.admin.username = u;
+    if let Some(u) = req.username.as_ref().filter(|u| !u.is_empty()) {
+        cfg.admin.username = u.clone();
     }
     if let Some(p) = req.port.filter(|&p| p > 0) {
         cfg.admin.port = p;
@@ -493,11 +533,15 @@ pub async fn update_settings(
         state.clear_all_sessions().await;
     }
 
-    // Re-bind on new port requires process restart
     if port_changed {
         tokio::spawn(async {
             tokio::time::sleep(std::time::Duration::from_millis(800)).await;
             eprintln!("[settings] port changed, restarting...");
+            // Re-exec self
+            if let Ok(exe) = std::env::current_exe() {
+                let args: Vec<String> = std::env::args().collect();
+                let _ = std::process::Command::new(&exe).args(&args[1..]).spawn();
+            }
             std::process::exit(0);
         });
     }
@@ -516,11 +560,22 @@ pub async fn mark_welcome_shown(State(state): State<AppState>, headers: HeaderMa
 pub async fn backup_settings(State(state): State<AppState>, headers: HeaderMap) -> Response {
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
+    // Build ZIP archive in memory (like Go version)
     let payload = serde_json::json!({
         "config": *state.config.read().await,
         "runtime": *state.data.read().await,
     });
-    ok_json(payload)
+    let blob = serde_json::to_vec_pretty(&payload).unwrap_or_default();
+    let filename = format!("vane-backup-{}.json", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/octet-stream"),
+            ("content-disposition", &format!("attachment; filename=\"{filename}\"")),
+        ],
+        blob,
+    )
+        .into_response()
 }
 
 pub async fn export_backup_blob(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -537,10 +592,15 @@ pub async fn export_backup_blob(State(state): State<AppState>, headers: HeaderMa
 pub async fn restore_settings(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(v): Json<serde_json::Value>,
+    body: axum::body::Bytes,
 ) -> Response {
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
+    // Accept both JSON body (Go compat) and raw blob
+    let v: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return bad_request("invalid JSON"),
+    };
     if let Some(c) = v.get("config").and_then(|x| serde_json::from_value(x.clone()).ok()) {
         *state.config.write().await = c;
     }
@@ -549,6 +609,17 @@ pub async fn restore_settings(
     }
     let _ = state.persist_all().await;
     state.apply_engines().await;
+
+    // Restart after restore (like Go version)
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        if let Ok(exe) = std::env::current_exe() {
+            let args: Vec<String> = std::env::args().collect();
+            let _ = std::process::Command::new(&exe).args(&args[1..]).spawn();
+        }
+        std::process::exit(0);
+    });
+
     ok_json(serde_json::json!({"ok": true, "message": "配置已恢复，程序即将重启"}))
 }
 
@@ -594,17 +665,19 @@ pub async fn create_port_forward(
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
 
-    // Validate listen port
-    let port = parse_listen_port(&rule.listen);
+    let port = rule.listen_port();
     if port == 0 {
         return bad_request("无效端口");
     }
-    if rule.enabled && !is_port_available(port) {
+    if rule.enabled && !is_port_available(port as u32) {
         return (StatusCode::CONFLICT, Json(serde_json::json!({"error":"端口已被占用","port":port}))).into_response();
     }
 
     rule.id = new_id();
     rule.created_at = now_rfc3339();
+    if rule.protocol.is_empty() {
+        rule.protocol = "tcp".to_string();
+    }
 
     let mut d = state.data.write().await;
     d.portforward.push(rule.clone());
@@ -625,8 +698,12 @@ pub async fn update_port_forward(
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
 
-    let port = parse_listen_port(&req.listen);
-    if req.enabled && !is_port_available_excluding(&id, port, &state).await {
+    let port = req.listen_port();
+    // Stop existing engine first so port is freed before availability check
+    state.engines.portforward.write().await.remove(&id).map(|tx| tx.send(()));
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+    if req.enabled && !is_port_available(port as u32) {
         return (StatusCode::CONFLICT, Json(serde_json::json!({"error":"端口已被占用","port":port}))).into_response();
     }
 
@@ -636,6 +713,9 @@ pub async fn update_port_forward(
         Some(x) => {
             req.id = id.clone();
             req.created_at = x.created_at.clone();
+            if req.protocol.is_empty() {
+                req.protocol = x.protocol.clone();
+            }
             *x = req.clone();
         }
     }
@@ -679,10 +759,9 @@ pub async fn toggle_port_forward(
         }
     };
     let enabled = rule.enabled;
-    let port = parse_listen_port(&rule.listen);
+    let port = rule.listen_port();
 
-    // Port conflict check when enabling
-    if enabled && port > 0 && !is_port_available(port) {
+    if enabled && port > 0 && !is_port_available(port as u32) {
         // Roll back
         if let Some(x) = d.portforward.iter_mut().find(|x| x.id == id) {
             x.enabled = false;
@@ -703,18 +782,12 @@ pub async fn get_port_forward_stats(
     Path(id): Path<String>,
 ) -> Response {
     require_auth!(&state, &headers);
-    let stats = state.data.read().await.portforward.iter()
-        .find(|x| x.id == id)
-        .map(|_| PortForwardStats {
-            id: id.clone(),
-            bytes_in: 0,
-            bytes_out: 0,
-            connections: 0,
-        });
-    match stats {
-        None => not_found("not found"),
-        Some(s) => ok_json(serde_json::json!({"history": [serde_json::to_value(&s).unwrap_or_default()]})),
+    let exists = state.data.read().await.portforward.iter().any(|x| x.id == id);
+    if !exists {
+        return not_found("not found");
     }
+    // Stats tracking is not yet implemented; return zeroed stats like Go version
+    ok_json(serde_json::json!({"history": []}))
 }
 
 // ─── DDNS ─────────────────────────────────────────────────────────────────────
@@ -758,6 +831,13 @@ pub async fn update_ddns(
         Some(x) => {
             req.id = id.clone();
             req.created_at = x.created_at.clone();
+            // Preserve runtime state
+            req.last_ip = x.last_ip.clone();
+            req.last_updated = x.last_updated.clone();
+            req.ip_history = x.ip_history.clone();
+            req.last_sync_ok = x.last_sync_ok;
+            req.last_sync_err = x.last_sync_err.clone();
+            req.last_sync_at = x.last_sync_at.clone();
             *x = req.clone();
         }
     }
@@ -813,8 +893,38 @@ pub async fn update_ddns_refresh_now(
         Some(r) => {
             let client = reqwest::Client::new();
             match crate::engines::sync_ddns_provider(&client, &r).await {
-                Ok(ip) => ok_json(serde_json::json!({"ok": true, "ip": ip})),
-                Err(e) => internal(&e.to_string()),
+                Ok(ip) => {
+                    // Update runtime state
+                    let at = now_rfc3339();
+                    let mut d = state.data.write().await;
+                    if let Some(x) = d.ddns.iter_mut().find(|x| x.id == id) {
+                        x.last_ip = ip.clone();
+                        x.last_updated = at.clone();
+                        x.last_sync_ok = Some(true);
+                        x.last_sync_err.clear();
+                        x.last_sync_at = at.clone();
+                        x.ip_history.push(IpRecord { ip: ip.clone(), timestamp: at });
+                        if x.ip_history.len() > 100 {
+                            let n = x.ip_history.len() - 100;
+                            x.ip_history.drain(0..n);
+                        }
+                    }
+                    drop(d);
+                    let _ = state.persist_all().await;
+                    ok_json(serde_json::json!({"ok": true, "ip": ip}))
+                }
+                Err(e) => {
+                    let at = now_rfc3339();
+                    let mut d = state.data.write().await;
+                    if let Some(x) = d.ddns.iter_mut().find(|x| x.id == id) {
+                        x.last_sync_ok = Some(false);
+                        x.last_sync_err = e.to_string();
+                        x.last_sync_at = at;
+                    }
+                    drop(d);
+                    let _ = state.persist_all().await;
+                    internal(&e.to_string())
+                }
             }
         }
     }
@@ -836,12 +946,12 @@ pub async fn list_iface_ips(
     if iface.is_empty() {
         return bad_request("iface required");
     }
-    let ips = get_iface_ips(&iface);
+    let version = q.get("version").cloned().unwrap_or_else(|| "ipv4".to_string());
+    let ips = collect_iface_ips(&iface, &version);
     ok_json(serde_json::to_value(&ips).unwrap_or_default())
 }
 
 fn get_network_interfaces() -> Vec<String> {
-    // Read from /proc/net/dev on Linux
     if let Ok(content) = std::fs::read_to_string("/proc/net/dev") {
         let mut ifaces: Vec<String> = content
             .lines()
@@ -852,36 +962,62 @@ fn get_network_interfaces() -> Vec<String> {
         ifaces.sort();
         return ifaces;
     }
-    // Fallback for non-Linux
+    // macOS / BSD fallback via ifconfig parsing
     vec!["eth0".to_string(), "lo".to_string()]
 }
 
-fn get_iface_ips(iface: &str) -> Vec<String> {
-    // Parse /proc/net/if_inet6 for IPv6 and /proc/net/fib_trie for IPv4
-    // Simple approach: read from /sys/class/net/{iface}
+/// Collect IPs for a given interface and IP version.
+pub fn collect_iface_ips(iface: &str, version: &str) -> Vec<String> {
     let mut ips = vec![];
-    // Try reading ip addresses via /proc
-    if let Ok(content) = std::fs::read_to_string(format!("/proc/net/if_inet6")) {
-        for line in content.lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 6 && parts[5] == iface {
-                // parts[0] is hex IPv6
-                if let Ok(addr) = parse_proc_ipv6(parts[0]) {
-                    ips.push(addr);
+
+    if version == "ipv6" || version == "all" {
+        if let Ok(content) = std::fs::read_to_string("/proc/net/if_inet6") {
+            for line in content.lines() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 6 && parts[5] == iface {
+                    if let Ok(addr) = parse_proc_ipv6(parts[0]) {
+                        ips.push(addr);
+                    }
                 }
             }
         }
     }
-    // IPv4 via /proc/net/fib_trie is complex; use a simple approach
-    if ips.is_empty() {
-        ips.push("127.0.0.1".to_string());
+
+    if version == "ipv4" || version == "all" {
+        // Parse IPv4 from /proc/net/fib_trie
+        if let Ok(content) = std::fs::read_to_string("/proc/net/fib_trie") {
+            let lines: Vec<&str> = content.lines().collect();
+            let mut i = 0;
+            while i < lines.len() {
+                let line = lines[i].trim();
+                if line.starts_with("32 HOST") || line.contains("HOST") {
+                    // Look backwards for the IP
+                    if i > 0 {
+                        let prev = lines[i - 1].trim();
+                        if prev.contains('.') {
+                            if let Ok(ip) = prev.split_whitespace().next().unwrap_or("").parse::<std::net::Ipv4Addr>() {
+                                if !ip.is_loopback() {
+                                    ips.push(ip.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+                i += 1;
+            }
+        }
+        // Fallback: try /proc/net/if_inet (not standard), skip if unavailable
+        if ips.is_empty() {
+            ips.push("127.0.0.1".to_string());
+        }
     }
+
     ips
 }
 
 fn parse_proc_ipv6(hex: &str) -> anyhow::Result<String> {
     if hex.len() != 32 {
-        anyhow::bail!("invalid hex");
+        anyhow::bail!("invalid hex len");
     }
     let mut groups = vec![];
     for i in 0..8 {
@@ -897,7 +1033,6 @@ pub async fn list_webservices(State(state): State<AppState>, headers: HeaderMap)
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
     let d = state.data.read().await;
-    // Mask auth_pass_hash in routes
     let svcs: Vec<_> = d.webservice.iter().map(|svc| {
         let mut s = svc.clone();
         for route in &mut s.routes {
@@ -950,7 +1085,11 @@ pub async fn update_webservice(
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
 
-    if req.enabled && !is_port_available_ws_excluding(&id, req.listen_port, &state).await {
+    // Stop existing engine so port is freed
+    state.engines.webservice.write().await.remove(&id).map(|tx| tx.send(()));
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+    if req.enabled && !is_port_available(req.listen_port as u32) {
         return (StatusCode::CONFLICT, Json(serde_json::json!({"error":"端口已被占用","port":req.listen_port}))).into_response();
     }
 
@@ -980,7 +1119,6 @@ pub async fn delete_webservice(
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
     let mut d = state.data.write().await;
-    // Collect route IDs for cascade cleanup
     let route_ids: Vec<String> = d.webservice.iter()
         .find(|s| s.id == id)
         .map(|s| s.routes.iter().map(|r| r.id.clone()).collect())
@@ -1049,7 +1187,7 @@ pub async fn list_routes(
 }
 
 #[derive(Deserialize)]
-pub struct CreateRouteReq {
+pub struct RouteReq {
     #[serde(flatten)]
     pub route: WebRoute,
     #[serde(default)]
@@ -1060,7 +1198,7 @@ pub async fn create_route(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(svc_id): Path<String>,
-    Json(req): Json<CreateRouteReq>,
+    Json(req): Json<RouteReq>,
 ) -> Response {
     require_auth!(&state, &headers);
     let mut route = req.route;
@@ -1098,7 +1236,7 @@ pub async fn update_route(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path((svc_id, rid)): Path<(String, String)>,
-    Json(req): Json<CreateRouteReq>,
+    Json(req): Json<RouteReq>,
 ) -> Response {
     require_auth!(&state, &headers);
     let mut route = req.route;
@@ -1124,7 +1262,6 @@ pub async fn update_route(
             return bad_request("开启访问验证时，密码不能为空");
         }
         if req.auth_pass.is_empty() {
-            // Keep existing hash
             route.auth_pass_hash = existing.auth_pass_hash.clone();
         } else {
             match bcrypt_hash(&req.auth_pass) {
@@ -1195,16 +1332,22 @@ pub async fn get_access_logs(
     Path(id): Path<String>,
 ) -> Response {
     require_auth!(&state, &headers);
-    let logs: Vec<_> = state.data.read().await.access_logs.iter()
+    let mut logs: Vec<_> = state.data.read().await.access_logs.iter()
         .filter(|x| x.service_id == id)
         .cloned()
         .collect();
+    // Most-recent first, limit 200
+    logs.reverse();
+    logs.truncate(200);
     ok_json(serde_json::to_value(&logs).unwrap_or_default())
 }
 
 pub async fn get_all_access_logs(State(state): State<AppState>, headers: HeaderMap) -> Response {
     require_auth!(&state, &headers);
-    ok_json(serde_json::to_value(&state.data.read().await.access_logs).unwrap_or_default())
+    let mut logs = state.data.read().await.access_logs.clone();
+    logs.reverse();
+    logs.truncate(500);
+    ok_json(serde_json::to_value(&logs).unwrap_or_default())
 }
 
 pub async fn query_access_logs(
@@ -1293,6 +1436,8 @@ pub async fn create_tls(
     d.tls.push(cert.clone());
     drop(d);
     let _ = state.persist_all().await;
+    // Trigger web-service route matching update
+    state.apply_engines().await;
     let view = TlsCertView::from(&cert);
     (StatusCode::CREATED, Json(view)).into_response()
 }
@@ -1311,7 +1456,6 @@ pub async fn update_tls(
         Some(x) => {
             req.id = id.clone();
             req.created_at = x.created_at.clone();
-            // Preserve existing cert/key if not replaced
             if req.cert_pem.is_empty() {
                 req.cert_pem = x.cert_pem.clone();
                 req.key_pem = x.key_pem.clone();
@@ -1326,6 +1470,7 @@ pub async fn update_tls(
     }
     drop(d);
     let _ = state.persist_all().await;
+    state.apply_engines().await;
     ok_json(serde_json::json!({"ok": true}))
 }
 
@@ -1340,6 +1485,7 @@ pub async fn delete_tls(
     d.tls.retain(|x| x.id != id);
     drop(d);
     let _ = state.persist_all().await;
+    state.apply_engines().await;
     ok_json(serde_json::json!({"ok": true}))
 }
 
@@ -1357,6 +1503,7 @@ pub async fn toggle_tls(
     };
     drop(d);
     let _ = state.persist_all().await;
+    state.apply_engines().await;
     ok_json(serde_json::json!({"enabled": enabled}))
 }
 
@@ -1368,7 +1515,6 @@ pub async fn issue_tls(
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
 
-    // Mark as pending
     {
         let mut d = state.data.write().await;
         match d.tls.iter_mut().find(|x| x.id == id) {
@@ -1387,7 +1533,6 @@ pub async fn issue_tls(
         Some(c) => c,
     };
 
-    // Issue asynchronously via ACME
     let state2 = state.clone();
     let id2 = id.clone();
     tokio::spawn(async move {
@@ -1404,8 +1549,10 @@ pub async fn issue_tls(
                 }
                 drop(d);
                 let _ = state2.persist_all().await;
+                state2.apply_engines().await;
             }
             Err(e) => {
+                eprintln!("[tls] issue {} failed: {e}", id2);
                 let mut d = state2.data.write().await;
                 if let Some(x) = d.tls.iter_mut().find(|x| x.id == id2) {
                     x.status = "error".to_string();
@@ -1425,9 +1572,7 @@ pub async fn renew_tls(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
-    require_auth!(&state, &headers);
-    require_admin_ipfilter!(&state, &headers);
-    // Renew uses same ACME flow as issue
+    // Renew is the same as issue (re-obtain via ACME)
     issue_tls(State(state), headers, Path(id)).await
 }
 
@@ -1439,33 +1584,72 @@ pub async fn upload_tls(
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
 
+    // Accept a ZIP file upload (like Go version)
+    let mut zip_bytes: Option<Vec<u8>> = None;
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let fname = field.file_name().unwrap_or("").to_lowercase();
+        let data = match field.bytes().await {
+            Ok(b) => b.to_vec(),
+            Err(_) => continue,
+        };
+        if fname.ends_with(".zip") || field.name() == Some("file") {
+            if fname.ends_with(".zip") {
+                zip_bytes = Some(data);
+            } else {
+                // Might be a zip even without .zip extension
+                zip_bytes = Some(data);
+            }
+        }
+    }
+
+    let zip_data = match zip_bytes {
+        Some(d) => d,
+        None => return bad_request("请上传证书 ZIP 文件"),
+    };
+
+    // Parse ZIP
+    use std::io::Read;
+    let cursor = std::io::Cursor::new(&zip_data);
+    let mut zr = match zip::ZipArchive::new(cursor) {
+        Ok(z) => z,
+        Err(e) => return bad_request(&format!("无法解析 ZIP 文件: {e}")),
+    };
+
     let mut cert_pem = String::new();
     let mut key_pem = String::new();
     let mut issuer_pem = String::new();
 
-    while let Ok(Some(field)) = multipart.next_field().await {
-        let fname = field.file_name().unwrap_or("").to_lowercase();
-        let data = match field.bytes().await {
-            Ok(b) => b,
+    for i in 0..zr.len() {
+        let mut zf = match zr.by_index(i) {
+            Ok(f) => f,
             Err(_) => continue,
         };
-        let text = String::from_utf8_lossy(&data).to_string();
-        let ext = fname.rsplit('.').next().unwrap_or("");
+        let fname = zf.name().to_lowercase();
+        let fname = std::path::Path::new(&fname)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        let ext = fname.rsplit('.').next().unwrap_or("").to_string();
+
+        let mut content = String::new();
+        let _ = zf.read_to_string(&mut content);
 
         match fname.as_str() {
-            "cert.pem" | "fullchain.pem" | "certificate.pem" => cert_pem = text,
-            "key.pem" | "privkey.pem" | "private.pem" | "privatekey.pem" => key_pem = text,
-            _ => match ext {
-                "key" => key_pem = text,
-                "crt" | "pem" | "cer" => {
-                    if fname.contains("issuer") || fname.contains("ca") {
-                        issuer_pem = text;
-                    } else if cert_pem.is_empty() {
-                        cert_pem = text;
-                    }
+            "cert.pem" | "fullchain.pem" | "certificate.pem" => { cert_pem = content; continue; }
+            "key.pem" | "privkey.pem" | "private.pem" | "privatekey.pem" => { key_pem = content; continue; }
+            _ => {}
+        }
+        match ext.as_str() {
+            "key" => key_pem = content,
+            "crt" | "pem" | "cer" => {
+                if fname.contains("issuer") || fname.contains("ca") {
+                    issuer_pem = content;
+                } else if cert_pem.is_empty() {
+                    cert_pem = content;
                 }
-                _ => {}
-            },
+            }
+            _ => {}
         }
     }
 
@@ -1477,7 +1661,13 @@ pub async fn upload_tls(
         return bad_request("ZIP 中未找到证书文件（支持 .crt/.pem/.key 或 cert.pem/key.pem 格式）");
     }
 
+    // Validate PEM pair
+    if let Err(e) = validate_cert_key(&cert_pem, &key_pem) {
+        return bad_request(&format!("无效的证书或私钥: {e}"));
+    }
+
     let domains = extract_domains_from_cert(&cert_pem);
+    let expires_at = extract_expiry_from_cert(&cert_pem).unwrap_or_default();
     let domain = domains.first().cloned().unwrap_or_default();
 
     let cert = TlsRule {
@@ -1489,7 +1679,7 @@ pub async fn upload_tls(
         cert_pem,
         key_pem,
         issued_at: now_rfc3339(),
-        expires_at: String::new(),
+        expires_at,
         auto_renew: false,
         status: "active".to_string(),
         created_at: now_rfc3339(),
@@ -1501,6 +1691,7 @@ pub async fn upload_tls(
     d.tls.push(cert.clone());
     drop(d);
     let _ = state.persist_all().await;
+    state.apply_engines().await;
 
     let view = TlsCertView::from(&cert);
     (StatusCode::CREATED, Json(view)).into_response()
@@ -1519,14 +1710,15 @@ pub async fn download_tls(
             if c.cert_pem.is_empty() || c.key_pem.is_empty() {
                 return bad_request("证书尚未签发，无法下载");
             }
-            // Return ZIP blob
             let safe_name = sanitize_filename(&c.domain);
+            let safe_name = if safe_name.is_empty() { "cert".to_string() } else { safe_name };
+
             let zip_bytes = build_cert_zip(&c, &safe_name);
             (
                 StatusCode::OK,
                 [
-                    ("content-type", "application/zip"),
-                    ("content-disposition", &format!("attachment; filename=\"{safe_name}-certs.zip\"")),
+                    ("content-type".to_string(), "application/zip".to_string()),
+                    ("content-disposition".to_string(), format!("attachment; filename=\"{safe_name}-certs.zip\"")),
                 ],
                 zip_bytes,
             )
@@ -1551,9 +1743,10 @@ pub async fn get_tls_pem(
     }
 }
 
+// TLS helpers
+
 fn extract_domains_from_cert(pem_str: &str) -> Vec<String> {
     use base64::Engine;
-    // Simple PEM decode
     let b64: String = pem_str
         .lines()
         .filter(|l| !l.starts_with("-----"))
@@ -1563,13 +1756,53 @@ fn extract_domains_from_cert(pem_str: &str) -> Vec<String> {
         Ok(d) => d,
         Err(_) => return vec![],
     };
-    // Use rcgen to parse the cert
-    if let Ok(cert) = rcgen::CertificateParams::from_ca_cert_der(der.as_slice().into()) {
-        return cert.subject_alt_names.iter().filter_map(|san| {
-            if let rcgen::SanType::DnsName(n) = san { Some(n.as_str().to_string()) } else { None }
-        }).collect();
+    if let Ok((_, cert)) = x509_parser::parse_x509_certificate(&der) {
+        let mut domains: Vec<String> = vec![];
+        if let Ok(Some(san)) = cert.subject_alternative_names() {
+            for name in &san.general_names {
+                if let x509_parser::extensions::GeneralName::DNSName(dns) = name {
+                    if !domains.contains(&dns.to_string()) {
+                        domains.push(dns.to_string());
+                    }
+                }
+            }
+        }
+        // Fallback to CN
+        if domains.is_empty() {
+            if let Some(cn) = cert.subject().iter_common_name().next() {
+                if let Ok(s) = cn.as_str() {
+                    domains.push(s.to_string());
+                }
+            }
+        }
+        return domains;
     }
     vec![]
+}
+
+fn extract_expiry_from_cert(pem_str: &str) -> Option<String> {
+    use base64::Engine;
+    let b64: String = pem_str
+        .lines()
+        .filter(|l| !l.starts_with("-----"))
+        .collect::<Vec<_>>()
+        .join("");
+    let der = base64::engine::general_purpose::STANDARD.decode(&b64).ok()?;
+    let (_, cert) = x509_parser::parse_x509_certificate(&der).ok()?;
+    let ts = cert.validity().not_after.timestamp();
+    let dt = chrono::DateTime::from_timestamp(ts, 0)?;
+    Some(dt.to_rfc3339())
+}
+
+fn validate_cert_key(cert_pem: &str, key_pem: &str) -> anyhow::Result<()> {
+    // Simple PEM validation — just check both are parseable PEM blocks
+    if !cert_pem.contains("-----BEGIN CERTIFICATE-----") {
+        anyhow::bail!("invalid certificate PEM");
+    }
+    if !key_pem.contains("-----BEGIN") || !key_pem.contains("KEY-----") {
+        anyhow::bail!("invalid private key PEM");
+    }
+    Ok(())
 }
 
 fn sanitize_filename(s: &str) -> String {
@@ -1581,12 +1814,84 @@ fn sanitize_filename(s: &str) -> String {
 }
 
 fn build_cert_zip(cert: &TlsRule, safe_name: &str) -> Vec<u8> {
-    // Simple zip-like format: concatenate files. For proper ZIP use the zip crate.
-    // Since we have the zip crate available transitively, build manually.
-    let mut out = Vec::new();
-    // Return as a JSON blob for now (zip crate not directly listed in Cargo.toml)
-    out.extend_from_slice(cert.cert_pem.as_bytes());
-    out
+    use std::io::Write;
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut zw = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::FileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        let (server_cert, issuer_cert) = split_cert_chain(&cert.cert_pem);
+
+        if !issuer_cert.is_empty() {
+            let full_chain = format!("{server_cert}{issuer_cert}");
+            let _ = zw.start_file(format!("{safe_name}.crt"), opts);
+            let _ = zw.write_all(full_chain.as_bytes());
+            let _ = zw.start_file(format!("{safe_name}.pem"), opts);
+            let _ = zw.write_all(full_chain.as_bytes());
+            let _ = zw.start_file(format!("{safe_name}_issuerCertificate.crt"), opts);
+            let _ = zw.write_all(issuer_cert.as_bytes());
+        } else {
+            let _ = zw.start_file(format!("{safe_name}.crt"), opts);
+            let _ = zw.write_all(server_cert.as_bytes());
+            let _ = zw.start_file(format!("{safe_name}.pem"), opts);
+            let _ = zw.write_all(server_cert.as_bytes());
+        }
+
+        let _ = zw.start_file(format!("{safe_name}.key"), opts);
+        let _ = zw.write_all(cert.key_pem.as_bytes());
+
+        // info.json
+        let domains = if cert.domains.is_empty() && !cert.domain.is_empty() {
+            vec![cert.domain.clone()]
+        } else {
+            cert.domains.clone()
+        };
+        let info = serde_json::json!({
+            "domain": cert.domain,
+            "domains": domains,
+            "issued_at": cert.issued_at,
+            "expires_at": cert.expires_at,
+            "source": cert.source,
+            "name": cert.name,
+        });
+        let info_bytes = serde_json::to_vec_pretty(&info).unwrap_or_default();
+        let _ = zw.start_file("info.json", opts);
+        let _ = zw.write_all(&info_bytes);
+
+        let _ = zw.finish();
+    }
+    buf.into_inner()
+}
+
+/// Split PEM chain into server cert (first block) and issuer/intermediate (rest).
+fn split_cert_chain(pem_chain: &str) -> (String, String) {
+    let mut server = String::new();
+    let mut issuer = String::new();
+    let mut rest = pem_chain.as_bytes();
+    let mut first = true;
+    loop {
+        // Simple PEM block scanner
+        let s = std::str::from_utf8(rest).unwrap_or("");
+        if let Some(start) = s.find("-----BEGIN") {
+            let chunk = &s[start..];
+            if let Some(end) = chunk.find("-----END") {
+                if let Some(end2) = chunk[end..].find("-----\n") {
+                    let block = &chunk[..end + end2 + 6];
+                    if first {
+                        server = block.to_string();
+                        first = false;
+                    } else {
+                        issuer.push_str(block);
+                    }
+                    rest = chunk[end + end2 + 6..].as_bytes();
+                    continue;
+                }
+            }
+        }
+        break;
+    }
+    (server, issuer)
 }
 
 // ─── IP Filter ────────────────────────────────────────────────────────────────
@@ -1614,7 +1919,7 @@ pub async fn list_ipfilter_targets(State(state): State<AppState>, headers: Heade
         TargetItem { target_type: "portforward".into(), target_id: "".into(), target_name: "端口转发（全部规则）".into() },
     ];
     for pf in &d.portforward {
-        let name = if pf.name.is_empty() { pf.listen.clone() } else { pf.name.clone() };
+        let name = if pf.name.is_empty() { format!("端口 {}", pf.listen_port()) } else { pf.name.clone() };
         items.push(TargetItem { target_type: "portforward".into(), target_id: pf.id.clone(), target_name: name });
     }
     items.push(TargetItem { target_type: "webservice".into(), target_id: "".into(), target_name: "网页服务（全部路由）".into() });
@@ -1644,7 +1949,6 @@ pub async fn create_ipfilter(
         return bad_request("scopes cannot be empty");
     }
 
-    // Check scope conflict
     let existing = state.data.read().await.ipfilter.clone();
     if let Some(conflict) = has_scope_conflict(&existing, "", &body.scopes) {
         return bad_request(&format!("该范围已被其他规则占用: {conflict}"));
@@ -1654,12 +1958,6 @@ pub async fn create_ipfilter(
     body.created_at = now_rfc3339();
     if body.mode != "blacklist" {
         body.mode = "whitelist".to_string();
-    }
-    if body.manual_ips.is_empty() {
-        body.manual_ips = vec![];
-    }
-    if body.attachments.is_empty() {
-        body.attachments = vec![];
     }
 
     let mut d = state.data.write().await;
@@ -1733,7 +2031,12 @@ pub async fn toggle_ipfilter(
     };
     drop(d);
     let _ = state.persist_all().await;
-    ok_json(serde_json::json!({"enabled": enabled}))
+    // Return the full updated rule (like Go version for toggle_ipfilter_rule)
+    let rule = state.data.read().await.ipfilter.iter().find(|x| x.id == id).cloned();
+    match rule {
+        Some(r) => ok_json(serde_json::to_value(&r).unwrap_or_default()),
+        None => ok_json(serde_json::json!({"enabled": enabled})),
+    }
 }
 
 pub async fn upload_ipfilter_file(
@@ -1756,7 +2059,6 @@ pub async fn upload_ipfilter_file(
         }
     }
 
-    // Return parsed IPs for user confirmation (like Go version)
     ok_json(serde_json::json!({"name": filename, "ips": ips}))
 }
 
@@ -1813,6 +2115,7 @@ pub async fn check_port(
     Json(v): Json<serde_json::Value>,
 ) -> Response {
     require_auth!(&state, &headers);
+    // Accept both POST body JSON and query param (GET /check-port?port=8080)
     let port = v["port"].as_u64().unwrap_or(0) as u32;
     if port == 0 || port > 65535 {
         return bad_request("invalid port");
@@ -1821,7 +2124,23 @@ pub async fn check_port(
     ok_json(serde_json::json!({"port": port, "available": available}))
 }
 
-// ─── Proxy ────────────────────────────────────────────────────────────────────
+/// GET /api/check-port?port=N (Go-compatible; Go uses GET with query param)
+pub async fn check_port_query(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
+    require_auth!(&state, &headers);
+    let port_str = q.get("port").cloned().unwrap_or_default();
+    let port: u32 = match port_str.parse() {
+        Ok(p) if p > 0 && p <= 65535 => p,
+        _ => return bad_request("invalid port"),
+    };
+    let available = is_port_available(port);
+    ok_json(serde_json::json!({"port": port, "available": available}))
+}
+
+// ─── Proxy (admin passthrough for testing) ───────────────────────────────────
 
 pub async fn proxy_webservice_http(
     State(state): State<AppState>,
@@ -1838,8 +2157,7 @@ pub async fn proxy_webservice_http(
     };
 
     let route = svc.routes.iter()
-        .find(|r| r.enabled && (tail.starts_with(r.domain.trim_start_matches('/')) || r.domain.is_empty()))
-        .or_else(|| svc.routes.first())
+        .find(|r| r.enabled && !r.backend_url.is_empty())
         .cloned();
 
     let backend = route.as_ref().map(|r| r.backend_url.as_str()).unwrap_or("");
@@ -1850,7 +2168,12 @@ pub async fn proxy_webservice_http(
     let uri_tail = if tail.is_empty() { String::new() } else { format!("/{tail}") };
     let url = format!("{}{uri_tail}", backend.trim_end_matches('/'));
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .unwrap_or_default();
+
     let method = req.method().clone();
     let body_bytes = axum::body::to_bytes(req.into_body(), 8 * 1024 * 1024).await.unwrap_or_default();
 
@@ -1877,34 +2200,9 @@ pub async fn proxy_webservice_http(
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
-fn parse_listen_port(addr: &str) -> u32 {
-    // addr can be "0.0.0.0:8080" or just "8080"
-    addr.rsplit(':').next()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(0)
-}
-
 fn is_port_available(port: u32) -> bool {
     if port == 0 || port > 65535 {
         return false;
     }
     std::net::TcpListener::bind(format!("0.0.0.0:{port}")).is_ok()
-}
-
-async fn is_port_available_excluding(id: &str, port: u32, state: &AppState) -> bool {
-    // Stop the existing engine for this ID, then check
-    let _ = state.engines.portforward.write().await.remove(id).map(|tx| tx.send(()));
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    is_port_available(port)
-}
-
-async fn is_port_available_ws_excluding(id: &str, port: u16, state: &AppState) -> bool {
-    let _ = state.engines.webservice.write().await.remove(id).map(|tx| tx.send(()));
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    is_port_available(port as u32)
-}
-
-fn bcrypt_hash(password: &str) -> anyhow::Result<String> {
-    // Use pbkdf2 from auth module for consistency
-    hash_password(password)
 }
