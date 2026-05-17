@@ -833,14 +833,14 @@ pub async fn update_ddns_refresh_now(
     }
 }
 
-pub async fn list_interfaces(State(_state): State<AppState>, headers: HeaderMap) -> Response {
+pub async fn list_interfaces(State(_state): State<AppState>, _headers: HeaderMap) -> Response {
     let ifaces = get_network_interfaces();
     ok_json(serde_json::to_value(&ifaces).unwrap_or_default())
 }
 
 pub async fn list_iface_ips(
     State(_state): State<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
     let iface = q.get("iface").cloned().unwrap_or_default();
@@ -1625,8 +1625,8 @@ fn extract_domains_from_cert(pem_str: &str) -> Vec<String> {
     let der = match base64::engine::general_purpose::STANDARD.decode(&b64) { Ok(d) => d, Err(_) => return vec![] };
     if let Ok((_, cert)) = x509_parser::parse_x509_certificate(&der) {
         let mut domains: Vec<String> = vec![];
-        if let Ok(Some(san)) = cert.subject_alternative_names() {
-            for name in &san.general_names {
+        if let Ok(Some(san)) = cert.subject_alternative_name() {
+            for name in &san.value.general_names {
                 if let x509_parser::extensions::GeneralName::DNSName(dns) = name {
                     if !domains.contains(&dns.to_string()) { domains.push(dns.to_string()); }
                 }

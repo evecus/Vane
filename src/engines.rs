@@ -587,8 +587,6 @@ pub fn cert_domain_matches(cert_domain: &str, req_domain: &str) -> bool {
 /// Build a rustls ServerConfig from matched TLS rules for the given set of routes.
 pub fn build_tls_config(routes: &[WebRoute], tls_rules: &[TlsRule]) -> Option<Arc<rustls::ServerConfig>> {
     use rustls::ServerConfig;
-    use rustls_pemfile::{certs, pkcs8_private_keys, rsa_private_keys, read_one, Item};
-    use std::io::BufReader;
 
     let mut cert_resolver = rustls::server::ResolvesServerCertUsingSni::new();
     let mut any_added = false;
@@ -602,46 +600,41 @@ pub fn build_tls_config(routes: &[WebRoute], tls_rules: &[TlsRule]) -> Option<Ar
             _ => continue,
         };
 
-        let cert_chain: Vec<rustls::pki_types::CertificateDer> = {
-            let mut reader = BufReader::new(tls_cert.cert_pem.as_bytes());
-            match certs(&mut reader) {
-                Ok(v) => v.into_iter().map(|c| rustls::pki_types::CertificateDer::from(c.to_vec())).collect(),
-                Err(_) => continue,
-            }
-        };
-
-        let private_key: rustls::pki_types::PrivateKeyDer = {
-            // rustls-pemfile 2.x: read_one returns items, or use private_key helper
-            let mut reader = BufReader::new(tls_cert.key_pem.as_bytes());
-            let mut found: Option<rustls::pki_types::PrivateKeyDer> = None;
-            while let Ok(Some(item)) = read_one(&mut reader) {
-                match item {
-                    Item::Pkcs8Key(k) => { found = Some(rustls::pki_types::PrivateKeyDer::Pkcs8(k)); break; }
-                    Item::Pkcs1Key(k) => { found = Some(rustls::pki_types::PrivateKeyDer::Pkcs1(k)); break; }
-                    Item::Sec1Key(k) => { found = Some(rustls::pki_types::PrivateKeyDer::Sec1(k)); break; }
-                    _ => {}
+        // Helper: build a CertifiedKey by re-parsing PEM each time (CertifiedKey has no Clone)
+        let build_ck = |cert_pem: &str, key_pem: &str| -> Option<rustls::sign::CertifiedKey> {
+            let chain: Vec<rustls::pki_types::CertificateDer<'static>> = {
+                let mut reader = std::io::BufReader::new(cert_pem.as_bytes());
+                rustls_pemfile::certs(&mut reader).filter_map(|r| r.ok()).collect()
+            };
+            if chain.is_empty() { return None; }
+            let key_der: rustls::pki_types::PrivateKeyDer = {
+                let mut reader = std::io::BufReader::new(key_pem.as_bytes());
+                let mut found: Option<rustls::pki_types::PrivateKeyDer> = None;
+                while let Ok(Some(item)) = rustls_pemfile::read_one(&mut reader) {
+                    match item {
+                        rustls_pemfile::Item::Pkcs8Key(k) => { found = Some(rustls::pki_types::PrivateKeyDer::Pkcs8(k)); break; }
+                        rustls_pemfile::Item::Pkcs1Key(k) => { found = Some(rustls::pki_types::PrivateKeyDer::Pkcs1(k)); break; }
+                        rustls_pemfile::Item::Sec1Key(k)  => { found = Some(rustls::pki_types::PrivateKeyDer::Sec1(k));  break; }
+                        _ => {}
+                    }
                 }
-            }
-            match found {
-                Some(k) => k,
-                None => continue,
-            }
+                found?
+            };
+            let sk = rustls::crypto::ring::sign::any_supported_type(&key_der).ok()?;
+            Some(rustls::sign::CertifiedKey::new(chain, sk))
         };
-
-        let signing_key = match rustls::crypto::ring::sign::any_supported_type(&private_key) {
-            Ok(k) => k,
-            Err(_) => continue,
-        };
-        let certified_key = Arc::new(rustls::sign::CertifiedKey::new(cert_chain, signing_key));
 
         let domain = route.domain.to_lowercase();
-        // Register exact domain
-        let _ = cert_resolver.add(&domain, certified_key.clone());
-        // Also register with www. prefix if not wildcard
-        if !domain.starts_with("*.") {
-            let _ = cert_resolver.add(&format!("www.{domain}"), certified_key);
+
+        if let Some(ck) = build_ck(&tls_cert.cert_pem, &tls_cert.key_pem) {
+            let _ = cert_resolver.add(&domain, ck);
+            if !domain.starts_with("*.") {
+                if let Some(ck2) = build_ck(&tls_cert.cert_pem, &tls_cert.key_pem) {
+                    let _ = cert_resolver.add(&format!("www.{domain}"), ck2);
+                }
+            }
+            any_added = true;
         }
-        any_added = true;
     }
 
     if !any_added { return None; }
