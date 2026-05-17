@@ -36,5 +36,3 @@ hyper-util = { version = "0.1", features = ["full"] }
 tokio-rustls = "0.26"
 rustls = { version = "0.23", features = ["ring"] }
 rustls-pemfile = "2"
-EOF
-echo "Cargo.toml written"
