@@ -14,6 +14,8 @@ use crate::{
     models::{AdminConfig, Config, RuntimeData},
 };
 
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<RwLock<Config>>,
@@ -39,6 +41,7 @@ impl AppState {
                         password_hash: hash_password("vane1234")?,
                         port: 4455,
                         safe_entry: String::new(),
+                        welcome_shown: false,
                     },
                 };
                 fs::write(&cfg_path, serde_json::to_vec_pretty(&d)?).await?;
@@ -75,9 +78,7 @@ impl AppState {
         .await?;
         Ok(())
     }
-}
 
-impl AppState {
     pub async fn apply_engines(&self) {
         let d = self.data.read().await.clone();
         self.engines.apply_portforwards(&d.portforward).await;
@@ -85,9 +86,8 @@ impl AppState {
         self.engines.apply_webservice(&d.webservice).await;
         self.engines.apply_tls(&d.tls).await;
     }
-}
 
-impl AppState {
+    /// Expire old sessions and clean up stale login attempt windows.
     pub async fn cleanup_security_state(&self) {
         let now = chrono::Utc::now().timestamp();
         let mut exp = self.session_expiry.write().await;
@@ -105,4 +105,42 @@ impl AppState {
         let mut la = self.login_attempts.write().await;
         la.retain(|_, (_, ts)| ts.elapsed() < Duration::from_secs(1800));
     }
+
+    /// Extend session expiry (sliding window, 24h).
+    pub async fn touch_session(&self, token: &str) {
+        let new_exp = chrono::Utc::now().timestamp() + 86400;
+        self.session_expiry
+            .write()
+            .await
+            .insert(token.to_string(), new_exp);
+    }
+
+    /// Clear all active sessions (used after port/safe_entry change).
+    pub async fn clear_all_sessions(&self) {
+        self.sessions.write().await.clear();
+        self.session_expiry.write().await.clear();
+    }
+}
+
+/// Generate a new unique ID (UUID v4 style hex string).
+pub fn new_id() -> String {
+    use rand_core::RngCore;
+    let mut buf = [0u8; 16];
+    rand_core::OsRng.fill_bytes(&mut buf);
+    format!(
+        "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
+        u32::from_be_bytes(buf[0..4].try_into().unwrap()),
+        u16::from_be_bytes(buf[4..6].try_into().unwrap()),
+        u16::from_be_bytes(buf[6..8].try_into().unwrap()) & 0x0fff,
+        (u16::from_be_bytes(buf[8..10].try_into().unwrap()) & 0x3fff) | 0x8000,
+        {
+            let mut x = [0u8; 8];
+            x[2..8].copy_from_slice(&buf[10..16]);
+            u64::from_be_bytes(x)
+        }
+    )
+}
+
+pub fn now_rfc3339() -> String {
+    chrono::Utc::now().to_rfc3339()
 }
