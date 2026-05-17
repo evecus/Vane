@@ -10,7 +10,7 @@ use tokio::{fs, sync::RwLock};
 
 use crate::{
     auth::hash_password,
-    engines::RuntimeEngines,
+    engines::{rematch_all_routes, RuntimeEngines},
     models::{AdminConfig, Config, RuntimeData},
 };
 
@@ -38,7 +38,7 @@ impl AppState {
                 let d = Config {
                     admin: AdminConfig {
                         username: "admin".into(),
-                        password_hash: hash_password("vane1234")?,
+                        password_hash: hash_password("admin")?,
                         port: 4455,
                         safe_entry: String::new(),
                         welcome_shown: false,
@@ -49,10 +49,15 @@ impl AppState {
             }
         };
 
-        let data: RuntimeData = match fs::read_to_string(&data_path).await {
+        let mut data: RuntimeData = match fs::read_to_string(&data_path).await {
             Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
             Err(_) => RuntimeData::default(),
         };
+
+        // Normalize all port forward rules (Go-style field compatibility)
+        for pf in &mut data.portforward {
+            pf.normalize();
+        }
 
         Ok(Self {
             config: Arc::new(RwLock::new(cfg)),
@@ -84,8 +89,16 @@ impl AppState {
         let d = self.data.read().await.clone();
         self.engines.apply_portforwards(&d.portforward).await;
         self.engines.apply_ddns(&d.ddns, self.data.clone()).await;
-        self.engines.apply_webservice(&d.webservice).await;
+        self.engines.apply_webservice(&d.webservice, &d.tls).await;
         self.engines.apply_tls(&d.tls, self.data.clone(), self.config.read().await.clone()).await;
+    }
+
+    /// Re-run TLS cert matching for all web routes, then restart web service engines.
+    pub async fn rematch_and_restart(&self) {
+        rematch_all_routes(&self.data).await;
+        let d = self.data.read().await.clone();
+        // Restart all web service engines so they pick up new cert assignments
+        self.engines.apply_webservice(&d.webservice, &d.tls).await;
     }
 
     /// Expire old sessions and clean up stale login-attempt windows.
@@ -103,7 +116,6 @@ impl AppState {
             sess.remove(&t);
         }
 
-        // Clean login attempts older than 30 minutes
         let mut la = self.login_attempts.write().await;
         la.retain(|_, (_, ts)| ts.elapsed() < Duration::from_secs(1800));
     }
@@ -121,12 +133,11 @@ impl AppState {
     pub async fn clear_all_sessions(&self) {
         self.sessions.write().await.clear();
         self.session_expiry.write().await.clear();
-        // Also clear sessions_meta so the UI sessions list is in sync
         self.data.write().await.sessions_meta.clear();
     }
 }
 
-/// Generate a new unique ID (UUID v4 style hex string).
+/// Generate a new unique ID (UUID v4 style).
 pub fn new_id() -> String {
     use rand_core::RngCore;
     let mut buf = [0u8; 16];
