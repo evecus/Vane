@@ -10,7 +10,6 @@ use std::net::IpAddr;
 
 use crate::{
     auth::{bcrypt_hash, bearer, generate_token, hash_password, verify_password},
-    engines::rematch_all_routes,
     models::*,
     state::{new_id, now_rfc3339, AppState, VERSION},
 };
@@ -1161,13 +1160,18 @@ pub async fn update_route(
     let mut route = req.route;
 
     let mut d = state.data.write().await;
-    let svc = match d.webservice.iter_mut().find(|s| s.id == svc_id) {
-        None => return not_found("service not found"),
-        Some(s) => s,
-    };
-    let existing = match svc.routes.iter().find(|r| r.id == rid) {
-        None => return not_found("route not found"),
-        Some(r) => r.clone(),
+
+    // Validate service and get existing route data (need clone to avoid borrow conflicts)
+    let (existing, tls_rules_clone) = {
+        let svc = match d.webservice.iter().find(|s| s.id == svc_id) {
+            None => return not_found("service not found"),
+            Some(s) => s,
+        };
+        let existing = match svc.routes.iter().find(|r| r.id == rid) {
+            None => return not_found("route not found"),
+            Some(r) => r.clone(),
+        };
+        (existing, d.tls.clone())
     };
 
     route.id = rid.clone();
@@ -1191,21 +1195,21 @@ pub async fn update_route(
         route.auth_pass_hash.clear();
     }
 
-    // Match cert
-    {
-        match crate::engines::find_tls_cert(&d.tls, &route.domain) {
-            Some(cert) => {
-                route.matched_cert_id = cert.id.clone();
-                route.cert_status = if cert.status == "active" { "ok".to_string() } else { "cert_inactive".to_string() };
-            }
-            None => {
-                route.matched_cert_id.clear();
-                route.cert_status = "no_cert".to_string();
-            }
+    // Match cert using cloned TLS rules (avoids borrow conflict with mutable d)
+    match crate::engines::find_tls_cert(&tls_rules_clone, &route.domain) {
+        Some(cert) => {
+            route.matched_cert_id = cert.id.clone();
+            route.cert_status = if cert.status == "active" { "ok".to_string() } else { "cert_inactive".to_string() };
+        }
+        None => {
+            route.matched_cert_id.clear();
+            route.cert_status = "no_cert".to_string();
         }
     }
 
-    if let Some(r) = svc.routes.iter_mut().find(|r| r.id == rid) { *r = route.clone(); }
+    if let Some(svc) = d.webservice.iter_mut().find(|s| s.id == svc_id) {
+        if let Some(r) = svc.routes.iter_mut().find(|r| r.id == rid) { *r = route.clone(); }
+    }
     drop(d);
     let _ = state.persist_all().await;
     state.apply_engines().await;
@@ -1498,9 +1502,10 @@ pub async fn upload_tls(
 
     let mut zip_bytes: Option<Vec<u8>> = None;
     while let Ok(Some(field)) = multipart.next_field().await {
+        let field_name = field.name().unwrap_or("").to_string();
         let fname = field.file_name().unwrap_or("").to_lowercase();
         let data = match field.bytes().await { Ok(b) => b.to_vec(), Err(_) => continue };
-        if fname.ends_with(".zip") || field.name() == Some("file") {
+        if fname.ends_with(".zip") || field_name == "file" {
             zip_bytes = Some(data);
         }
     }
@@ -1870,8 +1875,10 @@ pub async fn upload_ipfilter_file(
     let mut ips: Vec<String> = vec![];
 
     while let Ok(Some(field)) = multipart.next_field().await {
-        if field.name() == Some("file") {
-            filename = field.file_name().unwrap_or("").to_string();
+        let fn_name = field.name().unwrap_or("").to_string();
+        let fn_fname = field.file_name().unwrap_or("").to_string();
+        if fn_name == "file" {
+            filename = fn_fname;
             if let Ok(data) = field.text().await { ips = parse_ip_list(&data); }
         }
     }

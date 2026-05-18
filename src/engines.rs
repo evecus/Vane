@@ -91,11 +91,11 @@ impl RuntimeEngines {
     }
 }
 
-async fn reconcile_spawn<T: Clone + Send + 'static>(
+async fn reconcile_spawn<T: Clone + Send + 'static, F>(
     map: &Arc<RwLock<HashMap<String, oneshot::Sender<()>>>>,
     enabled: Vec<(String, T)>,
-    spawn: impl Fn(T, oneshot::Receiver<()>) + Copy,
-) {
+    mut spawn: F,
+) where F: FnMut(T, oneshot::Receiver<()>) {
     let ids: std::collections::HashSet<_> = enabled.iter().map(|(id, _)| id.clone()).collect();
     {
         let mut m = map.write().await;
@@ -832,7 +832,7 @@ async fn handle_http_connection_tls(
 }
 
 async fn handle_connection_inner<S>(
-    mut stream: S,
+    stream: S,
     peer: SocketAddr,
     rule: Arc<WebServiceRule>,
     _tls_rules: Arc<Vec<TlsRule>>,

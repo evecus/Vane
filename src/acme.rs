@@ -49,24 +49,30 @@ pub async fn issue_cert(rule: &TlsRule) -> anyhow::Result<(String, String, Strin
         && !rule.provider_conf.zerossl_api_key.is_empty()
         && !rule.provider_conf.zerossl_key_id.is_empty()
     {
-        // Decode ZeroSSL HMAC key (base64url → bytes)
+        // Decode ZeroSSL HMAC key (base64url → raw bytes)
         use base64::Engine;
         let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(&rule.provider_conf.zerossl_api_key)
             .or_else(|_| base64::engine::general_purpose::STANDARD.decode(&rule.provider_conf.zerossl_api_key))
             .context("decode ZeroSSL HMAC key")?;
-        let b64_standard = base64::engine::general_purpose::STANDARD.encode(&raw);
-        Some((rule.provider_conf.zerossl_key_id.clone(), b64_standard))
+        Some((rule.provider_conf.zerossl_key_id.clone(), raw))
     } else {
         None
     };
 
-    let eab_ref = eab.as_ref().map(|(kid, hmac)| instant_acme::ExternalAccountKey {
-        id: kid.as_str(),
-        key: hmac.as_str(),
-    });
+    // instant-acme 0.7: ExternalAccountKey { id: String, key: Key }
+    // Account::create takes Option<&ExternalAccountKey>
+    let eab_key: Option<instant_acme::ExternalAccountKey> = match eab {
+        Some((kid, raw_bytes)) => {
+            Some(instant_acme::ExternalAccountKey {
+                id: kid,
+                key: instant_acme::Key::Hs256(raw_bytes),
+            })
+        }
+        None => None,
+    };
 
-    let (account, _) = Account::create(&new_account, &directory, eab_ref)
+    let (account, _) = Account::create(&new_account, &directory, eab_key.as_ref())
         .await
         .context("create ACME account")?;
 
