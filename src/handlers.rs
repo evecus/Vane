@@ -14,6 +14,9 @@ use crate::{
     state::{new_id, now_rfc3339, AppState, VERSION},
 };
 
+include!(concat!(env!("OUT_DIR"), "/embedded_assets.rs"));
+
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 fn unauthorized() -> Response {
@@ -156,18 +159,18 @@ pub async fn spa_fallback(State(state): State<AppState>, req: Request) -> Respon
         return (StatusCode::NOT_FOUND, "not found").into_response();
     }
 
-    // Always allow static assets without safe_entry prefix
-    let always_allowed = matches!(
-        uri_path.as_str(),
-        "/favicon.svg" | "/favicon.ico" | "/favicon.png" | "/robots.txt"
-        | "/manifest.json" | "/icon-192.png" | "/icon-512.png" | "/apple-touch-icon.png"
-    ) || uri_path.starts_with("/assets/");
+    // Assets bypass safe_entry check
+    let always_allowed = uri_path.starts_with("/assets/")
+        || matches!(uri_path.as_str(),
+            "/favicon.svg" | "/favicon.ico" | "/favicon.png"
+            | "/icon-192.png" | "/icon-512.png" | "/apple-touch-icon.png"
+            | "/robots.txt" | "/manifest.json");
 
     if !always_allowed && !safe.is_empty() {
         let prefix = format!("/{}", safe.trim_matches('/'));
         if p.starts_with(prefix.as_str()) {
             let stripped = &p[prefix.len()..];
-            p = if stripped.is_empty() { "/" } else { stripped };
+            p = if stripped.is_empty() || stripped == "/" { "/" } else { stripped };
         } else if p != "/" {
             return (StatusCode::FORBIDDEN, "forbidden").into_response();
         }
@@ -179,22 +182,47 @@ pub async fn spa_fallback(State(state): State<AppState>, req: Request) -> Respon
         p.trim_start_matches('/').to_string()
     };
 
-    let file_path = format!("web/dist/{rel}");
-    let bytes = crate::EMBEDDED_FILES.get_file(&file_path)
-        .map(|f| f.contents().to_vec())
-        .or_else(|| {
-            crate::EMBEDDED_FILES.get_file("web/dist/index.html")
-                .map(|f| f.contents().to_vec())
-        });
-
-    match bytes {
-        Some(b) => {
-            let ct = mime_type(&rel);
-            (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, ct)], b).into_response()
-        }
-        None => (StatusCode::NOT_FOUND, "not found").into_response(),
-    }
+    // Try serving from embedded bytes first, then from disk
+    serve_static_file(&rel).await
 }
+
+async fn serve_static_file(rel: &str) -> Response {
+    // 1) Try embedded bytes (compiled into binary via build.rs)
+    if let Some(bytes) = get_embedded(rel) {
+        let ct = mime_type(rel);
+        return (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, ct)], bytes).into_response();
+    }
+    // Embedded SPA fallback (index.html)
+    if let Some(bytes) = get_embedded("index.html") {
+        let ct = "text/html; charset=utf-8";
+        return (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, ct)], bytes).into_response();
+    }
+    // 2) Fall back to disk (useful in development without embedding)
+    let candidate_dirs = ["web/dist", "../web/dist", "./dist"];
+    for dir in &candidate_dirs {
+        let path = std::path::Path::new(dir).join(rel);
+        if path.exists() && path.is_file() {
+            if let Ok(bytes) = tokio::fs::read(&path).await {
+                let ct = mime_type(rel);
+                return (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, ct)], bytes).into_response();
+            }
+        }
+        // SPA fallback: serve index.html for unknown routes
+        let index = std::path::Path::new(dir).join("index.html");
+        if index.exists() {
+            if let Ok(bytes) = tokio::fs::read(&index).await {
+                return (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")], bytes).into_response();
+            }
+        }
+    }
+    (StatusCode::NOT_FOUND, "Frontend not found. Build the web UI with: cd web && npm run build").into_response()
+}
+
+/// Returns embedded static file bytes. Populated by build.rs at compile time.
+fn get_embedded(rel: &str) -> Option<Vec<u8>> {
+    EMBEDDED_ASSETS.get(rel).map(|b| b.to_vec())
+}
+
 
 pub async fn serve_manifest(State(state): State<AppState>) -> Response {
     let entry = state.config.read().await.admin.safe_entry.clone();
