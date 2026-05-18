@@ -60,17 +60,15 @@ pub async fn issue_cert(rule: &TlsRule) -> anyhow::Result<(String, String, Strin
         None
     };
 
-    // instant-acme 0.7: ExternalAccountKey { id: String, key: Key }
-    // Account::create takes Option<&ExternalAccountKey>
-    let eab_key: Option<instant_acme::ExternalAccountKey> = match eab {
-        Some((kid, raw_bytes)) => {
-            Some(instant_acme::ExternalAccountKey {
-                id: kid,
-                key: instant_acme::Key::Hs256(raw_bytes),
-            })
-        }
-        None => None,
-    };
+    // instant-acme 0.7.2: ExternalAccountKey<'a> { id: &'a str, key: &'a [u8] }
+    // We keep the raw bytes in an owned variable so references stay valid
+    let eab_bytes: Option<(String, Vec<u8>)> = eab;
+    let eab_key: Option<instant_acme::ExternalAccountKey<'_>> = eab_bytes
+        .as_ref()
+        .map(|(kid, raw_bytes)| instant_acme::ExternalAccountKey {
+            id: kid.as_str(),
+            key: raw_bytes.as_slice(),
+        });
 
     let (account, _) = Account::create(&new_account, &directory, eab_key.as_ref())
         .await
