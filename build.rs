@@ -1,12 +1,7 @@
 //! Build script: embeds web/dist/* into the binary as a static byte map.
 //! If web/dist is empty or missing, the binary serves files from disk at runtime.
 
-use std::{
-    collections::BTreeMap,
-    fs,
-    path::Path,
-    io::Write,
-};
+use std::{collections::BTreeMap, fs, io::Write, path::Path};
 
 fn main() {
     let dist = Path::new("web/dist");
@@ -31,7 +26,9 @@ fn main() {
     for (key, bytes) in &entries {
         write!(f, "    ({:?}, &[", key).unwrap();
         for (i, b) in bytes.iter().enumerate() {
-            if i > 0 { write!(f, ",").unwrap(); }
+            if i > 0 {
+                write!(f, ",").unwrap();
+            }
             write!(f, "{}", b).unwrap();
         }
         writeln!(f, "]),").unwrap();
@@ -39,7 +36,9 @@ fn main() {
 
     writeln!(f, "];").unwrap();
 
-    writeln!(f, "
+    writeln!(
+        f,
+        "
 pub struct EmbeddedAssets;
 
 impl EmbeddedAssets {{
@@ -51,13 +50,17 @@ impl EmbeddedAssets {{
 }}
 
 pub static EMBEDDED_ASSETS: EmbeddedAssets = EmbeddedAssets;
-").unwrap();
+"
+    )
+    .unwrap();
 
     println!("cargo:warning=Embedded {} frontend files", entries.len());
 }
 
 fn collect_files(base: &Path, dir: &Path, out: &mut BTreeMap<String, Vec<u8>>) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {

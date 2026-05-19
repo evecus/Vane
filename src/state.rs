@@ -20,8 +20,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub struct AppState {
     pub config: Arc<RwLock<Config>>,
     pub data: Arc<RwLock<RuntimeData>>,
-    pub sessions: Arc<RwLock<HashMap<String, String>>>,      // token -> username
-    pub session_expiry: Arc<RwLock<HashMap<String, i64>>>,   // token -> unix timestamp
+    pub sessions: Arc<RwLock<HashMap<String, String>>>, // token -> username
+    pub session_expiry: Arc<RwLock<HashMap<String, i64>>>, // token -> unix timestamp
     pub login_attempts: Arc<RwLock<HashMap<String, (u32, Instant)>>>, // ip -> (count, window_start)
     pub engines: RuntimeEngines,
     pub root: PathBuf,
@@ -90,7 +90,9 @@ impl AppState {
         self.engines.apply_portforwards(&d.portforward).await;
         self.engines.apply_ddns(&d.ddns, self.data.clone()).await;
         self.engines.apply_webservice(&d.webservice, &d.tls).await;
-        self.engines.apply_tls(&d.tls, self.data.clone(), self.config.read().await.clone()).await;
+        self.engines
+            .apply_tls(&d.tls, self.data.clone(), self.config.read().await.clone())
+            .await;
     }
 
     /// Re-run TLS cert matching for all web routes, then restart web service engines.

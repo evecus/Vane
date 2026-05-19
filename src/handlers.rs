@@ -16,27 +16,46 @@ use crate::{
 
 include!(concat!(env!("OUT_DIR"), "/embedded_assets.rs"));
 
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 fn unauthorized() -> Response {
-    (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":"unauthorized"}))).into_response()
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({"error":"unauthorized"})),
+    )
+        .into_response()
 }
 
 fn forbidden() -> Response {
-    (StatusCode::FORBIDDEN, Json(serde_json::json!({"error":"forbidden"}))).into_response()
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({"error":"forbidden"})),
+    )
+        .into_response()
 }
 
 fn not_found(msg: &str) -> Response {
-    (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": msg}))).into_response()
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"error": msg})),
+    )
+        .into_response()
 }
 
 fn bad_request(msg: &str) -> Response {
-    (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": msg}))).into_response()
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({"error": msg})),
+    )
+        .into_response()
 }
 
 fn internal(msg: &str) -> Response {
-    (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": msg}))).into_response()
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({"error": msg})),
+    )
+        .into_response()
 }
 
 fn ok_json(v: serde_json::Value) -> Response {
@@ -91,7 +110,12 @@ async fn authorized(state: &AppState, headers: &HeaderMap) -> bool {
     false
 }
 
-async fn ipfilter_pass(state: &AppState, headers: &HeaderMap, scope_type: &str, target_id: &str) -> bool {
+async fn ipfilter_pass(
+    state: &AppState,
+    headers: &HeaderMap,
+    scope_type: &str,
+    target_id: &str,
+) -> bool {
     let ip = match client_ip(headers) {
         Some(ip) => ip,
         None => return true,
@@ -99,22 +123,36 @@ async fn ipfilter_pass(state: &AppState, headers: &HeaderMap, scope_type: &str, 
 
     let rules = state.data.read().await.ipfilter.clone();
     for rule in rules {
-        if !rule.enabled { continue; }
-        if !scope_matches(&rule.scopes, scope_type, target_id) { continue; }
+        if !rule.enabled {
+            continue;
+        }
+        if !scope_matches(&rule.scopes, scope_type, target_id) {
+            continue;
+        }
 
         let mut all_ips: Vec<String> = rule.manual_ips.clone();
-        for att in &rule.attachments { all_ips.extend(att.ips.clone()); }
+        for att in &rule.attachments {
+            all_ips.extend(att.ips.clone());
+        }
 
         let matched = ip_in_list(ip, &all_ips);
-        return if rule.mode == "blacklist" { !matched } else { matched };
+        return if rule.mode == "blacklist" {
+            !matched
+        } else {
+            matched
+        };
     }
     true
 }
 
 fn scope_matches(scopes: &[IpFilterScope], scope_type: &str, target_id: &str) -> bool {
     for s in scopes {
-        if s.scope_type != scope_type { continue; }
-        if s.target_id.is_empty() || s.target_id == target_id { return true; }
+        if s.scope_type != scope_type {
+            continue;
+        }
+        if s.target_id.is_empty() || s.target_id == target_id {
+            return true;
+        }
     }
     false
 }
@@ -122,11 +160,17 @@ fn scope_matches(scopes: &[IpFilterScope], scope_type: &str, target_id: &str) ->
 fn ip_in_list(ip: IpAddr, list: &[String]) -> bool {
     for entry in list {
         let entry = entry.trim();
-        if entry.is_empty() { continue; }
+        if entry.is_empty() {
+            continue;
+        }
         if let Ok(net) = entry.parse::<ipnet::IpNet>() {
-            if net.contains(&ip) { return true; }
+            if net.contains(&ip) {
+                return true;
+            }
         } else if let Ok(parsed) = entry.parse::<IpAddr>() {
-            if parsed == ip { return true; }
+            if parsed == ip {
+                return true;
+            }
         }
     }
     false
@@ -161,16 +205,27 @@ pub async fn spa_fallback(State(state): State<AppState>, req: Request) -> Respon
 
     // Assets bypass safe_entry check
     let always_allowed = uri_path.starts_with("/assets/")
-        || matches!(uri_path.as_str(),
-            "/favicon.svg" | "/favicon.ico" | "/favicon.png"
-            | "/icon-192.png" | "/icon-512.png" | "/apple-touch-icon.png"
-            | "/robots.txt" | "/manifest.json");
+        || matches!(
+            uri_path.as_str(),
+            "/favicon.svg"
+                | "/favicon.ico"
+                | "/favicon.png"
+                | "/icon-192.png"
+                | "/icon-512.png"
+                | "/apple-touch-icon.png"
+                | "/robots.txt"
+                | "/manifest.json"
+        );
 
     if !always_allowed && !safe.is_empty() {
         let prefix = format!("/{}", safe.trim_matches('/'));
         if p.starts_with(prefix.as_str()) {
             let stripped = &p[prefix.len()..];
-            p = if stripped.is_empty() || stripped == "/" { "/" } else { stripped };
+            p = if stripped.is_empty() || stripped == "/" {
+                "/"
+            } else {
+                stripped
+            };
         } else if p != "/" {
             return (StatusCode::FORBIDDEN, "forbidden").into_response();
         }
@@ -190,12 +245,22 @@ async fn serve_static_file(rel: &str) -> Response {
     // 1) Try embedded bytes (compiled into binary via build.rs)
     if let Some(bytes) = get_embedded(rel) {
         let ct = mime_type(rel);
-        return (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, ct)], bytes).into_response();
+        return (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, ct)],
+            bytes,
+        )
+            .into_response();
     }
     // Embedded SPA fallback (index.html)
     if let Some(bytes) = get_embedded("index.html") {
         let ct = "text/html; charset=utf-8";
-        return (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, ct)], bytes).into_response();
+        return (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, ct)],
+            bytes,
+        )
+            .into_response();
     }
     // 2) Fall back to disk (useful in development without embedding)
     let candidate_dirs = ["web/dist", "../web/dist", "./dist"];
@@ -204,25 +269,38 @@ async fn serve_static_file(rel: &str) -> Response {
         if path.exists() && path.is_file() {
             if let Ok(bytes) = tokio::fs::read(&path).await {
                 let ct = mime_type(rel);
-                return (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, ct)], bytes).into_response();
+                return (
+                    StatusCode::OK,
+                    [(axum::http::header::CONTENT_TYPE, ct)],
+                    bytes,
+                )
+                    .into_response();
             }
         }
         // SPA fallback: serve index.html for unknown routes
         let index = std::path::Path::new(dir).join("index.html");
         if index.exists() {
             if let Ok(bytes) = tokio::fs::read(&index).await {
-                return (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")], bytes).into_response();
+                return (
+                    StatusCode::OK,
+                    [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                    bytes,
+                )
+                    .into_response();
             }
         }
     }
-    (StatusCode::NOT_FOUND, "Frontend not found. Build the web UI with: cd web && npm run build").into_response()
+    (
+        StatusCode::NOT_FOUND,
+        "Frontend not found. Build the web UI with: cd web && npm run build",
+    )
+        .into_response()
 }
 
 /// Returns embedded static file bytes. Populated by build.rs at compile time.
 fn get_embedded(rel: &str) -> Option<Vec<u8>> {
     EMBEDDED_ASSETS.get(rel).map(|b| b.to_vec())
 }
-
 
 pub async fn serve_manifest(State(state): State<AppState>) -> Response {
     let entry = state.config.read().await.admin.safe_entry.clone();
@@ -286,7 +364,8 @@ pub async fn login(
                 return (
                     StatusCode::TOO_MANY_REQUESTS,
                     Json(serde_json::json!({"error":"登录尝试次数过多，请10分钟后重试"})),
-                ).into_response();
+                )
+                    .into_response();
             }
         }
     }
@@ -312,21 +391,32 @@ pub async fn login(
 
     if !ok {
         let mut a = state.login_attempts.write().await;
-        let e = a.entry(ip.clone()).or_insert((0, std::time::Instant::now()));
+        let e = a
+            .entry(ip.clone())
+            .or_insert((0, std::time::Instant::now()));
         e.0 += 1;
         e.1 = std::time::Instant::now();
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({"error":"用户名或密码错误"})),
-        ).into_response();
+        )
+            .into_response();
     }
 
     state.login_attempts.write().await.remove(&ip);
 
     let token = generate_token();
     let exp = chrono::Utc::now().timestamp() + 86400;
-    state.sessions.write().await.insert(token.clone(), req.username.clone());
-    state.session_expiry.write().await.insert(token.clone(), exp);
+    state
+        .sessions
+        .write()
+        .await
+        .insert(token.clone(), req.username.clone());
+    state
+        .session_expiry
+        .write()
+        .await
+        .insert(token.clone(), exp);
 
     {
         let mut d = state.data.write().await;
@@ -385,10 +475,14 @@ pub async fn get_dashboard(State(state): State<AppState>, headers: HeaderMap) ->
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
     let d = state.data.read().await;
-    let certs_expiring_soon = d.tls.iter().filter(|c| {
-        let days = c.days_until_expiry();
-        days >= 0 && days <= 30
-    }).count();
+    let certs_expiring_soon = d
+        .tls
+        .iter()
+        .filter(|c| {
+            let days = c.days_until_expiry();
+            days >= 0 && days <= 30
+        })
+        .count();
     let stats = DashboardStats {
         port_forwards: d.portforward.len(),
         ddns: d.ddns.len(),
@@ -439,9 +533,15 @@ pub async fn query_admin_logs(
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
     let action = q.get("action").cloned().unwrap_or_default();
-    let limit: usize = q.get("limit").and_then(|x| x.parse().ok()).unwrap_or(100).min(1000);
+    let limit: usize = q
+        .get("limit")
+        .and_then(|x| x.parse().ok())
+        .unwrap_or(100)
+        .min(1000);
     let mut logs = state.data.read().await.admin_logs.clone();
-    if !action.is_empty() { logs.retain(|x| x.action.contains(&action)); }
+    if !action.is_empty() {
+        logs.retain(|x| x.action.contains(&action));
+    }
     logs.reverse();
     logs.truncate(limit);
     ok_json(serde_json::to_value(&logs).unwrap_or_default())
@@ -484,15 +584,25 @@ pub async fn update_settings(
     let old_port = cfg.admin.port;
     let old_safe_entry = cfg.admin.safe_entry.clone();
 
-    let username_change = req.username.as_ref()
+    let username_change = req
+        .username
+        .as_ref()
         .map(|u| !u.is_empty() && u != &cfg.admin.username)
         .unwrap_or(false);
-    let password_change = req.new_password.as_ref().map(|p| !p.is_empty()).unwrap_or(false);
+    let password_change = req
+        .new_password
+        .as_ref()
+        .map(|p| !p.is_empty())
+        .unwrap_or(false);
 
     if username_change || password_change {
         let cur = req.current_password.as_deref().unwrap_or("");
         if !verify_password(cur, &cfg.admin.password_hash) {
-            return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error":"当前密码错误"}))).into_response();
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error":"当前密码错误"})),
+            )
+                .into_response();
         }
     }
 
@@ -560,15 +670,25 @@ pub async fn backup_settings(State(state): State<AppState>, headers: HeaderMap) 
         "runtime": *state.data.read().await,
     });
     let blob = serde_json::to_vec_pretty(&payload).unwrap_or_default();
-    let filename = format!("vane-backup-{}.json", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
+    let filename = format!(
+        "vane-backup-{}.json",
+        chrono::Utc::now().format("%Y%m%d-%H%M%S")
+    );
     (
         StatusCode::OK,
         [
-            ("content-type".to_string(), "application/octet-stream".to_string()),
-            ("content-disposition".to_string(), format!("attachment; filename=\"{filename}\"")),
+            (
+                "content-type".to_string(),
+                "application/octet-stream".to_string(),
+            ),
+            (
+                "content-disposition".to_string(),
+                format!("attachment; filename=\"{filename}\""),
+            ),
         ],
         blob,
-    ).into_response()
+    )
+        .into_response()
 }
 
 pub async fn restore_settings(
@@ -582,10 +702,16 @@ pub async fn restore_settings(
         Ok(v) => v,
         Err(_) => return bad_request("invalid JSON"),
     };
-    if let Some(c) = v.get("config").and_then(|x| serde_json::from_value(x.clone()).ok()) {
+    if let Some(c) = v
+        .get("config")
+        .and_then(|x| serde_json::from_value(x.clone()).ok())
+    {
         *state.config.write().await = c;
     }
-    if let Some(d) = v.get("runtime").and_then(|x| serde_json::from_value(x.clone()).ok()) {
+    if let Some(d) = v
+        .get("runtime")
+        .and_then(|x| serde_json::from_value(x.clone()).ok())
+    {
         *state.data.write().await = d;
     }
     let _ = state.persist_all().await;
@@ -621,9 +747,15 @@ pub async fn create_port_forward(
 
     rule.normalize();
     let port = rule.effective_listen_port();
-    if port == 0 { return bad_request("无效端口"); }
+    if port == 0 {
+        return bad_request("无效端口");
+    }
     if rule.enabled && !is_port_available(port as u32) {
-        return (StatusCode::CONFLICT, Json(serde_json::json!({"error":"端口已被占用","port":port}))).into_response();
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error":"端口已被占用","port":port})),
+        )
+            .into_response();
     }
 
     rule.id = new_id();
@@ -633,7 +765,9 @@ pub async fn create_port_forward(
     d.portforward.push(rule.clone());
     drop(d);
     let _ = state.persist_all().await;
-    if rule.enabled { state.apply_engines().await; }
+    if rule.enabled {
+        state.apply_engines().await;
+    }
     (StatusCode::CREATED, Json(rule)).into_response()
 }
 
@@ -649,11 +783,21 @@ pub async fn update_port_forward(
     req.normalize();
     let port = req.effective_listen_port();
     // Stop existing engine so port is freed before availability check
-    state.engines.portforward.write().await.remove(&id).map(|tx| tx.send(()));
+    state
+        .engines
+        .portforward
+        .write()
+        .await
+        .remove(&id)
+        .map(|tx| tx.send(()));
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
 
     if req.enabled && !is_port_available(port as u32) {
-        return (StatusCode::CONFLICT, Json(serde_json::json!({"error":"端口已被占用","port":port}))).into_response();
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error":"端口已被占用","port":port})),
+        )
+            .into_response();
     }
 
     let mut d = state.data.write().await;
@@ -662,7 +806,9 @@ pub async fn update_port_forward(
         Some(x) => {
             req.id = id.clone();
             req.created_at = x.created_at.clone();
-            if req.protocol.is_empty() { req.protocol = x.protocol.clone(); }
+            if req.protocol.is_empty() {
+                req.protocol = x.protocol.clone();
+            }
             *x = req.clone();
         }
     }
@@ -699,16 +845,25 @@ pub async fn toggle_port_forward(
     let mut d = state.data.write().await;
     let rule = match d.portforward.iter_mut().find(|x| x.id == id) {
         None => return not_found("not found"),
-        Some(x) => { x.enabled = !x.enabled; x.clone() }
+        Some(x) => {
+            x.enabled = !x.enabled;
+            x.clone()
+        }
     };
     let enabled = rule.enabled;
     let port = rule.effective_listen_port();
 
     if enabled && port > 0 && !is_port_available(port as u32) {
-        if let Some(x) = d.portforward.iter_mut().find(|x| x.id == id) { x.enabled = false; }
+        if let Some(x) = d.portforward.iter_mut().find(|x| x.id == id) {
+            x.enabled = false;
+        }
         drop(d);
         let _ = state.persist_all().await;
-        return (StatusCode::CONFLICT, Json(serde_json::json!({"error":"端口已被占用","port":port}))).into_response();
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error":"端口已被占用","port":port})),
+        )
+            .into_response();
     }
     drop(d);
     let _ = state.persist_all().await;
@@ -722,8 +877,16 @@ pub async fn get_port_forward_stats(
     Path(id): Path<String>,
 ) -> Response {
     require_auth!(&state, &headers);
-    let exists = state.data.read().await.portforward.iter().any(|x| x.id == id);
-    if !exists { return not_found("not found"); }
+    let exists = state
+        .data
+        .read()
+        .await
+        .portforward
+        .iter()
+        .any(|x| x.id == id);
+    if !exists {
+        return not_found("not found");
+    }
     ok_json(serde_json::json!({"history": []}))
 }
 
@@ -748,7 +911,9 @@ pub async fn create_ddns(
     d.ddns.push(rule.clone());
     drop(d);
     let _ = state.persist_all().await;
-    if rule.enabled { state.apply_engines().await; }
+    if rule.enabled {
+        state.apply_engines().await;
+    }
     (StatusCode::CREATED, Json(rule)).into_response()
 }
 
@@ -806,7 +971,10 @@ pub async fn toggle_ddns(
     let mut d = state.data.write().await;
     let enabled = match d.ddns.iter_mut().find(|x| x.id == id) {
         None => return not_found("not found"),
-        Some(x) => { x.enabled = !x.enabled; x.enabled }
+        Some(x) => {
+            x.enabled = !x.enabled;
+            x.enabled
+        }
     };
     drop(d);
     let _ = state.persist_all().await;
@@ -821,7 +989,14 @@ pub async fn update_ddns_refresh_now(
 ) -> Response {
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
-    let rule = state.data.read().await.ddns.iter().find(|x| x.id == id).cloned();
+    let rule = state
+        .data
+        .read()
+        .await
+        .ddns
+        .iter()
+        .find(|x| x.id == id)
+        .cloned();
     match rule {
         None => not_found("not found"),
         Some(r) => {
@@ -836,8 +1011,14 @@ pub async fn update_ddns_refresh_now(
                         x.last_sync_ok = Some(true);
                         x.last_sync_err.clear();
                         x.last_sync_at = at.clone();
-                        x.ip_history.push(IpRecord { ip: ip.clone(), timestamp: at });
-                        if x.ip_history.len() > 100 { let n = x.ip_history.len() - 100; x.ip_history.drain(0..n); }
+                        x.ip_history.push(IpRecord {
+                            ip: ip.clone(),
+                            timestamp: at,
+                        });
+                        if x.ip_history.len() > 100 {
+                            let n = x.ip_history.len() - 100;
+                            x.ip_history.drain(0..n);
+                        }
                     }
                     drop(d);
                     let _ = state.persist_all().await;
@@ -871,8 +1052,13 @@ pub async fn list_iface_ips(
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
     let iface = q.get("iface").cloned().unwrap_or_default();
-    if iface.is_empty() { return bad_request("iface required"); }
-    let version = q.get("version").cloned().unwrap_or_else(|| "ipv4".to_string());
+    if iface.is_empty() {
+        return bad_request("iface required");
+    }
+    let version = q
+        .get("version")
+        .cloned()
+        .unwrap_or_else(|| "ipv4".to_string());
     let ips = collect_iface_ips(&iface, &version);
     ok_json(serde_json::to_value(&ips).unwrap_or_default())
 }
@@ -968,7 +1154,9 @@ fn collect_ipv4_for_iface(iface: &str) -> Vec<String> {
 }
 
 fn parse_proc_ipv6(hex: &str) -> anyhow::Result<String> {
-    if hex.len() != 32 { anyhow::bail!("invalid hex len"); }
+    if hex.len() != 32 {
+        anyhow::bail!("invalid hex len");
+    }
     let mut groups = vec![];
     for i in 0..8 {
         let g = u16::from_str_radix(&hex[i * 4..(i + 1) * 4], 16)?;
@@ -983,13 +1171,19 @@ pub async fn list_webservices(State(state): State<AppState>, headers: HeaderMap)
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
     let d = state.data.read().await;
-    let svcs: Vec<_> = d.webservice.iter().map(|svc| {
-        let mut s = svc.clone();
-        for route in &mut s.routes {
-            if !route.auth_pass_hash.is_empty() { route.auth_pass_hash = "set".to_string(); }
-        }
-        s
-    }).collect();
+    let svcs: Vec<_> = d
+        .webservice
+        .iter()
+        .map(|svc| {
+            let mut s = svc.clone();
+            for route in &mut s.routes {
+                if !route.auth_pass_hash.is_empty() {
+                    route.auth_pass_hash = "set".to_string();
+                }
+            }
+            s
+        })
+        .collect();
     ok_json(serde_json::to_value(&svcs).unwrap_or_default())
 }
 
@@ -1001,9 +1195,15 @@ pub async fn create_webservice(
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
 
-    if svc.listen_port == 0 { return bad_request("无效端口"); }
+    if svc.listen_port == 0 {
+        return bad_request("无效端口");
+    }
     if svc.enabled && !is_port_available(svc.listen_port as u32) {
-        return (StatusCode::CONFLICT, Json(serde_json::json!({"error":"端口已被占用","port":svc.listen_port}))).into_response();
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error":"端口已被占用","port":svc.listen_port})),
+        )
+            .into_response();
     }
 
     svc.id = new_id();
@@ -1013,7 +1213,9 @@ pub async fn create_webservice(
     d.webservice.push(svc.clone());
     drop(d);
     let _ = state.persist_all().await;
-    if svc.enabled { state.apply_engines().await; }
+    if svc.enabled {
+        state.apply_engines().await;
+    }
     (StatusCode::CREATED, Json(svc)).into_response()
 }
 
@@ -1026,11 +1228,21 @@ pub async fn update_webservice(
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
 
-    state.engines.webservice.write().await.remove(&id).map(|tx| tx.send(()));
+    state
+        .engines
+        .webservice
+        .write()
+        .await
+        .remove(&id)
+        .map(|tx| tx.send(()));
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
 
     if req.enabled && !is_port_available(req.listen_port as u32) {
-        return (StatusCode::CONFLICT, Json(serde_json::json!({"error":"端口已被占用","port":req.listen_port}))).into_response();
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error":"端口已被占用","port":req.listen_port})),
+        )
+            .into_response();
     }
 
     let mut d = state.data.write().await;
@@ -1039,7 +1251,9 @@ pub async fn update_webservice(
         Some(x) => {
             req.id = id.clone();
             req.created_at = x.created_at.clone();
-            if req.routes.is_empty() { req.routes = x.routes.clone(); }
+            if req.routes.is_empty() {
+                req.routes = x.routes.clone();
+            }
             *x = req.clone();
         }
     }
@@ -1057,7 +1271,9 @@ pub async fn delete_webservice(
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
     let mut d = state.data.write().await;
-    let route_ids: Vec<String> = d.webservice.iter()
+    let route_ids: Vec<String> = d
+        .webservice
+        .iter()
         .find(|s| s.id == id)
         .map(|s| s.routes.iter().map(|r| r.id.clone()).collect())
         .unwrap_or_default();
@@ -1081,13 +1297,22 @@ pub async fn toggle_webservice(
     let mut d = state.data.write().await;
     let (enabled, port) = match d.webservice.iter_mut().find(|x| x.id == id) {
         None => return not_found("not found"),
-        Some(x) => { x.enabled = !x.enabled; (x.enabled, x.listen_port) }
+        Some(x) => {
+            x.enabled = !x.enabled;
+            (x.enabled, x.listen_port)
+        }
     };
     if enabled && port > 0 && !is_port_available(port as u32) {
-        if let Some(x) = d.webservice.iter_mut().find(|x| x.id == id) { x.enabled = false; }
+        if let Some(x) = d.webservice.iter_mut().find(|x| x.id == id) {
+            x.enabled = false;
+        }
         drop(d);
         let _ = state.persist_all().await;
-        return (StatusCode::CONFLICT, Json(serde_json::json!({"error":"端口已被占用","port":port}))).into_response();
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error":"端口已被占用","port":port})),
+        )
+            .into_response();
     }
     drop(d);
     let _ = state.persist_all().await;
@@ -1107,11 +1332,17 @@ pub async fn list_routes(
     match d.webservice.iter().find(|s| s.id == id) {
         None => not_found("service not found"),
         Some(svc) => {
-            let routes: Vec<_> = svc.routes.iter().map(|r| {
-                let mut r = r.clone();
-                if !r.auth_pass_hash.is_empty() { r.auth_pass_hash = "set".to_string(); }
-                r
-            }).collect();
+            let routes: Vec<_> = svc
+                .routes
+                .iter()
+                .map(|r| {
+                    let mut r = r.clone();
+                    if !r.auth_pass_hash.is_empty() {
+                        r.auth_pass_hash = "set".to_string();
+                    }
+                    r
+                })
+                .collect();
             ok_json(serde_json::to_value(&routes).unwrap_or_default())
         }
     }
@@ -1155,7 +1386,11 @@ pub async fn create_route(
         match crate::engines::find_tls_cert(&d.tls, &route.domain) {
             Some(cert) => {
                 route.matched_cert_id = cert.id.clone();
-                route.cert_status = if cert.status == "active" { "ok".to_string() } else { "cert_inactive".to_string() };
+                route.cert_status = if cert.status == "active" {
+                    "ok".to_string()
+                } else {
+                    "cert_inactive".to_string()
+                };
             }
             None => {
                 route.matched_cert_id.clear();
@@ -1206,7 +1441,9 @@ pub async fn update_route(
     route.created_at = existing.created_at.clone();
 
     if route.auth_enabled {
-        if route.auth_user.is_empty() { return bad_request("开启访问验证时，账号不能为空"); }
+        if route.auth_user.is_empty() {
+            return bad_request("开启访问验证时，账号不能为空");
+        }
         if req.auth_pass.is_empty() && existing.auth_pass_hash.is_empty() {
             return bad_request("开启访问验证时，密码不能为空");
         }
@@ -1227,7 +1464,11 @@ pub async fn update_route(
     match crate::engines::find_tls_cert(&tls_rules_clone, &route.domain) {
         Some(cert) => {
             route.matched_cert_id = cert.id.clone();
-            route.cert_status = if cert.status == "active" { "ok".to_string() } else { "cert_inactive".to_string() };
+            route.cert_status = if cert.status == "active" {
+                "ok".to_string()
+            } else {
+                "cert_inactive".to_string()
+            };
         }
         None => {
             route.matched_cert_id.clear();
@@ -1236,7 +1477,9 @@ pub async fn update_route(
     }
 
     if let Some(svc) = d.webservice.iter_mut().find(|s| s.id == svc_id) {
-        if let Some(r) = svc.routes.iter_mut().find(|r| r.id == rid) { *r = route.clone(); }
+        if let Some(r) = svc.routes.iter_mut().find(|r| r.id == rid) {
+            *r = route.clone();
+        }
     }
     drop(d);
     let _ = state.persist_all().await;
@@ -1277,7 +1520,10 @@ pub async fn toggle_route(
     };
     let enabled = match svc.routes.iter_mut().find(|r| r.id == rid) {
         None => return not_found("route not found"),
-        Some(r) => { r.enabled = !r.enabled; r.enabled }
+        Some(r) => {
+            r.enabled = !r.enabled;
+            r.enabled
+        }
     };
     drop(d);
     let _ = state.persist_all().await;
@@ -1293,8 +1539,15 @@ pub async fn get_access_logs(
     Path(id): Path<String>,
 ) -> Response {
     require_auth!(&state, &headers);
-    let mut logs: Vec<_> = state.data.read().await.access_logs.iter()
-        .filter(|x| x.service_id == id).cloned().collect();
+    let mut logs: Vec<_> = state
+        .data
+        .read()
+        .await
+        .access_logs
+        .iter()
+        .filter(|x| x.service_id == id)
+        .cloned()
+        .collect();
     logs.reverse();
     logs.truncate(200);
     ok_json(serde_json::to_value(&logs).unwrap_or_default())
@@ -1316,10 +1569,18 @@ pub async fn query_access_logs(
     require_auth!(&state, &headers);
     let service = q.get("service_id").cloned().unwrap_or_default();
     let path_kw = q.get("path").cloned().unwrap_or_default();
-    let limit: usize = q.get("limit").and_then(|x| x.parse().ok()).unwrap_or(100).min(1000);
+    let limit: usize = q
+        .get("limit")
+        .and_then(|x| x.parse().ok())
+        .unwrap_or(100)
+        .min(1000);
     let mut logs = state.data.read().await.access_logs.clone();
-    if !service.is_empty() { logs.retain(|x| x.service_id == service); }
-    if !path_kw.is_empty() { logs.retain(|x| x.domain.contains(&path_kw)); }
+    if !service.is_empty() {
+        logs.retain(|x| x.service_id == service);
+    }
+    if !path_kw.is_empty() {
+        logs.retain(|x| x.domain.contains(&path_kw));
+    }
     logs.reverse();
     logs.truncate(limit);
     ok_json(serde_json::to_value(&logs).unwrap_or_default())
@@ -1345,7 +1606,10 @@ pub async fn append_access_log(
     };
     let mut d = state.data.write().await;
     d.access_logs.push(log);
-    if d.access_logs.len() > 5000 { let n = d.access_logs.len() - 5000; d.access_logs.drain(0..n); }
+    if d.access_logs.len() > 5000 {
+        let n = d.access_logs.len() - 5000;
+        d.access_logs.drain(0..n);
+    }
     let _ = state.persist_all().await;
     ok_json(serde_json::json!({"ok": true}))
 }
@@ -1367,7 +1631,14 @@ pub async fn clear_access_logs(
 pub async fn list_tls(State(state): State<AppState>, headers: HeaderMap) -> Response {
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
-    let views: Vec<TlsCertView> = state.data.read().await.tls.iter().map(TlsCertView::from).collect();
+    let views: Vec<TlsCertView> = state
+        .data
+        .read()
+        .await
+        .tls
+        .iter()
+        .map(TlsCertView::from)
+        .collect();
     ok_json(serde_json::to_value(&views).unwrap_or_default())
 }
 
@@ -1380,14 +1651,18 @@ pub async fn create_tls(
     require_admin_ipfilter!(&state, &headers);
     cert.id = new_id();
     cert.created_at = now_rfc3339();
-    if cert.status.is_empty() { cert.status = "pending".to_string(); }
+    if cert.status.is_empty() {
+        cert.status = "pending".to_string();
+    }
     let mut d = state.data.write().await;
     d.tls.push(cert.clone());
     drop(d);
     let _ = state.persist_all().await;
     // Trigger route rematch so new cert is picked up
     let state2 = state.clone();
-    tokio::spawn(async move { state2.rematch_and_restart().await; });
+    tokio::spawn(async move {
+        state2.rematch_and_restart().await;
+    });
     let view = TlsCertView::from(&cert);
     (StatusCode::CREATED, Json(view)).into_response()
 }
@@ -1411,7 +1686,9 @@ pub async fn update_tls(
                 req.key_pem = x.key_pem.clone();
                 req.issued_at = x.issued_at.clone();
                 req.expires_at = x.expires_at.clone();
-                if req.status.is_empty() { req.status = x.status.clone(); }
+                if req.status.is_empty() {
+                    req.status = x.status.clone();
+                }
             }
             *x = req.clone();
         }
@@ -1419,7 +1696,9 @@ pub async fn update_tls(
     drop(d);
     let _ = state.persist_all().await;
     let state2 = state.clone();
-    tokio::spawn(async move { state2.rematch_and_restart().await; });
+    tokio::spawn(async move {
+        state2.rematch_and_restart().await;
+    });
     ok_json(serde_json::json!({"ok": true}))
 }
 
@@ -1435,7 +1714,9 @@ pub async fn delete_tls(
     drop(d);
     let _ = state.persist_all().await;
     let state2 = state.clone();
-    tokio::spawn(async move { state2.rematch_and_restart().await; });
+    tokio::spawn(async move {
+        state2.rematch_and_restart().await;
+    });
     ok_json(serde_json::json!({"ok": true}))
 }
 
@@ -1449,12 +1730,17 @@ pub async fn toggle_tls(
     let mut d = state.data.write().await;
     let enabled = match d.tls.iter_mut().find(|x| x.id == id) {
         None => return not_found("not found"),
-        Some(x) => { x.enabled = !x.enabled; x.enabled }
+        Some(x) => {
+            x.enabled = !x.enabled;
+            x.enabled
+        }
     };
     drop(d);
     let _ = state.persist_all().await;
     let state2 = state.clone();
-    tokio::spawn(async move { state2.rematch_and_restart().await; });
+    tokio::spawn(async move {
+        state2.rematch_and_restart().await;
+    });
     ok_json(serde_json::json!({"enabled": enabled}))
 }
 
@@ -1470,13 +1756,26 @@ pub async fn issue_tls(
         let mut d = state.data.write().await;
         match d.tls.iter_mut().find(|x| x.id == id) {
             None => return not_found("cert not found"),
-            Some(x) => { x.status = "pending".to_string(); x.error_msg.clear(); }
+            Some(x) => {
+                x.status = "pending".to_string();
+                x.error_msg.clear();
+            }
         }
     }
     let _ = state.persist_all().await;
 
-    let cert = state.data.read().await.tls.iter().find(|x| x.id == id).cloned();
-    let cert = match cert { None => return not_found("cert not found"), Some(c) => c };
+    let cert = state
+        .data
+        .read()
+        .await
+        .tls
+        .iter()
+        .find(|x| x.id == id)
+        .cloned();
+    let cert = match cert {
+        None => return not_found("cert not found"),
+        Some(c) => c,
+    };
 
     let state2 = state.clone();
     let id2 = id.clone();
@@ -1509,7 +1808,11 @@ pub async fn issue_tls(
         }
     });
 
-    (StatusCode::ACCEPTED, Json(serde_json::json!({"ok": true, "message": "证书申请已开始，请稍后刷新查看状态"}))).into_response()
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({"ok": true, "message": "证书申请已开始，请稍后刷新查看状态"})),
+    )
+        .into_response()
 }
 
 pub async fn renew_tls(
@@ -1532,13 +1835,19 @@ pub async fn upload_tls(
     while let Ok(Some(field)) = multipart.next_field().await {
         let field_name = field.name().unwrap_or("").to_string();
         let fname = field.file_name().unwrap_or("").to_lowercase();
-        let data = match field.bytes().await { Ok(b) => b.to_vec(), Err(_) => continue };
+        let data = match field.bytes().await {
+            Ok(b) => b.to_vec(),
+            Err(_) => continue,
+        };
         if fname.ends_with(".zip") || field_name == "file" {
             zip_bytes = Some(data);
         }
     }
 
-    let zip_data = match zip_bytes { Some(d) => d, None => return bad_request("请上传证书 ZIP 文件") };
+    let zip_data = match zip_bytes {
+        Some(d) => d,
+        None => return bad_request("请上传证书 ZIP 文件"),
+    };
 
     use std::io::Read;
     let cursor = std::io::Cursor::new(&zip_data);
@@ -1552,24 +1861,39 @@ pub async fn upload_tls(
     let mut issuer_pem = String::new();
 
     for i in 0..zr.len() {
-        let mut zf = match zr.by_index(i) { Ok(f) => f, Err(_) => continue };
+        let mut zf = match zr.by_index(i) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
         let fname = zf.name().to_lowercase();
         let fname = std::path::Path::new(&fname)
-            .file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
         let ext = fname.rsplit('.').next().unwrap_or("").to_string();
         let mut content = String::new();
         let _ = zf.read_to_string(&mut content);
 
         match fname.as_str() {
-            "cert.pem" | "fullchain.pem" | "certificate.pem" => { cert_pem = content; continue; }
-            "key.pem" | "privkey.pem" | "private.pem" | "privatekey.pem" => { key_pem = content; continue; }
+            "cert.pem" | "fullchain.pem" | "certificate.pem" => {
+                cert_pem = content;
+                continue;
+            }
+            "key.pem" | "privkey.pem" | "private.pem" | "privatekey.pem" => {
+                key_pem = content;
+                continue;
+            }
             _ => {}
         }
         match ext.as_str() {
             "key" => key_pem = content,
             "crt" | "pem" | "cer" => {
-                if fname.contains("issuer") || fname.contains("ca") { issuer_pem = content; }
-                else if cert_pem.is_empty() { cert_pem = content; }
+                if fname.contains("issuer") || fname.contains("ca") {
+                    issuer_pem = content;
+                } else if cert_pem.is_empty() {
+                    cert_pem = content;
+                }
             }
             _ => {}
         }
@@ -1592,10 +1916,19 @@ pub async fn upload_tls(
     let domain = domains.first().cloned().unwrap_or_default();
 
     let cert = TlsRule {
-        id: new_id(), name: domain.clone(), domain: domain.clone(), domains,
-        source: "manual".to_string(), cert_pem, key_pem,
-        issued_at: now_rfc3339(), expires_at, auto_renew: false,
-        status: "active".to_string(), created_at: now_rfc3339(), enabled: true,
+        id: new_id(),
+        name: domain.clone(),
+        domain: domain.clone(),
+        domains,
+        source: "manual".to_string(),
+        cert_pem,
+        key_pem,
+        issued_at: now_rfc3339(),
+        expires_at,
+        auto_renew: false,
+        status: "active".to_string(),
+        created_at: now_rfc3339(),
+        enabled: true,
         ..Default::default()
     };
 
@@ -1604,7 +1937,9 @@ pub async fn upload_tls(
     drop(d);
     let _ = state.persist_all().await;
     let state2 = state.clone();
-    tokio::spawn(async move { state2.rematch_and_restart().await; });
+    tokio::spawn(async move {
+        state2.rematch_and_restart().await;
+    });
 
     let view = TlsCertView::from(&cert);
     (StatusCode::CREATED, Json(view)).into_response()
@@ -1616,7 +1951,14 @@ pub async fn download_tls(
     Path(id): Path<String>,
 ) -> Response {
     require_auth!(&state, &headers);
-    let cert = state.data.read().await.tls.iter().find(|x| x.id == id).cloned();
+    let cert = state
+        .data
+        .read()
+        .await
+        .tls
+        .iter()
+        .find(|x| x.id == id)
+        .cloned();
     match cert {
         None => not_found("cert not found"),
         Some(c) => {
@@ -1624,16 +1966,24 @@ pub async fn download_tls(
                 return bad_request("证书尚未签发，无法下载");
             }
             let safe_name = sanitize_filename(&c.domain);
-            let safe_name = if safe_name.is_empty() { "cert".to_string() } else { safe_name };
+            let safe_name = if safe_name.is_empty() {
+                "cert".to_string()
+            } else {
+                safe_name
+            };
             let zip_bytes = build_cert_zip(&c, &safe_name);
             (
                 StatusCode::OK,
                 [
                     ("content-type".to_string(), "application/zip".to_string()),
-                    ("content-disposition".to_string(), format!("attachment; filename=\"{safe_name}-certs.zip\"")),
+                    (
+                        "content-disposition".to_string(),
+                        format!("attachment; filename=\"{safe_name}-certs.zip\""),
+                    ),
                 ],
                 zip_bytes,
-            ).into_response()
+            )
+                .into_response()
         }
     }
 }
@@ -1644,9 +1994,19 @@ pub async fn get_tls_pem(
     Path(id): Path<String>,
 ) -> Response {
     require_auth!(&state, &headers);
-    match state.data.read().await.tls.iter().find(|x| x.id == id).cloned() {
+    match state
+        .data
+        .read()
+        .await
+        .tls
+        .iter()
+        .find(|x| x.id == id)
+        .cloned()
+    {
         None => not_found("cert not found"),
-        Some(c) => ok_json(serde_json::json!({"cert_pem": c.cert_pem, "key_pem": c.key_pem, "domain": c.domain})),
+        Some(c) => ok_json(
+            serde_json::json!({"cert_pem": c.cert_pem, "key_pem": c.key_pem, "domain": c.domain}),
+        ),
     }
 }
 
@@ -1654,20 +2014,31 @@ pub async fn get_tls_pem(
 
 fn extract_domains_from_cert(pem_str: &str) -> Vec<String> {
     use base64::Engine;
-    let b64: String = pem_str.lines().filter(|l| !l.starts_with("-----")).collect::<Vec<_>>().join("");
-    let der = match base64::engine::general_purpose::STANDARD.decode(&b64) { Ok(d) => d, Err(_) => return vec![] };
+    let b64: String = pem_str
+        .lines()
+        .filter(|l| !l.starts_with("-----"))
+        .collect::<Vec<_>>()
+        .join("");
+    let der = match base64::engine::general_purpose::STANDARD.decode(&b64) {
+        Ok(d) => d,
+        Err(_) => return vec![],
+    };
     if let Ok((_, cert)) = x509_parser::parse_x509_certificate(&der) {
         let mut domains: Vec<String> = vec![];
         if let Ok(Some(san)) = cert.subject_alternative_name() {
             for name in &san.value.general_names {
                 if let x509_parser::extensions::GeneralName::DNSName(dns) = name {
-                    if !domains.contains(&dns.to_string()) { domains.push(dns.to_string()); }
+                    if !domains.contains(&dns.to_string()) {
+                        domains.push(dns.to_string());
+                    }
                 }
             }
         }
         if domains.is_empty() {
             if let Some(cn) = cert.subject().iter_common_name().next() {
-                if let Ok(s) = cn.as_str() { domains.push(s.to_string()); }
+                if let Ok(s) = cn.as_str() {
+                    domains.push(s.to_string());
+                }
             }
         }
         return domains;
@@ -1677,8 +2048,14 @@ fn extract_domains_from_cert(pem_str: &str) -> Vec<String> {
 
 fn extract_expiry_from_cert(pem_str: &str) -> Option<String> {
     use base64::Engine;
-    let b64: String = pem_str.lines().filter(|l| !l.starts_with("-----")).collect::<Vec<_>>().join("");
-    let der = base64::engine::general_purpose::STANDARD.decode(&b64).ok()?;
+    let b64: String = pem_str
+        .lines()
+        .filter(|l| !l.starts_with("-----"))
+        .collect::<Vec<_>>()
+        .join("");
+    let der = base64::engine::general_purpose::STANDARD
+        .decode(&b64)
+        .ok()?;
     let (_, cert) = x509_parser::parse_x509_certificate(&der).ok()?;
     let ts = cert.validity().not_after.timestamp();
     let dt = chrono::DateTime::from_timestamp(ts, 0)?;
@@ -1686,17 +2063,24 @@ fn extract_expiry_from_cert(pem_str: &str) -> Option<String> {
 }
 
 fn validate_cert_key(cert_pem: &str, key_pem: &str) -> anyhow::Result<()> {
-    if !cert_pem.contains("-----BEGIN CERTIFICATE-----") { anyhow::bail!("invalid certificate PEM"); }
-    if !key_pem.contains("-----BEGIN") || !key_pem.contains("KEY-----") { anyhow::bail!("invalid private key PEM"); }
+    if !cert_pem.contains("-----BEGIN CERTIFICATE-----") {
+        anyhow::bail!("invalid certificate PEM");
+    }
+    if !key_pem.contains("-----BEGIN") || !key_pem.contains("KEY-----") {
+        anyhow::bail!("invalid private key PEM");
+    }
     Ok(())
 }
 
 fn sanitize_filename(s: &str) -> String {
-    s.chars().map(|c| match c {
-        '*' => '_',
-        '"' | '\r' | '\n' | '\\' | '/' | ':' | '?' | '<' | '>' | '|' => '\0',
-        other => other,
-    }).filter(|c| *c != '\0').collect()
+    s.chars()
+        .map(|c| match c {
+            '*' => '_',
+            '"' | '\r' | '\n' | '\\' | '/' | ':' | '?' | '<' | '>' | '|' => '\0',
+            other => other,
+        })
+        .filter(|c| *c != '\0')
+        .collect()
 }
 
 fn split_cert_chain(pem_chain: &str) -> (String, String) {
@@ -1710,8 +2094,12 @@ fn split_cert_chain(pem_chain: &str) -> (String, String) {
             if let Some(end) = chunk.find("-----END") {
                 if let Some(end2) = chunk[end..].find("-----\n") {
                     let block = &chunk[..end + end2 + 6];
-                    if first { server = block.to_string(); first = false; }
-                    else { issuer.push_str(block); }
+                    if first {
+                        server = block.to_string();
+                        first = false;
+                    } else {
+                        issuer.push_str(block);
+                    }
                     rest = &chunk[end + end2 + 6..];
                     continue;
                 }
@@ -1727,8 +2115,8 @@ fn build_cert_zip(cert: &TlsRule, safe_name: &str) -> Vec<u8> {
     let mut buf = std::io::Cursor::new(Vec::new());
     {
         let mut zw = zip::ZipWriter::new(&mut buf);
-        let opts = zip::write::FileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
+        let opts =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
         let (server_cert, issuer_cert) = split_cert_chain(&cert.cert_pem);
 
@@ -1752,7 +2140,9 @@ fn build_cert_zip(cert: &TlsRule, safe_name: &str) -> Vec<u8> {
 
         let domains = if cert.domains.is_empty() && !cert.domain.is_empty() {
             vec![cert.domain.clone()]
-        } else { cert.domains.clone() };
+        } else {
+            cert.domains.clone()
+        };
         let info = serde_json::json!({
             "domain": cert.domain, "domains": domains,
             "issued_at": cert.issued_at, "expires_at": cert.expires_at,
@@ -1780,21 +2170,58 @@ pub async fn list_ipfilter_targets(State(state): State<AppState>, headers: Heade
     let d = state.data.read().await;
 
     #[derive(serde::Serialize)]
-    struct TargetItem { #[serde(rename = "type")] target_type: String, target_id: String, target_name: String }
+    struct TargetItem {
+        #[serde(rename = "type")]
+        target_type: String,
+        target_id: String,
+        target_name: String,
+    }
     let mut items: Vec<TargetItem> = vec![
-        TargetItem { target_type: "admin".into(), target_id: "".into(), target_name: "管理后台（全局）".into() },
-        TargetItem { target_type: "portforward".into(), target_id: "".into(), target_name: "端口转发（全部规则）".into() },
+        TargetItem {
+            target_type: "admin".into(),
+            target_id: "".into(),
+            target_name: "管理后台（全局）".into(),
+        },
+        TargetItem {
+            target_type: "portforward".into(),
+            target_id: "".into(),
+            target_name: "端口转发（全部规则）".into(),
+        },
     ];
     for pf in &d.portforward {
-        let name = if pf.name.is_empty() { format!("端口 {}", pf.effective_listen_port()) } else { pf.name.clone() };
-        items.push(TargetItem { target_type: "portforward".into(), target_id: pf.id.clone(), target_name: name });
+        let name = if pf.name.is_empty() {
+            format!("端口 {}", pf.effective_listen_port())
+        } else {
+            pf.name.clone()
+        };
+        items.push(TargetItem {
+            target_type: "portforward".into(),
+            target_id: pf.id.clone(),
+            target_name: name,
+        });
     }
-    items.push(TargetItem { target_type: "webservice".into(), target_id: "".into(), target_name: "网页服务（全部路由）".into() });
+    items.push(TargetItem {
+        target_type: "webservice".into(),
+        target_id: "".into(),
+        target_name: "网页服务（全部路由）".into(),
+    });
     for svc in &d.webservice {
-        let svc_name = if svc.name.is_empty() { format!("服务:{}", svc.listen_port) } else { svc.name.clone() };
+        let svc_name = if svc.name.is_empty() {
+            format!("服务:{}", svc.listen_port)
+        } else {
+            svc.name.clone()
+        };
         for rt in &svc.routes {
-            let rt_name = if rt.name.is_empty() { rt.domain.clone() } else { rt.name.clone() };
-            items.push(TargetItem { target_type: "webservice".into(), target_id: rt.id.clone(), target_name: format!("{svc_name} / {rt_name}") });
+            let rt_name = if rt.name.is_empty() {
+                rt.domain.clone()
+            } else {
+                rt.name.clone()
+            };
+            items.push(TargetItem {
+                target_type: "webservice".into(),
+                target_id: rt.id.clone(),
+                target_name: format!("{svc_name} / {rt_name}"),
+            });
         }
     }
     ok_json(serde_json::to_value(&items).unwrap_or_default())
@@ -1808,7 +2235,9 @@ pub async fn create_ipfilter(
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
 
-    if body.scopes.is_empty() { return bad_request("scopes cannot be empty"); }
+    if body.scopes.is_empty() {
+        return bad_request("scopes cannot be empty");
+    }
 
     let existing = state.data.read().await.ipfilter.clone();
     if let Some(conflict) = has_scope_conflict(&existing, "", &body.scopes) {
@@ -1817,7 +2246,9 @@ pub async fn create_ipfilter(
 
     body.id = new_id();
     body.created_at = now_rfc3339();
-    if body.mode != "blacklist" { body.mode = "whitelist".to_string(); }
+    if body.mode != "blacklist" {
+        body.mode = "whitelist".to_string();
+    }
 
     let mut d = state.data.write().await;
     d.ipfilter.push(body.clone());
@@ -1835,16 +2266,22 @@ pub async fn update_ipfilter(
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
 
-    if body.scopes.is_empty() { return bad_request("scopes cannot be empty"); }
+    if body.scopes.is_empty() {
+        return bad_request("scopes cannot be empty");
+    }
 
     let existing = state.data.read().await.ipfilter.clone();
-    if !existing.iter().any(|r| r.id == id) { return not_found("rule not found"); }
+    if !existing.iter().any(|r| r.id == id) {
+        return not_found("rule not found");
+    }
     if let Some(conflict) = has_scope_conflict(&existing, &id, &body.scopes) {
         return bad_request(&format!("该范围已被其他规则占用: {conflict}"));
     }
 
     body.id = id.clone();
-    if body.mode != "blacklist" { body.mode = "whitelist".to_string(); }
+    if body.mode != "blacklist" {
+        body.mode = "whitelist".to_string();
+    }
 
     let mut d = state.data.write().await;
     if let Some(x) = d.ipfilter.iter_mut().find(|r| r.id == id) {
@@ -1880,11 +2317,21 @@ pub async fn toggle_ipfilter(
     let mut d = state.data.write().await;
     let enabled = match d.ipfilter.iter_mut().find(|x| x.id == id) {
         None => return not_found("rule not found"),
-        Some(x) => { x.enabled = !x.enabled; x.enabled }
+        Some(x) => {
+            x.enabled = !x.enabled;
+            x.enabled
+        }
     };
     drop(d);
     let _ = state.persist_all().await;
-    let rule = state.data.read().await.ipfilter.iter().find(|x| x.id == id).cloned();
+    let rule = state
+        .data
+        .read()
+        .await
+        .ipfilter
+        .iter()
+        .find(|x| x.id == id)
+        .cloned();
     match rule {
         Some(r) => ok_json(serde_json::to_value(&r).unwrap_or_default()),
         None => ok_json(serde_json::json!({"enabled": enabled})),
@@ -1907,7 +2354,9 @@ pub async fn upload_ipfilter_file(
         let fn_fname = field.file_name().unwrap_or("").to_string();
         if fn_name == "file" {
             filename = fn_fname;
-            if let Ok(data) = field.text().await { ips = parse_ip_list(&data); }
+            if let Ok(data) = field.text().await {
+                ips = parse_ip_list(&data);
+            }
         }
     }
 
@@ -1919,24 +2368,40 @@ fn parse_ip_list(text: &str) -> Vec<String> {
     let mut result = vec![];
     for line in text.lines() {
         let line = line.trim();
-        if line.is_empty() || line.starts_with('#') { continue; }
-        if seen.insert(line.to_string()) { result.push(line.to_string()); }
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if seen.insert(line.to_string()) {
+            result.push(line.to_string());
+        }
     }
     result
 }
 
-fn has_scope_conflict(rules: &[IpFilterRule], exclude_id: &str, new_scopes: &[IpFilterScope]) -> Option<String> {
+fn has_scope_conflict(
+    rules: &[IpFilterRule],
+    exclude_id: &str,
+    new_scopes: &[IpFilterScope],
+) -> Option<String> {
     let mut claimed: HashMap<(String, String), bool> = HashMap::new();
     for r in rules {
-        if r.id == exclude_id { continue; }
-        for s in &r.scopes { claimed.insert((s.scope_type.clone(), s.target_id.clone()), true); }
+        if r.id == exclude_id {
+            continue;
+        }
+        for s in &r.scopes {
+            claimed.insert((s.scope_type.clone(), s.target_id.clone()), true);
+        }
     }
     for s in new_scopes {
         if claimed.contains_key(&(s.scope_type.clone(), s.target_id.clone())) {
             let label = if s.target_id.is_empty() {
                 format!("{} (全局)", s.scope_type)
             } else {
-                let name = if s.target_name.is_empty() { s.target_id.clone() } else { s.target_name.clone() };
+                let name = if s.target_name.is_empty() {
+                    s.target_id.clone()
+                } else {
+                    s.target_name.clone()
+                };
                 format!("{}: {name}", s.scope_type)
             };
             return Some(label);
@@ -1945,9 +2410,14 @@ fn has_scope_conflict(rules: &[IpFilterRule], exclude_id: &str, new_scopes: &[Ip
     None
 }
 
-pub fn clean_scopes_for_deleted_target(rules: &mut Vec<IpFilterRule>, scope_type: &str, target_id: &str) {
+pub fn clean_scopes_for_deleted_target(
+    rules: &mut Vec<IpFilterRule>,
+    scope_type: &str,
+    target_id: &str,
+) {
     for rule in rules.iter_mut() {
-        rule.scopes.retain(|s| !(s.scope_type == scope_type && s.target_id == target_id));
+        rule.scopes
+            .retain(|s| !(s.scope_type == scope_type && s.target_id == target_id));
     }
 }
 
@@ -1960,7 +2430,9 @@ pub async fn check_port(
 ) -> Response {
     require_auth!(&state, &headers);
     let port = v["port"].as_u64().unwrap_or(0) as u32;
-    if port == 0 || port > 65535 { return bad_request("invalid port"); }
+    if port == 0 || port > 65535 {
+        return bad_request("invalid port");
+    }
     let available = is_port_available(port);
     ok_json(serde_json::json!({"port": port, "available": available}))
 }
@@ -1983,6 +2455,8 @@ pub async fn check_port_query(
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
 pub fn is_port_available(port: u32) -> bool {
-    if port == 0 || port > 65535 { return false; }
+    if port == 0 || port > 65535 {
+        return false;
+    }
     std::net::TcpListener::bind(format!("0.0.0.0:{port}")).is_ok()
 }

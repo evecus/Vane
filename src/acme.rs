@@ -47,7 +47,9 @@ pub async fn issue_cert(rule: &TlsRule) -> anyhow::Result<(String, String, Strin
     let identifiers: Vec<Identifier> = domains.iter().map(|d| Identifier::Dns(d.clone())).collect();
 
     let mut order = account
-        .new_order(&NewOrder { identifiers: &identifiers })
+        .new_order(&NewOrder {
+            identifiers: &identifiers,
+        })
         .await
         .context("new ACME order")?;
 
@@ -55,15 +57,25 @@ pub async fn issue_cert(rule: &TlsRule) -> anyhow::Result<(String, String, Strin
 
     // Use DNS-01 if provider is configured (required for wildcards), else HTTP-01
     let use_dns01 = !rule.provider.is_empty() || domains.iter().any(|d| d.starts_with("*."));
-    let preferred = if use_dns01 { ChallengeType::Dns01 } else { ChallengeType::Http01 };
+    let preferred = if use_dns01 {
+        ChallengeType::Dns01
+    } else {
+        ChallengeType::Http01
+    };
 
     // Collect DNS TXT records needed for DNS-01
     let mut dns_records: Vec<(String, String)> = vec![];
 
     for auth in &authorizations {
-        let challenge = auth.challenges.iter()
+        let challenge = auth
+            .challenges
+            .iter()
             .find(|c| c.r#type == preferred)
-            .or_else(|| auth.challenges.iter().find(|c| c.r#type == ChallengeType::Dns01))
+            .or_else(|| {
+                auth.challenges
+                    .iter()
+                    .find(|c| c.r#type == ChallengeType::Dns01)
+            })
             .or_else(|| auth.challenges.first())
             .ok_or_else(|| anyhow!("no suitable ACME challenge found"))?;
 
@@ -79,7 +91,9 @@ pub async fn issue_cert(rule: &TlsRule) -> anyhow::Result<(String, String, Strin
     }
 
     if !dns_records.is_empty() {
-        let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()?;
         for (rec_name, txt_value) in &dns_records {
             eprintln!("[acme] DNS-01: set TXT {rec_name} = {txt_value}");
             set_dns_txt_record(&client, rule, rec_name, txt_value).await?;
@@ -90,9 +104,15 @@ pub async fn issue_cert(rule: &TlsRule) -> anyhow::Result<(String, String, Strin
 
     // Notify ACME server challenges are ready
     for auth in &authorizations {
-        let challenge = auth.challenges.iter()
+        let challenge = auth
+            .challenges
+            .iter()
             .find(|c| c.r#type == preferred)
-            .or_else(|| auth.challenges.iter().find(|c| c.r#type == ChallengeType::Dns01))
+            .or_else(|| {
+                auth.challenges
+                    .iter()
+                    .find(|c| c.r#type == ChallengeType::Dns01)
+            })
             .or_else(|| auth.challenges.first())
             .ok_or_else(|| anyhow!("no challenge"))?;
         order.set_challenge_ready(&challenge.url).await?;
@@ -106,7 +126,9 @@ pub async fn issue_cert(rule: &TlsRule) -> anyhow::Result<(String, String, Strin
         match state.status {
             OrderStatus::Ready | OrderStatus::Valid => break,
             OrderStatus::Invalid => {
-                return Err(anyhow!("ACME order invalid — check DNS records or challenge setup"));
+                return Err(anyhow!(
+                    "ACME order invalid — check DNS records or challenge setup"
+                ));
             }
             _ => {}
         }
@@ -117,13 +139,18 @@ pub async fn issue_cert(rule: &TlsRule) -> anyhow::Result<(String, String, Strin
     }
 
     // Generate key pair and CSR
-    let mut params = CertificateParams::new(domains.clone())
-        .map_err(|e| anyhow!("cert params: {e}"))?;
+    let mut params =
+        CertificateParams::new(domains.clone()).map_err(|e| anyhow!("cert params: {e}"))?;
     params.distinguished_name = DistinguishedName::new();
     let key_pair = KeyPair::generate().map_err(|e| anyhow!("keygen: {e}"))?;
-    let csr = params.serialize_request(&key_pair).map_err(|e| anyhow!("csr: {e}"))?;
+    let csr = params
+        .serialize_request(&key_pair)
+        .map_err(|e| anyhow!("csr: {e}"))?;
 
-    order.finalize(csr.der()).await.context("finalize ACME order")?;
+    order
+        .finalize(csr.der())
+        .await
+        .context("finalize ACME order")?;
 
     // Poll for certificate
     let mut cert_chain = None;
@@ -142,7 +169,10 @@ pub async fn issue_cert(rule: &TlsRule) -> anyhow::Result<(String, String, Strin
 
     // Clean up DNS TXT records (best effort)
     if !dns_records.is_empty() {
-        let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build().unwrap_or_default();
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .unwrap_or_default();
         for (rec_name, _) in &dns_records {
             let _ = delete_dns_txt_record(&client, rule, rec_name).await;
         }
@@ -153,17 +183,29 @@ pub async fn issue_cert(rule: &TlsRule) -> anyhow::Result<(String, String, Strin
 
 // ─── DNS-01 provider dispatch ─────────────────────────────────────────────────
 
-async fn set_dns_txt_record(client: &reqwest::Client, rule: &TlsRule, name: &str, value: &str) -> anyhow::Result<()> {
+async fn set_dns_txt_record(
+    client: &reqwest::Client,
+    rule: &TlsRule,
+    name: &str,
+    value: &str,
+) -> anyhow::Result<()> {
     match rule.provider.to_lowercase().as_str() {
         "cloudflare" => dns01_cloudflare_set(client, rule, name, value).await,
         "alidns" | "aliyun" => dns01_alidns_set(client, rule, name, value).await,
         "dnspod" => dns01_dnspod_set(client, rule, name, value).await,
         "tencent" | "tencentcloud" => dns01_tencent_set(client, rule, name, value).await,
-        p => { eprintln!("[acme] unknown DNS provider {p:?}"); Ok(()) }
+        p => {
+            eprintln!("[acme] unknown DNS provider {p:?}");
+            Ok(())
+        }
     }
 }
 
-async fn delete_dns_txt_record(client: &reqwest::Client, rule: &TlsRule, name: &str) -> anyhow::Result<()> {
+async fn delete_dns_txt_record(
+    client: &reqwest::Client,
+    rule: &TlsRule,
+    name: &str,
+) -> anyhow::Result<()> {
     match rule.provider.to_lowercase().as_str() {
         "cloudflare" => dns01_cloudflare_delete(client, rule, name).await,
         "alidns" | "aliyun" => dns01_alidns_delete(client, rule, name).await,
@@ -175,33 +217,60 @@ async fn delete_dns_txt_record(client: &reqwest::Client, rule: &TlsRule, name: &
 
 // ─── Cloudflare ───────────────────────────────────────────────────────────────
 
-async fn dns01_cloudflare_set(client: &reqwest::Client, rule: &TlsRule, name: &str, value: &str) -> anyhow::Result<()> {
+async fn dns01_cloudflare_set(
+    client: &reqwest::Client,
+    rule: &TlsRule,
+    name: &str,
+    value: &str,
+) -> anyhow::Result<()> {
     let token = &rule.provider_conf.api_token;
     let zone = &rule.provider_conf.zone_id;
-    if token.is_empty() || zone.is_empty() { return Err(anyhow!("Cloudflare requires api_token and zone_id")); }
+    if token.is_empty() || zone.is_empty() {
+        return Err(anyhow!("Cloudflare requires api_token and zone_id"));
+    }
     let _ = dns01_cloudflare_delete(client, rule, name).await;
     let resp: serde_json::Value = client
-        .post(format!("https://api.cloudflare.com/client/v4/zones/{zone}/dns_records"))
+        .post(format!(
+            "https://api.cloudflare.com/client/v4/zones/{zone}/dns_records"
+        ))
         .bearer_auth(token)
         .json(&serde_json::json!({"type":"TXT","name":name,"content":value,"ttl":120}))
-        .send().await?.json().await?;
+        .send()
+        .await?
+        .json()
+        .await?;
     if !resp["success"].as_bool().unwrap_or(false) {
         return Err(anyhow!("Cloudflare set TXT failed: {}", resp["errors"]));
     }
     Ok(())
 }
 
-async fn dns01_cloudflare_delete(client: &reqwest::Client, rule: &TlsRule, name: &str) -> anyhow::Result<()> {
+async fn dns01_cloudflare_delete(
+    client: &reqwest::Client,
+    rule: &TlsRule,
+    name: &str,
+) -> anyhow::Result<()> {
     let token = &rule.provider_conf.api_token;
     let zone = &rule.provider_conf.zone_id;
     let resp: serde_json::Value = client
-        .get(format!("https://api.cloudflare.com/client/v4/zones/{zone}/dns_records?type=TXT&name={name}"))
-        .bearer_auth(token).send().await?.json().await?;
+        .get(format!(
+            "https://api.cloudflare.com/client/v4/zones/{zone}/dns_records?type=TXT&name={name}"
+        ))
+        .bearer_auth(token)
+        .send()
+        .await?
+        .json()
+        .await?;
     if let Some(records) = resp["result"].as_array() {
         for rec in records {
             if let Some(rid) = rec["id"].as_str() {
-                let _ = client.delete(format!("https://api.cloudflare.com/client/v4/zones/{zone}/dns_records/{rid}"))
-                    .bearer_auth(token).send().await;
+                let _ = client
+                    .delete(format!(
+                        "https://api.cloudflare.com/client/v4/zones/{zone}/dns_records/{rid}"
+                    ))
+                    .bearer_auth(token)
+                    .send()
+                    .await;
             }
         }
     }
@@ -210,35 +279,73 @@ async fn dns01_cloudflare_delete(client: &reqwest::Client, rule: &TlsRule, name:
 
 // ─── AliDNS ───────────────────────────────────────────────────────────────────
 
-async fn dns01_alidns_set(client: &reqwest::Client, rule: &TlsRule, name: &str, value: &str) -> anyhow::Result<()> {
+async fn dns01_alidns_set(
+    client: &reqwest::Client,
+    rule: &TlsRule,
+    name: &str,
+    value: &str,
+) -> anyhow::Result<()> {
     let key_id = &rule.provider_conf.access_key_id;
     let key_secret = &rule.provider_conf.access_key_secret;
     let (rr, domain) = split_record_name(name);
     let _ = dns01_alidns_delete(client, rule, name).await;
-    let params = crate::engines::build_aliyun_params(key_id, "AddDomainRecord", &[
-        ("DomainName", domain), ("RR", rr), ("Type", "TXT"), ("Value", value), ("TTL", "120"),
-    ]);
+    let params = crate::engines::build_aliyun_params(
+        key_id,
+        "AddDomainRecord",
+        &[
+            ("DomainName", domain),
+            ("RR", rr),
+            ("Type", "TXT"),
+            ("Value", value),
+            ("TTL", "120"),
+        ],
+    );
     let signed = crate::engines::sign_aliyun_params(&params, key_secret);
-    client.get("https://alidns.aliyuncs.com/").query(&signed).send().await?;
+    client
+        .get("https://alidns.aliyuncs.com/")
+        .query(&signed)
+        .send()
+        .await?;
     Ok(())
 }
 
-async fn dns01_alidns_delete(client: &reqwest::Client, rule: &TlsRule, name: &str) -> anyhow::Result<()> {
+async fn dns01_alidns_delete(
+    client: &reqwest::Client,
+    rule: &TlsRule,
+    name: &str,
+) -> anyhow::Result<()> {
     let key_id = &rule.provider_conf.access_key_id;
     let key_secret = &rule.provider_conf.access_key_secret;
     let (rr, domain) = split_record_name(name);
-    let params = crate::engines::build_aliyun_params(key_id, "DescribeDomainRecords", &[
-        ("DomainName", domain), ("RRKeyWord", rr), ("TypeKeyWord", "TXT"),
-    ]);
-    let resp: serde_json::Value = client.get("https://alidns.aliyuncs.com/")
+    let params = crate::engines::build_aliyun_params(
+        key_id,
+        "DescribeDomainRecords",
+        &[
+            ("DomainName", domain),
+            ("RRKeyWord", rr),
+            ("TypeKeyWord", "TXT"),
+        ],
+    );
+    let resp: serde_json::Value = client
+        .get("https://alidns.aliyuncs.com/")
         .query(&crate::engines::sign_aliyun_params(&params, key_secret))
-        .send().await?.json().await?;
+        .send()
+        .await?
+        .json()
+        .await?;
     if let Some(records) = resp["DomainRecords"]["Record"].as_array() {
         for rec in records {
             if let Some(rid) = rec["RecordId"].as_str() {
-                let del = crate::engines::build_aliyun_params(key_id, "DeleteDomainRecord", &[("RecordId", rid)]);
-                let _ = client.get("https://alidns.aliyuncs.com/")
-                    .query(&crate::engines::sign_aliyun_params(&del, key_secret)).send().await;
+                let del = crate::engines::build_aliyun_params(
+                    key_id,
+                    "DeleteDomainRecord",
+                    &[("RecordId", rid)],
+                );
+                let _ = client
+                    .get("https://alidns.aliyuncs.com/")
+                    .query(&crate::engines::sign_aliyun_params(&del, key_secret))
+                    .send()
+                    .await;
             }
         }
     }
@@ -247,31 +354,65 @@ async fn dns01_alidns_delete(client: &reqwest::Client, rule: &TlsRule, name: &st
 
 // ─── DNSPod ───────────────────────────────────────────────────────────────────
 
-async fn dns01_dnspod_set(client: &reqwest::Client, rule: &TlsRule, name: &str, value: &str) -> anyhow::Result<()> {
+async fn dns01_dnspod_set(
+    client: &reqwest::Client,
+    rule: &TlsRule,
+    name: &str,
+    value: &str,
+) -> anyhow::Result<()> {
     let token = &rule.provider_conf.api_token;
     let (sub, domain) = split_record_name(name);
     let _ = dns01_dnspod_delete(client, rule, name).await;
-    client.post("https://dnsapi.cn/Record.Create")
-        .form(&[("login_token", token.as_str()), ("format", "json"),
-                ("domain", domain), ("sub_domain", sub),
-                ("record_type", "TXT"), ("value", value), ("record_line", "默认"), ("ttl", "120")])
-        .send().await?;
+    client
+        .post("https://dnsapi.cn/Record.Create")
+        .form(&[
+            ("login_token", token.as_str()),
+            ("format", "json"),
+            ("domain", domain),
+            ("sub_domain", sub),
+            ("record_type", "TXT"),
+            ("value", value),
+            ("record_line", "默认"),
+            ("ttl", "120"),
+        ])
+        .send()
+        .await?;
     Ok(())
 }
 
-async fn dns01_dnspod_delete(client: &reqwest::Client, rule: &TlsRule, name: &str) -> anyhow::Result<()> {
+async fn dns01_dnspod_delete(
+    client: &reqwest::Client,
+    rule: &TlsRule,
+    name: &str,
+) -> anyhow::Result<()> {
     let token = &rule.provider_conf.api_token;
     let (sub, domain) = split_record_name(name);
-    let list: serde_json::Value = client.post("https://dnsapi.cn/Record.List")
-        .form(&[("login_token", token.as_str()), ("format", "json"), ("domain", domain), ("sub_domain", sub)])
-        .send().await?.json().await?;
+    let list: serde_json::Value = client
+        .post("https://dnsapi.cn/Record.List")
+        .form(&[
+            ("login_token", token.as_str()),
+            ("format", "json"),
+            ("domain", domain),
+            ("sub_domain", sub),
+        ])
+        .send()
+        .await?
+        .json()
+        .await?;
     if let Some(records) = list["records"].as_array() {
         for rec in records {
             if rec["type"].as_str() == Some("TXT") {
                 if let Some(rid) = rec["id"].as_str() {
-                    let _ = client.post("https://dnsapi.cn/Record.Remove")
-                        .form(&[("login_token", token.as_str()), ("format", "json"), ("domain", domain), ("record_id", rid)])
-                        .send().await;
+                    let _ = client
+                        .post("https://dnsapi.cn/Record.Remove")
+                        .form(&[
+                            ("login_token", token.as_str()),
+                            ("format", "json"),
+                            ("domain", domain),
+                            ("record_id", rid),
+                        ])
+                        .send()
+                        .await;
                 }
             }
         }
@@ -279,15 +420,30 @@ async fn dns01_dnspod_delete(client: &reqwest::Client, rule: &TlsRule, name: &st
     Ok(())
 }
 
-async fn dns01_tencent_set(client: &reqwest::Client, rule: &TlsRule, name: &str, value: &str) -> anyhow::Result<()> {
-    let token = format!("{},{}", rule.provider_conf.secret_id, rule.provider_conf.secret_key);
+async fn dns01_tencent_set(
+    client: &reqwest::Client,
+    rule: &TlsRule,
+    name: &str,
+    value: &str,
+) -> anyhow::Result<()> {
+    let token = format!(
+        "{},{}",
+        rule.provider_conf.secret_id, rule.provider_conf.secret_key
+    );
     let mut proxy = rule.clone();
     proxy.provider_conf.api_token = token;
     dns01_dnspod_set(client, &proxy, name, value).await
 }
 
-async fn dns01_tencent_delete(client: &reqwest::Client, rule: &TlsRule, name: &str) -> anyhow::Result<()> {
-    let token = format!("{},{}", rule.provider_conf.secret_id, rule.provider_conf.secret_key);
+async fn dns01_tencent_delete(
+    client: &reqwest::Client,
+    rule: &TlsRule,
+    name: &str,
+) -> anyhow::Result<()> {
+    let token = format!(
+        "{},{}",
+        rule.provider_conf.secret_id, rule.provider_conf.secret_key
+    );
     let mut proxy = rule.clone();
     proxy.provider_conf.api_token = token;
     dns01_dnspod_delete(client, &proxy, name).await
@@ -302,7 +458,9 @@ fn split_record_name(record_name: &str) -> (&str, &str) {
         let domain_len = parts[parts.len() - 2].len() + 1 + parts[parts.len() - 1].len();
         let rr = &record_name[..record_name.len() - domain_len - 1];
         let domain = &record_name[rr.len() + 1..];
-        if !rr.is_empty() { return (rr, domain); }
+        if !rr.is_empty() {
+            return (rr, domain);
+        }
     } else if parts.len() == 2 {
         return ("@", record_name);
     }
@@ -310,8 +468,12 @@ fn split_record_name(record_name: &str) -> (&str, &str) {
 }
 
 pub fn effective_domains(rule: &TlsRule) -> Vec<String> {
-    if !rule.domains.is_empty() { return rule.domains.clone(); }
-    if !rule.domain.is_empty() { return vec![rule.domain.clone()]; }
+    if !rule.domains.is_empty() {
+        return rule.domains.clone();
+    }
+    if !rule.domain.is_empty() {
+        return vec![rule.domain.clone()];
+    }
     vec![]
 }
 
@@ -321,8 +483,14 @@ fn parse_expiry_from_pem(pem_chain: &str) -> Option<String> {
     let chunk = &pem_chain[start..];
     let end = chunk.find("-----END CERTIFICATE-----")? + 25;
     let block = &chunk[..end];
-    let b64: String = block.lines().filter(|l| !l.starts_with("-----")).collect::<Vec<_>>().join("");
-    let der = base64::engine::general_purpose::STANDARD.decode(&b64).ok()?;
+    let b64: String = block
+        .lines()
+        .filter(|l| !l.starts_with("-----"))
+        .collect::<Vec<_>>()
+        .join("");
+    let der = base64::engine::general_purpose::STANDARD
+        .decode(&b64)
+        .ok()?;
     let (_, cert) = x509_parser::parse_x509_certificate(&der).ok()?;
     let ts = cert.validity().not_after.timestamp();
     let dt = chrono::DateTime::from_timestamp(ts, 0)?;
