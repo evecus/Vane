@@ -345,9 +345,9 @@ async fn run_tcp_forwarder(
 }
 
 async fn proxy_tcp_stats(mut inbound: TcpStream, target: SocketAddr, stats: Arc<PfStats>) {
-    if let Ok(mut outbound) = TcpStream::connect(target).await {
-        let (mut ri, mut wi) = inbound.split();
-        let (mut ro, mut wo) = outbound.split();
+    if let Ok(outbound) = TcpStream::connect(target).await {
+        let (mut ri, mut wi) = inbound.into_split();
+        let (mut ro, mut wo) = outbound.into_split();
         let st1 = stats.clone();
         let st2 = stats.clone();
         let t1 = tokio::spawn(async move {
@@ -1224,9 +1224,11 @@ async fn dispatch_connection(
     use tokio::io::AsyncReadExt;
     if let Some(acceptor) = tls_acceptor {
         let mut buf = [0u8; 1];
-        match tokio::io::AsyncReadExt::peek(&mut tokio::io::BufReader::new(&stream), &mut buf).await {
+        let mut br = tokio::io::BufReader::new(stream);
+        match br.peek(&mut buf).await {
             Ok(1) if buf[0] == 0x16 => {
                 // TLS
+                let stream = br.into_inner();
                 match acceptor.accept(stream).await {
                     Ok(tls) => serve_hyper_tls(tls, peer, svc_id, data, ipfilter, db, true).await,
                     Err(e)  => eprintln!("[webservice] TLS accept {peer}: {e}"),
@@ -1234,6 +1236,7 @@ async fn dispatch_connection(
             }
             _ => {
                 // Plain HTTP → redirect to HTTPS
+                let stream = br.into_inner();
                 redirect_to_https(stream, peer, listen_port).await;
             }
         }
@@ -1501,7 +1504,7 @@ async fn proxy_request_inner(
     });
 
     let mut req_builder = upstream_client.request(
-        reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET),
+        reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET),
         &upstream_url,
     );
     for (k, v) in &req_headers {
@@ -1572,11 +1575,7 @@ async fn ws_tunnel(
                         let _ = backend.write_all(handshake.as_bytes()).await;
                         // Bidirectional copy
                         let mut client_io = hyper_util::rt::TokioIo::new(client_io);
-                        let (mut br, mut bw) = backend.split();
-                        let _ = tokio::join!(
-                            tokio::io::copy(&mut br, &mut client_io),
-                            tokio::io::copy(&mut client_io, &mut bw),
-                        );
+                        let _ = tokio::io::copy_bidirectional(&mut client_io, &mut backend).await;
                     }
                     Err(e) => eprintln!("[webservice] ws backend connect {backend_host2}: {e}"),
                 }
