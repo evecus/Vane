@@ -1210,7 +1210,7 @@ async fn run_webservice(
 
 /// Peek first byte to distinguish TLS from plain HTTP, then dispatch to hyper.
 async fn dispatch_connection(
-    stream: TcpStream,
+    mut stream: TcpStream,
     peer: SocketAddr,
     svc_id: Arc<String>,
     data: Arc<RwLock<crate::models::RuntimeData>>,
@@ -1352,7 +1352,7 @@ async fn serve_hyper_tls<S>(
     is_https: bool,
 )
 where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
 {
     let ctx = ProxyCtx { peer, svc_id, data, ipfilter, db, is_https };
     let svc = hyper::service::service_fn(move |req| {
