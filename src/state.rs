@@ -155,18 +155,43 @@ impl AppState {
 
     pub async fn apply_engines(&self) {
         let d = self.data.read().await.clone();
-        self.engines.apply_portforwards(&d.portforward, self.data.clone()).await;
-        self.engines.apply_ddns(&d.ddns, self.data.clone(), self.db.clone()).await;
-        self.engines.apply_webservice(&d.webservice, &d.tls, &d.ipfilter, self.db.clone(), self.data.clone()).await;
         self.engines
-            .apply_tls(&d.tls, self.data.clone(), self.config.read().await.clone(), self.db.clone())
+            .apply_portforwards(&d.portforward, self.data.clone())
+            .await;
+        self.engines
+            .apply_ddns(&d.ddns, self.data.clone(), self.db.clone())
+            .await;
+        self.engines
+            .apply_webservice(
+                &d.webservice,
+                &d.tls,
+                &d.ipfilter,
+                self.db.clone(),
+                self.data.clone(),
+            )
+            .await;
+        self.engines
+            .apply_tls(
+                &d.tls,
+                self.data.clone(),
+                self.config.read().await.clone(),
+                self.db.clone(),
+            )
             .await;
     }
 
     pub async fn rematch_and_restart(&self) {
         rematch_all_routes(&self.data).await;
         let d = self.data.read().await.clone();
-        self.engines.apply_webservice(&d.webservice, &d.tls, &d.ipfilter, self.db.clone(), self.data.clone()).await;
+        self.engines
+            .apply_webservice(
+                &d.webservice,
+                &d.tls,
+                &d.ipfilter,
+                self.db.clone(),
+                self.data.clone(),
+            )
+            .await;
     }
 }
 
@@ -196,7 +221,11 @@ pub fn now_rfc3339() -> String {
 impl AppState {
     /// Persist the current in-memory state to the database.
     /// Called after every mutation so that all data is durably stored encrypted.
-    pub async fn db_persist_current(&self, data: &crate::models::RuntimeData, _cfg: &Config) -> anyhow::Result<()> {
+    pub async fn db_persist_current(
+        &self,
+        data: &crate::models::RuntimeData,
+        _cfg: &Config,
+    ) -> anyhow::Result<()> {
         // Save admin config
         self.db.save_admin(&_cfg.admin).await?;
         // Save all port forwards

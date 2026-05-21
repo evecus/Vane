@@ -367,12 +367,15 @@ pub async fn login(
         && verify_password(&req.password, &cfg.admin.password_hash);
     drop(cfg);
 
-    let _ = state.db.append_admin_log(&AdminLogRecord {
-        ts: now_rfc3339(),
-        ip: ip.clone(),
-        action: "login".to_string(),
-        success: ok,
-    }).await;
+    let _ = state
+        .db
+        .append_admin_log(&AdminLogRecord {
+            ts: now_rfc3339(),
+            ip: ip.clone(),
+            action: "login".to_string(),
+            success: ok,
+        })
+        .await;
 
     if !ok {
         let mut a = state.login_attempts.write().await;
@@ -483,7 +486,11 @@ pub async fn query_admin_logs(
         .and_then(|x| x.parse().ok())
         .unwrap_or(100)
         .min(1000);
-    let mut logs = state.db.load_admin_logs(limit.max(1000)).await.unwrap_or_default();
+    let mut logs = state
+        .db
+        .load_admin_logs(limit.max(1000))
+        .await
+        .unwrap_or_default();
     if !action.is_empty() {
         logs.retain(|x| x.action.contains(&action));
     }
@@ -661,7 +668,9 @@ pub async fn restore_settings(
         ipfilter: backup.ipfilter.clone(),
         ..Default::default()
     };
-    *state.config.write().await = Config { admin: backup.admin };
+    *state.config.write().await = Config {
+        admin: backup.admin,
+    };
     *state.data.write().await = new_data;
     state.apply_engines().await;
 
@@ -780,7 +789,9 @@ pub async fn delete_port_forward(
     let ipf_snapshot = d.ipfilter.clone();
     drop(d);
     let _ = state.db.delete_port_forward(&id).await;
-    for rule in &ipf_snapshot { let _ = state.db.save_ip_filter(rule).await; }
+    for rule in &ipf_snapshot {
+        let _ = state.db.save_ip_filter(rule).await;
+    }
     state.apply_engines().await;
     ok_json(serde_json::json!({"ok": true}))
 }
@@ -810,7 +821,9 @@ pub async fn toggle_port_forward(
         }
         let snap = d.portforward.iter().find(|x| x.id == id).cloned();
         drop(d);
-        if let Some(r) = snap { let _ = state.db.save_port_forward(&r).await; }
+        if let Some(r) = snap {
+            let _ = state.db.save_port_forward(&r).await;
+        }
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error":"端口已被占用","port":port})),
@@ -930,8 +943,17 @@ pub async fn toggle_ddns(
         }
     };
     drop(d);
-    let snap = state.data.read().await.ddns.iter().find(|x| x.id == id).cloned();
-    if let Some(r) = snap { let _ = state.db.save_ddns(&r).await; }
+    let snap = state
+        .data
+        .read()
+        .await
+        .ddns
+        .iter()
+        .find(|x| x.id == id)
+        .cloned();
+    if let Some(r) = snap {
+        let _ = state.db.save_ddns(&r).await;
+    }
     state.apply_engines().await;
     ok_json(serde_json::json!({"enabled": enabled}))
 }
@@ -961,13 +983,23 @@ pub async fn update_ddns_refresh_now(
             let sync_result = crate::engines::sync_ddns_provider(&client, &r).await;
 
             // Restart worker if rule is still enabled
-            let still_enabled = state.data.read().await.ddns.iter()
-                .find(|x| x.id == id).map(|x| x.enabled).unwrap_or(false);
+            let still_enabled = state
+                .data
+                .read()
+                .await
+                .ddns
+                .iter()
+                .find(|x| x.id == id)
+                .map(|x| x.enabled)
+                .unwrap_or(false);
             if still_enabled {
                 let d = state.data.read().await;
                 let rules: Vec<_> = d.ddns.clone();
                 drop(d);
-                state.engines.apply_ddns(&rules, state.data.clone(), state.db.clone()).await;
+                state
+                    .engines
+                    .apply_ddns(&rules, state.data.clone(), state.db.clone())
+                    .await;
             }
 
             match sync_result {
@@ -991,7 +1023,9 @@ pub async fn update_ddns_refresh_now(
                     }
                     let updated = d.ddns.iter().find(|x| x.id == id).cloned();
                     drop(d);
-                    if let Some(r) = updated { let _ = state.db.save_ddns(&r).await; }
+                    if let Some(r) = updated {
+                        let _ = state.db.save_ddns(&r).await;
+                    }
                     ok_json(serde_json::json!({"ok": true, "ip": ip}))
                 }
                 Err(e) => {
@@ -1004,7 +1038,9 @@ pub async fn update_ddns_refresh_now(
                     }
                     let updated = d.ddns.iter().find(|x| x.id == id).cloned();
                     drop(d);
-                    if let Some(r) = updated { let _ = state.db.save_ddns(&r).await; }
+                    if let Some(r) = updated {
+                        let _ = state.db.save_ddns(&r).await;
+                    }
                     internal(&e.to_string())
                 }
             }
@@ -1255,7 +1291,9 @@ pub async fn delete_webservice(
     let ipf_snap = d.ipfilter.clone();
     drop(d);
     let _ = state.db.delete_web_service(&id).await;
-    for rule in &ipf_snap { let _ = state.db.save_ip_filter(rule).await; }
+    for rule in &ipf_snap {
+        let _ = state.db.save_ip_filter(rule).await;
+    }
     state.apply_engines().await;
     ok_json(serde_json::json!({"ok": true}))
 }
@@ -1282,7 +1320,9 @@ pub async fn toggle_webservice(
         }
         let svc_snap = d.webservice.iter().find(|x| x.id == id).cloned();
         drop(d);
-        if let Some(svc) = svc_snap { let _ = state.db.save_web_service(&svc).await; }
+        if let Some(svc) = svc_snap {
+            let _ = state.db.save_web_service(&svc).await;
+        }
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error":"端口已被占用","port":port})),
@@ -1291,14 +1331,21 @@ pub async fn toggle_webservice(
     }
     let svc_snap = d.webservice.iter().find(|x| x.id == id).cloned();
     drop(d);
-    if let Some(svc) = &svc_snap { let _ = state.db.save_web_service(svc).await; }
+    if let Some(svc) = &svc_snap {
+        let _ = state.db.save_web_service(svc).await;
+    }
 
     if enabled {
         // Check that at least one enabled route has a matched cert (when HTTPS enabled)
-        let has_valid_routes = svc_snap.as_ref().map(|s| {
-            if !s.enable_https { return true; }
-            s.routes.iter().any(|r| r.enabled && r.cert_status == "ok")
-        }).unwrap_or(false);
+        let has_valid_routes = svc_snap
+            .as_ref()
+            .map(|s| {
+                if !s.enable_https {
+                    return true;
+                }
+                s.routes.iter().any(|r| r.enabled && r.cert_status == "ok")
+            })
+            .unwrap_or(false);
         if svc_snap.as_ref().map(|s| s.enable_https).unwrap_or(false) && !has_valid_routes {
             // Roll back enabled state
             let mut d = state.data.write().await;
@@ -1313,7 +1360,8 @@ pub async fn toggle_webservice(
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error":"请先添加子规则，证书匹配成功后方可启动"})),
-            ).into_response();
+            )
+                .into_response();
         }
     }
 
@@ -1505,7 +1553,9 @@ pub async fn delete_route(
     let ipf_snap = d.ipfilter.clone();
     drop(d);
     let _ = state.db.delete_web_route(&rid).await;
-    for rule in &ipf_snap { let _ = state.db.save_ip_filter(rule).await; }
+    for rule in &ipf_snap {
+        let _ = state.db.save_ip_filter(rule).await;
+    }
     state.apply_engines().await;
     ok_json(serde_json::json!({"ok": true}))
 }
@@ -1533,7 +1583,8 @@ pub async fn toggle_route(
         let d2 = state.data.read().await;
         if let Some(svc) = d2.webservice.iter().find(|s| s.id == svc_id) {
             if let Some(r) = svc.routes.iter().find(|r| r.id == rid) {
-                let r = r.clone(); let sid = svc_id.clone();
+                let r = r.clone();
+                let sid = svc_id.clone();
                 drop(d2);
                 let _ = state.db.save_web_route(&sid, &r).await;
             }
@@ -1551,13 +1602,21 @@ pub async fn get_access_logs(
     Path(id): Path<String>,
 ) -> Response {
     require_auth!(&state, &headers);
-    let logs = state.db.load_access_logs(Some(&id), 200).await.unwrap_or_default();
+    let logs = state
+        .db
+        .load_access_logs(Some(&id), 200)
+        .await
+        .unwrap_or_default();
     ok_json(serde_json::to_value(&logs).unwrap_or_default())
 }
 
 pub async fn get_all_access_logs(State(state): State<AppState>, headers: HeaderMap) -> Response {
     require_auth!(&state, &headers);
-    let logs = state.db.load_access_logs(None, 500).await.unwrap_or_default();
+    let logs = state
+        .db
+        .load_access_logs(None, 500)
+        .await
+        .unwrap_or_default();
     ok_json(serde_json::to_value(&logs).unwrap_or_default())
 }
 
@@ -1574,8 +1633,16 @@ pub async fn query_access_logs(
         .and_then(|x| x.parse().ok())
         .unwrap_or(100)
         .min(1000);
-    let sid = if service.is_empty() { None } else { Some(service.as_str()) };
-    let mut logs = state.db.load_access_logs(sid, limit.max(1000)).await.unwrap_or_default();
+    let sid = if service.is_empty() {
+        None
+    } else {
+        Some(service.as_str())
+    };
+    let mut logs = state
+        .db
+        .load_access_logs(sid, limit.max(1000))
+        .await
+        .unwrap_or_default();
     if !path_kw.is_empty() {
         logs.retain(|x| x.domain.contains(&path_kw));
     }
@@ -1726,8 +1793,17 @@ pub async fn toggle_tls(
     };
     drop(d);
     {
-        let snap = state.data.read().await.tls.iter().find(|x| x.id == id).cloned();
-        if let Some(c) = snap { let _ = state.db.save_tls_cert(&c).await; }
+        let snap = state
+            .data
+            .read()
+            .await
+            .tls
+            .iter()
+            .find(|x| x.id == id)
+            .cloned();
+        if let Some(c) = snap {
+            let _ = state.db.save_tls_cert(&c).await;
+        }
     }
     let state2 = state.clone();
     tokio::spawn(async move {
@@ -1772,9 +1848,13 @@ pub async fn issue_tls(
                         x.status = "active".to_string();
                         x.error_msg.clear();
                         Some(x.clone())
-                    } else { None }
+                    } else {
+                        None
+                    }
                 };
-                if let Some(c) = updated { let _ = state2.db.save_tls_cert(&c).await; }
+                if let Some(c) = updated {
+                    let _ = state2.db.save_tls_cert(&c).await;
+                }
                 state2.rematch_and_restart().await;
             }
             Err(e) => {
@@ -1785,9 +1865,13 @@ pub async fn issue_tls(
                         x.status = "error".to_string();
                         x.error_msg = e.to_string();
                         Some(x.clone())
-                    } else { None }
+                    } else {
+                        None
+                    }
                 };
-                if let Some(c) = updated { let _ = state2.db.save_tls_cert(&c).await; }
+                if let Some(c) = updated {
+                    let _ = state2.db.save_tls_cert(&c).await;
+                }
             }
         }
     });
@@ -2238,7 +2322,11 @@ pub async fn create_ipfilter(
     d.ipfilter.push(body.clone());
     drop(d);
     let _ = state.db.save_ip_filter(&body).await;
-    (StatusCode::CREATED, Json(serde_json::to_value(&body).unwrap_or_default())).into_response()
+    (
+        StatusCode::CREATED,
+        Json(serde_json::to_value(&body).unwrap_or_default()),
+    )
+        .into_response()
 }
 
 pub async fn update_ipfilter(
@@ -2289,8 +2377,17 @@ pub async fn delete_ipfilter(
     d.ipfilter.retain(|x| x.id != id);
     drop(d);
     {
-        let snap = state.data.read().await.ipfilter.iter().find(|x| x.id == id).cloned();
-        if let Some(r) = snap { let _ = state.db.save_ip_filter(&r).await; }
+        let snap = state
+            .data
+            .read()
+            .await
+            .ipfilter
+            .iter()
+            .find(|x| x.id == id)
+            .cloned();
+        if let Some(r) = snap {
+            let _ = state.db.save_ip_filter(&r).await;
+        }
     }
     state.apply_engines().await;
     ok_json(serde_json::json!({"ok": true}))
@@ -2313,7 +2410,9 @@ pub async fn toggle_ipfilter(
     };
     let rule = d.ipfilter.iter().find(|x| x.id == id).cloned();
     drop(d);
-    if let Some(ref r) = rule { let _ = state.db.save_ip_filter(r).await; }
+    if let Some(ref r) = rule {
+        let _ = state.db.save_ip_filter(r).await;
+    }
     state.apply_engines().await;
     match rule {
         Some(r) => ok_json(serde_json::to_value(&r).unwrap_or_default()),

@@ -123,7 +123,8 @@ impl Db {
 
     async fn migrate(&self) -> anyhow::Result<()> {
         let conn = self.conn.lock().await;
-        conn.execute_batch(r#"
+        conn.execute_batch(
+            r#"
             CREATE TABLE IF NOT EXISTS admin (
                 id INTEGER PRIMARY KEY CHECK(id=1),
                 username TEXT NOT NULL,
@@ -246,10 +247,13 @@ impl Db {
                 data_enc TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
-        "#)?;
+        "#,
+        )?;
         // Non-destructive column additions for existing DBs
-        let _ = conn.execute_batch("ALTER TABLE tls_certs ADD COLUMN enabled INTEGER NOT NULL DEFAULT 0");
-        let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN username TEXT NOT NULL DEFAULT ''");
+        let _ = conn
+            .execute_batch("ALTER TABLE tls_certs ADD COLUMN enabled INTEGER NOT NULL DEFAULT 0");
+        let _ =
+            conn.execute_batch("ALTER TABLE sessions ADD COLUMN username TEXT NOT NULL DEFAULT ''");
         Ok(())
     }
 
@@ -286,7 +290,12 @@ impl Db {
 
     // ─── Sessions ─────────────────────────────────────────────────────────────
 
-    pub async fn save_session(&self, token: &str, username: &str, expires_at: i64) -> anyhow::Result<()> {
+    pub async fn save_session(
+        &self,
+        token: &str,
+        username: &str,
+        expires_at: i64,
+    ) -> anyhow::Result<()> {
         let conn = self.conn.lock().await;
         conn.execute(
             "INSERT OR REPLACE INTO sessions(token, username, expires_at) VALUES(?,?,?)",
@@ -315,7 +324,8 @@ impl Db {
 
     pub async fn load_sessions(&self) -> anyhow::Result<Vec<SessionInfo>> {
         let conn = self.conn.lock().await;
-        let mut stmt = conn.prepare("SELECT token, username, expires_at FROM sessions ORDER BY expires_at")?;
+        let mut stmt =
+            conn.prepare("SELECT token, username, expires_at FROM sessions ORDER BY expires_at")?;
         let rows = stmt.query_map([], |row| {
             Ok(SessionInfo {
                 token: row.get(0)?,
@@ -328,17 +338,22 @@ impl Db {
 
     pub async fn touch_session(&self, token: &str, new_exp: i64) -> anyhow::Result<()> {
         let conn = self.conn.lock().await;
-        conn.execute("UPDATE sessions SET expires_at=? WHERE token=?", params![new_exp, token])?;
+        conn.execute(
+            "UPDATE sessions SET expires_at=? WHERE token=?",
+            params![new_exp, token],
+        )?;
         Ok(())
     }
 
     pub async fn session_valid(&self, token: &str, now: i64) -> anyhow::Result<Option<String>> {
         let conn = self.conn.lock().await;
-        let result = conn.query_row(
-            "SELECT username FROM sessions WHERE token=? AND expires_at > ?",
-            params![token, now],
-            |row| row.get::<_, String>(0),
-        ).optional()?;
+        let result = conn
+            .query_row(
+                "SELECT username FROM sessions WHERE token=? AND expires_at > ?",
+                params![token, now],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
         Ok(result)
     }
 
@@ -365,10 +380,18 @@ impl Db {
         })?;
         let mut result = Vec::new();
         for row in rows {
-            let (id, name, protocol, listen_port, target_ip_enc, target_port, enabled, created_at) = row?;
+            let (id, name, protocol, listen_port, target_ip_enc, target_port, enabled, created_at) =
+                row?;
             let target_ip = decrypt_str(&key, &target_ip_enc).unwrap_or_default();
             let mut r = PortForwardRule {
-                id, name, protocol, listen_port, target_ip, target_port, enabled, created_at,
+                id,
+                name,
+                protocol,
+                listen_port,
+                target_ip,
+                target_port,
+                enabled,
+                created_at,
                 ..Default::default()
             };
             r.normalize();
@@ -435,22 +458,63 @@ impl Db {
         })?;
         let mut result = Vec::new();
         for row in rows {
-            let (id, name, provider, domains_enc, domain, sub_domain, ip_version, ip_detect_mode,
-                 ip_interface, ip_index, interval, enabled, provider_conf_enc, last_ip, last_updated,
-                 ip_history_enc, last_sync_ok, last_sync_err, last_sync_at, created_at) = row?;
-            let domains: Vec<String> = if domains_enc.is_empty() { vec![] } else {
+            let (
+                id,
+                name,
+                provider,
+                domains_enc,
+                domain,
+                sub_domain,
+                ip_version,
+                ip_detect_mode,
+                ip_interface,
+                ip_index,
+                interval,
+                enabled,
+                provider_conf_enc,
+                last_ip,
+                last_updated,
+                ip_history_enc,
+                last_sync_ok,
+                last_sync_err,
+                last_sync_at,
+                created_at,
+            ) = row?;
+            let domains: Vec<String> = if domains_enc.is_empty() {
+                vec![]
+            } else {
                 decrypt_json(&key, &domains_enc).unwrap_or_default()
             };
-            let provider_conf: ProviderConf = if provider_conf_enc.is_empty() { Default::default() } else {
+            let provider_conf: ProviderConf = if provider_conf_enc.is_empty() {
+                Default::default()
+            } else {
                 decrypt_json(&key, &provider_conf_enc).unwrap_or_default()
             };
-            let ip_history: Vec<IpRecord> = if ip_history_enc.is_empty() { vec![] } else {
+            let ip_history: Vec<IpRecord> = if ip_history_enc.is_empty() {
+                vec![]
+            } else {
                 decrypt_json(&key, &ip_history_enc).unwrap_or_default()
             };
             result.push(DdnsRule {
-                id, name, provider, domains, domain, sub_domain, ip_version, ip_detect_mode,
-                ip_interface, ip_index, interval, enabled, provider_conf, last_ip, last_updated,
-                ip_history, last_sync_ok: last_sync_ok.map(|v| v != 0), last_sync_err, last_sync_at,
+                id,
+                name,
+                provider,
+                domains,
+                domain,
+                sub_domain,
+                ip_version,
+                ip_detect_mode,
+                ip_interface,
+                ip_index,
+                interval,
+                enabled,
+                provider_conf,
+                last_ip,
+                last_updated,
+                ip_history,
+                last_sync_ok: last_sync_ok.map(|v| v != 0),
+                last_sync_err,
+                last_sync_at,
                 created_at,
                 ..Default::default()
             });
@@ -501,47 +565,87 @@ impl Db {
         let conn = self.conn.lock().await;
         let mut svc_stmt = conn.prepare(
             "SELECT id, name, listen_port, enable_https, enabled, created_at
-             FROM web_services ORDER BY created_at"
+             FROM web_services ORDER BY created_at",
         )?;
-        let svcs: Vec<(String, String, u16, bool, bool, String)> = svc_stmt.query_map([], |row| {
-            Ok((
-                row.get(0)?, row.get(1)?, row.get(2)?,
-                row.get::<_, i64>(3)? != 0, row.get::<_, i64>(4)? != 0, row.get(5)?,
-            ))
-        })?.filter_map(|r| r.ok()).collect();
+        let svcs: Vec<(String, String, u16, bool, bool, String)> = svc_stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get::<_, i64>(3)? != 0,
+                    row.get::<_, i64>(4)? != 0,
+                    row.get(5)?,
+                ))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
 
         let mut result = Vec::new();
         for (id, name, listen_port, enable_https, enabled, created_at) in svcs {
             let mut route_stmt = conn.prepare(
                 "SELECT id, name, domain, backend_url_enc, enabled, matched_cert_id, cert_status,
                  auth_enabled, auth_user, auth_pass_hash, created_at
-                 FROM web_routes WHERE service_id=? ORDER BY created_at"
+                 FROM web_routes WHERE service_id=? ORDER BY created_at",
             )?;
-            let routes: Vec<WebRoute> = route_stmt.query_map(params![id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, i64>(4)? != 0,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, i64>(7)? != 0,
-                    row.get::<_, String>(8)?,
-                    row.get::<_, String>(9)?,
-                    row.get::<_, String>(10)?,
-                ))
-            })?.filter_map(|r| r.ok()).map(|(rid, rname, domain, backend_enc, renabled,
-                matched_cert_id, cert_status, auth_enabled, auth_user, auth_pass_hash, rcreated_at)| {
-                let backend_url = decrypt_str(&key, &backend_enc).unwrap_or_default();
-                WebRoute {
-                    id: rid, name: rname, domain, backend_url, enabled: renabled,
-                    matched_cert_id, cert_status, auth_enabled, auth_user, auth_pass_hash,
-                    created_at: rcreated_at,
-                }
-            }).collect();
+            let routes: Vec<WebRoute> = route_stmt
+                .query_map(params![id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)? != 0,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, i64>(7)? != 0,
+                        row.get::<_, String>(8)?,
+                        row.get::<_, String>(9)?,
+                        row.get::<_, String>(10)?,
+                    ))
+                })?
+                .filter_map(|r| r.ok())
+                .map(
+                    |(
+                        rid,
+                        rname,
+                        domain,
+                        backend_enc,
+                        renabled,
+                        matched_cert_id,
+                        cert_status,
+                        auth_enabled,
+                        auth_user,
+                        auth_pass_hash,
+                        rcreated_at,
+                    )| {
+                        let backend_url = decrypt_str(&key, &backend_enc).unwrap_or_default();
+                        WebRoute {
+                            id: rid,
+                            name: rname,
+                            domain,
+                            backend_url,
+                            enabled: renabled,
+                            matched_cert_id,
+                            cert_status,
+                            auth_enabled,
+                            auth_user,
+                            auth_pass_hash,
+                            created_at: rcreated_at,
+                        }
+                    },
+                )
+                .collect();
 
-            result.push(WebServiceRule { id, name, listen_port, enable_https, enabled, routes, created_at });
+            result.push(WebServiceRule {
+                id,
+                name,
+                listen_port,
+                enable_https,
+                enabled,
+                routes,
+                created_at,
+            });
         }
         Ok(result)
     }
@@ -553,7 +657,14 @@ impl Db {
              VALUES(?,?,?,?,?,?)
              ON CONFLICT(id) DO UPDATE SET name=excluded.name, listen_port=excluded.listen_port,
              enable_https=excluded.enable_https, enabled=excluded.enabled",
-            params![svc.id, svc.name, svc.listen_port, svc.enable_https as i64, svc.enabled as i64, svc.created_at],
+            params![
+                svc.id,
+                svc.name,
+                svc.listen_port,
+                svc.enable_https as i64,
+                svc.enabled as i64,
+                svc.created_at
+            ],
         )?;
         Ok(())
     }
@@ -578,9 +689,18 @@ impl Db {
              auth_enabled=excluded.auth_enabled, auth_user=excluded.auth_user,
              auth_pass_hash=excluded.auth_pass_hash",
             params![
-                route.id, service_id, route.name, route.domain, backend_enc, route.enabled as i64,
-                route.matched_cert_id, route.cert_status, route.auth_enabled as i64,
-                route.auth_user, route.auth_pass_hash, route.created_at
+                route.id,
+                service_id,
+                route.name,
+                route.domain,
+                backend_enc,
+                route.enabled as i64,
+                route.matched_cert_id,
+                route.cert_status,
+                route.auth_enabled as i64,
+                route.auth_user,
+                route.auth_pass_hash,
+                route.created_at
             ],
         )?;
         Ok(())
@@ -626,25 +746,65 @@ impl Db {
         })?;
         let mut result = Vec::new();
         for row in rows {
-            let (id, name, domains_enc, domain, source, ca_provider, provider, provider_conf_enc,
-                 cert_pem_enc, key_pem_enc, issued_at, expires_at, auto_renew, email, status,
-                 error_msg, enabled, created_at) = row?;
-            let domains: Vec<String> = if domains_enc.is_empty() { vec![] } else {
+            let (
+                id,
+                name,
+                domains_enc,
+                domain,
+                source,
+                ca_provider,
+                provider,
+                provider_conf_enc,
+                cert_pem_enc,
+                key_pem_enc,
+                issued_at,
+                expires_at,
+                auto_renew,
+                email,
+                status,
+                error_msg,
+                enabled,
+                created_at,
+            ) = row?;
+            let domains: Vec<String> = if domains_enc.is_empty() {
+                vec![]
+            } else {
                 decrypt_json(&key, &domains_enc).unwrap_or_default()
             };
-            let provider_conf: ProviderConf = if provider_conf_enc.is_empty() { Default::default() } else {
+            let provider_conf: ProviderConf = if provider_conf_enc.is_empty() {
+                Default::default()
+            } else {
                 decrypt_json(&key, &provider_conf_enc).unwrap_or_default()
             };
-            let cert_pem = if cert_pem_enc.is_empty() { String::new() } else {
+            let cert_pem = if cert_pem_enc.is_empty() {
+                String::new()
+            } else {
                 decrypt_str(&key, &cert_pem_enc).unwrap_or_default()
             };
-            let key_pem = if key_pem_enc.is_empty() { String::new() } else {
+            let key_pem = if key_pem_enc.is_empty() {
+                String::new()
+            } else {
                 decrypt_str(&key, &key_pem_enc).unwrap_or_default()
             };
             result.push(TlsRule {
-                id, name, domains, domain, source, ca_provider, provider, provider_conf,
-                cert_pem, key_pem, issued_at, expires_at, auto_renew, email, status,
-                error_msg, enabled, created_at,
+                id,
+                name,
+                domains,
+                domain,
+                source,
+                ca_provider,
+                provider,
+                provider_conf,
+                cert_pem,
+                key_pem,
+                issued_at,
+                expires_at,
+                auto_renew,
+                email,
+                status,
+                error_msg,
+                enabled,
+                created_at,
             });
         }
         Ok(result)
@@ -654,8 +814,16 @@ impl Db {
         let key = *self.key;
         let domains_enc = encrypt_json(&key, &cert.domains)?;
         let provider_conf_enc = encrypt_json(&key, &cert.provider_conf)?;
-        let cert_pem_enc = if cert.cert_pem.is_empty() { String::new() } else { encrypt_str(&key, &cert.cert_pem)? };
-        let key_pem_enc = if cert.key_pem.is_empty() { String::new() } else { encrypt_str(&key, &cert.key_pem)? };
+        let cert_pem_enc = if cert.cert_pem.is_empty() {
+            String::new()
+        } else {
+            encrypt_str(&key, &cert.cert_pem)?
+        };
+        let key_pem_enc = if cert.key_pem.is_empty() {
+            String::new()
+        } else {
+            encrypt_str(&key, &cert.key_pem)?
+        };
         let conn = self.conn.lock().await;
         conn.execute(
             "INSERT INTO tls_certs(id,name,domains_enc,domain,source,ca_provider,provider,
@@ -670,10 +838,24 @@ impl Db {
              auto_renew=excluded.auto_renew, email=excluded.email, status=excluded.status,
              error_msg=excluded.error_msg, enabled=excluded.enabled",
             params![
-                cert.id, cert.name, domains_enc, cert.domain, cert.source, cert.ca_provider,
-                cert.provider, provider_conf_enc, cert_pem_enc, key_pem_enc, cert.issued_at,
-                cert.expires_at, cert.auto_renew as i64, cert.email, cert.status,
-                cert.error_msg, cert.enabled as i64, cert.created_at
+                cert.id,
+                cert.name,
+                domains_enc,
+                cert.domain,
+                cert.source,
+                cert.ca_provider,
+                cert.provider,
+                provider_conf_enc,
+                cert_pem_enc,
+                key_pem_enc,
+                cert.issued_at,
+                cert.expires_at,
+                cert.auto_renew as i64,
+                cert.email,
+                cert.status,
+                cert.error_msg,
+                cert.enabled as i64,
+                cert.created_at
             ],
         )?;
         Ok(())
@@ -692,7 +874,7 @@ impl Db {
         let conn = self.conn.lock().await;
         let mut stmt = conn.prepare(
             "SELECT id, enabled, mode, scopes_enc, manual_ips_enc, attachments_enc, created_at
-             FROM ip_filter_rules ORDER BY created_at"
+             FROM ip_filter_rules ORDER BY created_at",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok((
@@ -708,16 +890,30 @@ impl Db {
         let mut result = Vec::new();
         for row in rows {
             let (id, enabled, mode, scopes_enc, manual_ips_enc, attachments_enc, created_at) = row?;
-            let scopes: Vec<IpFilterScope> = if scopes_enc.is_empty() { vec![] } else {
+            let scopes: Vec<IpFilterScope> = if scopes_enc.is_empty() {
+                vec![]
+            } else {
                 decrypt_json(&key, &scopes_enc).unwrap_or_default()
             };
-            let manual_ips: Vec<String> = if manual_ips_enc.is_empty() { vec![] } else {
+            let manual_ips: Vec<String> = if manual_ips_enc.is_empty() {
+                vec![]
+            } else {
                 decrypt_json(&key, &manual_ips_enc).unwrap_or_default()
             };
-            let attachments: Vec<IpFilterAttachment> = if attachments_enc.is_empty() { vec![] } else {
+            let attachments: Vec<IpFilterAttachment> = if attachments_enc.is_empty() {
+                vec![]
+            } else {
                 decrypt_json(&key, &attachments_enc).unwrap_or_default()
             };
-            result.push(IpFilterRule { id, enabled, mode, scopes, manual_ips, attachments, created_at });
+            result.push(IpFilterRule {
+                id,
+                enabled,
+                mode,
+                scopes,
+                manual_ips,
+                attachments,
+                created_at,
+            });
         }
         Ok(result)
     }
@@ -753,35 +949,58 @@ impl Db {
             "INSERT OR IGNORE INTO access_logs(id,service_id,route_id,route_name,domain,
              status_code,client_ip,user_agent,auth_result,time)
              VALUES(?,?,?,?,?,?,?,?,?,?)",
-            params![log.id, log.service_id, log.route_id, log.route_name, log.domain,
-                    log.status_code, log.client_ip, log.user_agent, log.auth_result, log.time],
+            params![
+                log.id,
+                log.service_id,
+                log.route_id,
+                log.route_name,
+                log.domain,
+                log.status_code,
+                log.client_ip,
+                log.user_agent,
+                log.auth_result,
+                log.time
+            ],
         )?;
         Ok(())
     }
 
-    pub async fn load_access_logs(&self, service_id: Option<&str>, limit: usize) -> anyhow::Result<Vec<AccessLog>> {
+    pub async fn load_access_logs(
+        &self,
+        service_id: Option<&str>,
+        limit: usize,
+    ) -> anyhow::Result<Vec<AccessLog>> {
         let conn = self.conn.lock().await;
         let logs = if let Some(sid) = service_id {
             let mut stmt = conn.prepare(
                 "SELECT id,service_id,route_id,route_name,domain,status_code,client_ip,user_agent,auth_result,time
                  FROM access_logs WHERE service_id=? ORDER BY time DESC LIMIT ?"
             )?;
-            let x = stmt.query_map(params![sid, limit as i64], access_log_from_row)?
-                .filter_map(|r| r.ok()).collect(); x
+            let x = stmt
+                .query_map(params![sid, limit as i64], access_log_from_row)?
+                .filter_map(|r| r.ok())
+                .collect();
+            x
         } else {
             let mut stmt = conn.prepare(
                 "SELECT id,service_id,route_id,route_name,domain,status_code,client_ip,user_agent,auth_result,time
                  FROM access_logs ORDER BY time DESC LIMIT ?"
             )?;
-            let x = stmt.query_map(params![limit as i64], access_log_from_row)?
-                .filter_map(|r| r.ok()).collect(); x
+            let x = stmt
+                .query_map(params![limit as i64], access_log_from_row)?
+                .filter_map(|r| r.ok())
+                .collect();
+            x
         };
         Ok(logs)
     }
 
     pub async fn clear_access_logs(&self, service_id: &str) -> anyhow::Result<()> {
         let conn = self.conn.lock().await;
-        conn.execute("DELETE FROM access_logs WHERE service_id=?", params![service_id])?;
+        conn.execute(
+            "DELETE FROM access_logs WHERE service_id=?",
+            params![service_id],
+        )?;
         Ok(())
     }
 
@@ -803,9 +1022,8 @@ impl Db {
 
     pub async fn load_admin_logs(&self, limit: usize) -> anyhow::Result<Vec<AdminLogRecord>> {
         let conn = self.conn.lock().await;
-        let mut stmt = conn.prepare(
-            "SELECT ts, ip, action, success FROM admin_logs ORDER BY id DESC LIMIT ?"
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT ts, ip, action, success FROM admin_logs ORDER BY id DESC LIMIT ?")?;
         let rows = stmt.query_map(params![limit as i64], |row| {
             Ok(AdminLogRecord {
                 ts: row.get(0)?,
@@ -820,7 +1038,11 @@ impl Db {
     // ─── Backup / Restore ─────────────────────────────────────────────────────
 
     /// Export all config as encrypted portable backup bytes.
-    pub async fn export_backup(&self, data: &RuntimeData, admin: &AdminConfig) -> anyhow::Result<Vec<u8>> {
+    pub async fn export_backup(
+        &self,
+        data: &RuntimeData,
+        admin: &AdminConfig,
+    ) -> anyhow::Result<Vec<u8>> {
         let backup = FullBackup {
             version: "2".into(),
             admin: admin.clone(),
@@ -850,14 +1072,24 @@ impl Db {
             let conn = self.conn.lock().await;
             conn.execute_batch("DELETE FROM port_forwards; DELETE FROM ddns; DELETE FROM web_services; DELETE FROM web_routes; DELETE FROM tls_certs; DELETE FROM ip_filter_rules;")?;
         }
-        for r in &backup.portforward { self.save_port_forward(r).await?; }
-        for r in &backup.ddns { self.save_ddns(r).await?; }
+        for r in &backup.portforward {
+            self.save_port_forward(r).await?;
+        }
+        for r in &backup.ddns {
+            self.save_ddns(r).await?;
+        }
         for svc in &backup.webservice {
             self.save_web_service(svc).await?;
-            for route in &svc.routes { self.save_web_route(&svc.id, route).await?; }
+            for route in &svc.routes {
+                self.save_web_route(&svc.id, route).await?;
+            }
         }
-        for cert in &backup.tls { self.save_tls_cert(cert).await?; }
-        for rule in &backup.ipfilter { self.save_ip_filter(rule).await?; }
+        for cert in &backup.tls {
+            self.save_tls_cert(cert).await?;
+        }
+        for rule in &backup.ipfilter {
+            self.save_ip_filter(rule).await?;
+        }
         Ok(())
     }
 }

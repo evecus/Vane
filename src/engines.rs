@@ -22,34 +22,34 @@ use crate::state::now_rfc3339;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct StatSnapshot {
-    pub bytes_in:  i64,
+    pub bytes_in: i64,
     pub bytes_out: i64,
-    pub conns:     i64,
-    pub time:      String,
+    pub conns: i64,
+    pub time: String,
 }
 
 /// Global per-rule stats: id -> (bytes_in, bytes_out, active_conns)
 pub type StatsStore = Arc<RwLock<HashMap<String, Arc<PfStats>>>>;
 
 pub struct PfStats {
-    pub bytes_in:  std::sync::atomic::AtomicI64,
+    pub bytes_in: std::sync::atomic::AtomicI64,
     pub bytes_out: std::sync::atomic::AtomicI64,
-    pub conns:     std::sync::atomic::AtomicI64,
+    pub conns: std::sync::atomic::AtomicI64,
 }
 
 impl PfStats {
     fn new() -> Arc<Self> {
         Arc::new(Self {
-            bytes_in:  std::sync::atomic::AtomicI64::new(0),
+            bytes_in: std::sync::atomic::AtomicI64::new(0),
             bytes_out: std::sync::atomic::AtomicI64::new(0),
-            conns:     std::sync::atomic::AtomicI64::new(0),
+            conns: std::sync::atomic::AtomicI64::new(0),
         })
     }
     fn snapshot(&self) -> StatSnapshot {
         StatSnapshot {
-            bytes_in:  self.bytes_in.load(std::sync::atomic::Ordering::Relaxed),
+            bytes_in: self.bytes_in.load(std::sync::atomic::Ordering::Relaxed),
             bytes_out: self.bytes_out.load(std::sync::atomic::Ordering::Relaxed),
-            conns:     self.conns.load(std::sync::atomic::Ordering::Relaxed),
+            conns: self.conns.load(std::sync::atomic::Ordering::Relaxed),
             time: crate::state::now_rfc3339(),
         }
     }
@@ -66,12 +66,16 @@ pub struct RuntimeEngines {
     pub ddns: Arc<RwLock<HashMap<String, oneshot::Sender<()>>>>,
     pub webservice: Arc<RwLock<HashMap<String, oneshot::Sender<()>>>>,
     pub tls: Arc<RwLock<HashMap<String, oneshot::Sender<()>>>>,
-    pub pf_stats:   StatsStore,
+    pub pf_stats: StatsStore,
     pub pf_history: HistoryStore,
 }
 
 impl RuntimeEngines {
-    pub async fn apply_portforwards(&self, rules: &[PortForwardRule], data: Arc<RwLock<crate::models::RuntimeData>>) {
+    pub async fn apply_portforwards(
+        &self,
+        rules: &[PortForwardRule],
+        data: Arc<RwLock<crate::models::RuntimeData>>,
+    ) {
         let stats = self.pf_stats.clone();
         let history = self.pf_history.clone();
 
@@ -88,13 +92,17 @@ impl RuntimeEngines {
                         ticker.tick().await;
                         let snap_map: Vec<(String, StatSnapshot)> = {
                             let s = stats2.read().await;
-                            s.iter().map(|(id, st)| (id.clone(), st.snapshot())).collect()
+                            s.iter()
+                                .map(|(id, st)| (id.clone(), st.snapshot()))
+                                .collect()
                         };
                         let mut h = history2.write().await;
                         for (id, snap) in snap_map {
                             let entry = h.entry(id).or_default();
                             entry.push(snap);
-                            if entry.len() > 360 { entry.remove(0); }
+                            if entry.len() > 360 {
+                                entry.remove(0);
+                            }
                         }
                     }
                 });
@@ -102,7 +110,10 @@ impl RuntimeEngines {
         }
 
         let active_ids: std::collections::HashSet<String> = rules
-            .iter().filter(|r| r.enabled).map(|r| r.id.clone()).collect();
+            .iter()
+            .filter(|r| r.enabled)
+            .map(|r| r.id.clone())
+            .collect();
         stats.write().await.retain(|id, _| active_ids.contains(id));
 
         reconcile_spawn(
@@ -128,7 +139,12 @@ impl RuntimeEngines {
     }
 
     pub async fn get_pf_history(&self, id: &str) -> Vec<StatSnapshot> {
-        self.pf_history.read().await.get(id).cloned().unwrap_or_default()
+        self.pf_history
+            .read()
+            .await
+            .get(id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Stop a single DDNS worker by id (used by refresh-now to prevent race).
@@ -182,7 +198,16 @@ impl RuntimeEngines {
                 let ipf = ipfilter.clone();
                 let db2 = db.clone();
                 let data2 = data.clone();
-                tokio::spawn(run_webservice(r.id.clone(), r.listen_port, r.enable_https, rx, tls, ipf, db2, data2));
+                tokio::spawn(run_webservice(
+                    r.id.clone(),
+                    r.listen_port,
+                    r.enable_https,
+                    rx,
+                    tls,
+                    ipf,
+                    db2,
+                    data2,
+                ));
             },
         )
         .await;
@@ -283,7 +308,9 @@ async fn run_forwarder_with_stats(
         let data2 = data.clone();
         let rid1 = rule_id.clone();
         let rid2 = rule_id.clone();
-        let t1 = tokio::spawn(run_tcp_forwarder(listen, target, stop_rx1, stats1, data1, rid1));
+        let t1 = tokio::spawn(run_tcp_forwarder(
+            listen, target, stop_rx1, stats1, data1, rid1,
+        ));
         let t2 = tokio::spawn(run_udp_forwarder(listen, target, stop_rx2, data2, rid2));
         let _ = stop.await;
         let _ = stop_tx1.send(());
@@ -350,15 +377,19 @@ async fn proxy_tcp_stats(inbound: TcpStream, target: SocketAddr, stats: Arc<PfSt
         let st2 = stats.clone();
         let t1 = tokio::spawn(async move {
             let n = tokio::io::copy(&mut ri, &mut wo).await.unwrap_or(0);
-            st1.bytes_in.fetch_add(n as i64, std::sync::atomic::Ordering::Relaxed);
+            st1.bytes_in
+                .fetch_add(n as i64, std::sync::atomic::Ordering::Relaxed);
         });
         let t2 = tokio::spawn(async move {
             let n = tokio::io::copy(&mut ro, &mut wi).await.unwrap_or(0);
-            st2.bytes_out.fetch_add(n as i64, std::sync::atomic::Ordering::Relaxed);
+            st2.bytes_out
+                .fetch_add(n as i64, std::sync::atomic::Ordering::Relaxed);
         });
         let _ = tokio::join!(t1, t2);
     }
-    stats.conns.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    stats
+        .conns
+        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
 }
 
 // Keep old proxy_tcp for backward compat
@@ -1164,17 +1195,27 @@ async fn run_webservice(
 
     let addr: SocketAddr = match format!("0.0.0.0:{listen_port}").parse() {
         Ok(v) => v,
-        Err(e) => { eprintln!("[webservice] invalid port {listen_port}: {e}"); return; }
+        Err(e) => {
+            eprintln!("[webservice] invalid port {listen_port}: {e}");
+            return;
+        }
     };
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(v) => v,
-        Err(e) => { eprintln!("[webservice] bind {addr} failed: {e}"); return; }
+        Err(e) => {
+            eprintln!("[webservice] bind {addr} failed: {e}");
+            return;
+        }
     };
 
     // Build initial TLS acceptor from cert snapshot
     let initial_routes: Vec<WebRoute> = {
         let d = data.read().await;
-        d.webservice.iter().find(|s| s.id == svc_id).map(|s| s.routes.clone()).unwrap_or_default()
+        d.webservice
+            .iter()
+            .find(|s| s.id == svc_id)
+            .map(|s| s.routes.clone())
+            .unwrap_or_default()
     };
     let tls_acceptor: Option<TlsAcceptor> = if enable_https {
         build_tls_config(&initial_routes, &tls_rules).map(TlsAcceptor::from)
@@ -1183,10 +1224,13 @@ async fn run_webservice(
     };
 
     let _tls_rules = Arc::new(tls_rules);
-    let ipfilter  = Arc::new(ipfilter);
-    let svc_id    = Arc::new(svc_id);
+    let ipfilter = Arc::new(ipfilter);
+    let svc_id = Arc::new(svc_id);
 
-    eprintln!("[webservice] {} listening on {addr} (https={enable_https})", svc_id);
+    eprintln!(
+        "[webservice] {} listening on {addr} (https={enable_https})",
+        svc_id
+    );
 
     loop {
         tokio::select! {
@@ -1233,7 +1277,7 @@ async fn dispatch_connection(
             });
             match acceptor.accept(client_end).await {
                 Ok(tls) => serve_hyper_tls(tls, peer, svc_id, data, ipfilter, db, true).await,
-                Err(e)  => eprintln!("[webservice] TLS accept {peer}: {e}"),
+                Err(e) => eprintln!("[webservice] TLS accept {peer}: {e}"),
             }
         } else {
             // Plain HTTP → redirect to HTTPS
@@ -1257,13 +1301,19 @@ async fn redirect_to_https(mut stream: TcpStream, peer: SocketAddr, port: u16) {
     let mut buf = [0u8; 4096];
     let n = stream.read(&mut buf).await.unwrap_or(0);
     let req = String::from_utf8_lossy(&buf[..n]);
-    let path = req.lines().next()
+    let path = req
+        .lines()
+        .next()
         .and_then(|l| l.split_whitespace().nth(1))
-        .unwrap_or("/").to_string();
-    let host = req.lines()
+        .unwrap_or("/")
+        .to_string();
+    let host = req
+        .lines()
         .find(|l| l.to_lowercase().starts_with("host:"))
         .and_then(|l| l.splitn(2, ':').nth(1))
-        .unwrap_or("").trim().to_string();
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let host_bare = host.split(':').next().unwrap_or(&host);
     let location = if port == 443 {
         format!("https://{host_bare}{path}")
@@ -1286,13 +1336,19 @@ where
     let mut buf = [0u8; 4096];
     let n = stream.read(&mut buf).await.unwrap_or(0);
     let req = String::from_utf8_lossy(&buf[..n]);
-    let path = req.lines().next()
+    let path = req
+        .lines()
+        .next()
         .and_then(|l| l.split_whitespace().nth(1))
-        .unwrap_or("/").to_string();
-    let host = req.lines()
+        .unwrap_or("/")
+        .to_string();
+    let host = req
+        .lines()
         .find(|l| l.to_lowercase().starts_with("host:"))
         .and_then(|l| l.splitn(2, ':').nth(1))
-        .unwrap_or("").trim().to_string();
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let host_bare = host.split(':').next().unwrap_or(&host);
     let location = if port == 443 {
         format!("https://{host_bare}{path}")
@@ -1310,11 +1366,11 @@ where
 
 #[derive(Clone)]
 struct ProxyCtx {
-    peer:     SocketAddr,
-    svc_id:   Arc<String>,
-    data:     Arc<RwLock<crate::models::RuntimeData>>,
+    peer: SocketAddr,
+    svc_id: Arc<String>,
+    data: Arc<RwLock<crate::models::RuntimeData>>,
     ipfilter: Arc<Vec<IpFilterRule>>,
-    db:       Db,
+    db: Db,
     is_https: bool,
 }
 
@@ -1326,14 +1382,21 @@ async fn serve_hyper_plain(
     ipfilter: Arc<Vec<IpFilterRule>>,
     db: Db,
 ) {
-    let ctx = ProxyCtx { peer, svc_id, data, ipfilter, db, is_https: false };
+    let ctx = ProxyCtx {
+        peer,
+        svc_id,
+        data,
+        ipfilter,
+        db,
+        is_https: false,
+    };
     let svc = hyper::service::service_fn(move |req| {
         let ctx = ctx.clone();
         async move { proxy_request(req, ctx).await }
     });
     if let Err(e) = hyper::server::conn::http1::Builder::new()
         .serve_connection(hyper_util::rt::TokioIo::new(stream), svc)
-        .with_upgrades()   // ← enables WebSocket upgrade
+        .with_upgrades() // ← enables WebSocket upgrade
         .await
     {
         if !is_benign_hyper_error(&e) {
@@ -1350,11 +1413,17 @@ async fn serve_hyper_tls<S>(
     ipfilter: Arc<Vec<IpFilterRule>>,
     db: Db,
     is_https: bool,
-)
-where
+) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    let ctx = ProxyCtx { peer, svc_id, data, ipfilter, db, is_https };
+    let ctx = ProxyCtx {
+        peer,
+        svc_id,
+        data,
+        ipfilter,
+        db,
+        is_https,
+    };
     let svc = hyper::service::service_fn(move |req| {
         let ctx = ctx.clone();
         async move { proxy_request(req, ctx).await }
@@ -1378,8 +1447,14 @@ fn is_benign_hyper_error(e: &hyper::Error) -> bool {
 // ─── Core reverse-proxy request handler ──────────────────────────────────────
 
 const HOP_BY_HOP: &[&str] = &[
-    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-    "te", "trailers", "transfer-encoding", "upgrade",
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailers",
+    "transfer-encoding",
+    "upgrade",
 ];
 
 async fn proxy_request(
@@ -1393,9 +1468,9 @@ async fn proxy_request_inner(
     req: hyper::Request<hyper::body::Incoming>,
     ctx: ProxyCtx,
 ) -> hyper::Response<http_body_util::Full<bytes::Bytes>> {
+    use bytes::Bytes;
     use http_body_util::{BodyExt, Full};
     use hyper::{Method, Response, StatusCode};
-    use bytes::Bytes;
 
     let client_ip = ctx.peer.ip().to_string();
 
@@ -1408,13 +1483,21 @@ async fn proxy_request_inner(
     };
     let svc_snap = match svc_snap {
         Some(s) => Arc::new(s),
-        None    => return bad_gateway("service not found"),
+        None => return bad_gateway("service not found"),
     };
-    let ipfilter = if !ipf_live.is_empty() { Arc::new(ipf_live) } else { ctx.ipfilter.clone() };
+    let ipfilter = if !ipf_live.is_empty() {
+        Arc::new(ipf_live)
+    } else {
+        ctx.ipfilter.clone()
+    };
 
     // ── Route matching ─────────────────────────────────────────────────────
-    let host_header = req.headers().get("host")
-        .and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+    let host_header = req
+        .headers()
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
     let matched_route = match find_route_for_request(&svc_snap, &host_header) {
         Some((r, _)) => r.clone(),
         None => return bad_gateway(&format!("no route for host: {host_header}")),
@@ -1425,33 +1508,58 @@ async fn proxy_request_inner(
         return simple_response(StatusCode::FORBIDDEN, "Forbidden");
     }
 
-    let path = req.uri().path_and_query().map(|pq| pq.as_str()).unwrap_or("/").to_string();
-    let user_agent = req.headers().get("user-agent")
-        .and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+    let path = req
+        .uri()
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or("/")
+        .to_string();
+    let user_agent = req
+        .headers()
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
 
     // ── Auth check (cookie-based) ──────────────────────────────────────────
     if matched_route.auth_enabled && !matched_route.auth_pass_hash.is_empty() {
-        let cookie_name   = format!("vane_auth_{}", &matched_route.id[..8.min(matched_route.id.len())]);
+        let cookie_name = format!(
+            "vane_auth_{}",
+            &matched_route.id[..8.min(matched_route.id.len())]
+        );
         let session_token = auth_session_token(&matched_route.id, &matched_route.auth_pass_hash);
-        let cookie_ok = req.headers().get_all("cookie").iter()
+        let cookie_ok = req
+            .headers()
+            .get_all("cookie")
+            .iter()
             .flat_map(|v| v.to_str().unwrap_or("").split(';'))
             .any(|c| {
                 let c = c.trim();
-                c.split_once('=').map(|(k, v)| k.trim() == cookie_name && v.trim() == session_token).unwrap_or(false)
+                c.split_once('=')
+                    .map(|(k, v)| k.trim() == cookie_name && v.trim() == session_token)
+                    .unwrap_or(false)
             });
 
         if !cookie_ok {
             if req.method() == Method::POST && path == "/__vane_login__" {
                 let body_bytes = req.collect().await.unwrap_or_default().to_bytes();
                 let form = String::from_utf8_lossy(&body_bytes);
-                let (mut user, mut pass, mut next) = (String::new(), String::new(), "/".to_string());
+                let (mut user, mut pass, mut next) =
+                    (String::new(), String::new(), "/".to_string());
                 for part in form.split('&') {
                     if let Some((k, v)) = part.split_once('=') {
                         let v = urlencoding::decode(v).unwrap_or_default().to_string();
-                        match k { "username"=>user=v, "password"=>pass=v, "next"=>next=v, _=>{} }
+                        match k {
+                            "username" => user = v,
+                            "password" => pass = v,
+                            "next" => next = v,
+                            _ => {}
+                        }
                     }
                 }
-                if next.is_empty() { next = "/".to_string(); }
+                if next.is_empty() {
+                    next = "/".to_string();
+                }
                 let ok = user == matched_route.auth_user
                     && bcrypt::verify(&pass, &matched_route.auth_pass_hash).unwrap_or(false);
                 if ok {
@@ -1472,7 +1580,15 @@ async fn proxy_request_inner(
                         .unwrap();
                 }
             }
-            log_access_async(&ctx.db, &ctx.svc_id, &matched_route, &client_ip, &user_agent, "no_auth").await;
+            log_access_async(
+                &ctx.db,
+                &ctx.svc_id,
+                &matched_route,
+                &client_ip,
+                &user_agent,
+                "no_auth",
+            )
+            .await;
             let page = build_login_page(&path, "", &matched_route.domain);
             return Response::builder()
                 .status(StatusCode::UNAUTHORIZED)
@@ -1484,23 +1600,45 @@ async fn proxy_request_inner(
 
     // ── Build upstream URL ─────────────────────────────────────────────────
     let backend_raw = matched_route.backend_url.trim_end_matches('/');
-    if backend_raw.is_empty() { return bad_gateway("empty backend"); }
+    if backend_raw.is_empty() {
+        return bad_gateway("empty backend");
+    }
     let (upstream_base, backend_prefix) = parse_backend_base(backend_raw);
-    let upstream_path = if backend_prefix.is_empty() { path.clone() } else { format!("{backend_prefix}{path}") };
-    let upstream_url  = format!("{upstream_base}{upstream_path}");
+    let upstream_path = if backend_prefix.is_empty() {
+        path.clone()
+    } else {
+        format!("{backend_prefix}{path}")
+    };
+    let upstream_url = format!("{upstream_base}{upstream_path}");
 
-    let method     = req.method().clone();
+    let method = req.method().clone();
     let req_headers = req.headers().clone();
 
     // ── WebSocket upgrade ──────────────────────────────────────────────────
-    let is_upgrade = req_headers.get("upgrade")
+    let is_upgrade = req_headers
+        .get("upgrade")
         .and_then(|v| v.to_str().ok())
         .map(|v| v.to_lowercase() == "websocket")
         .unwrap_or(false);
 
     if is_upgrade {
-        log_access_async(&ctx.db, &ctx.svc_id, &matched_route, &client_ip, &user_agent, "websocket").await;
-        return ws_tunnel(req, &upstream_base, &upstream_path, &client_ip, ctx.is_https).await;
+        log_access_async(
+            &ctx.db,
+            &ctx.svc_id,
+            &matched_route,
+            &client_ip,
+            &user_agent,
+            "websocket",
+        )
+        .await;
+        return ws_tunnel(
+            req,
+            &upstream_base,
+            &upstream_path,
+            &client_ip,
+            ctx.is_https,
+        )
+        .await;
     }
 
     // ── HTTP reverse proxy via hyper client ───────────────────────────────
@@ -1526,14 +1664,19 @@ async fn proxy_request_inner(
     );
     for (k, v) in &req_headers {
         let key = k.as_str();
-        if HOP_BY_HOP.contains(&key) { continue; }
+        if HOP_BY_HOP.contains(&key) {
+            continue;
+        }
         req_builder = req_builder.header(k, v);
     }
     req_builder = req_builder
-        .header("host",              &host_header)
-        .header("x-forwarded-for",   &client_ip)
-        .header("x-real-ip",         &client_ip)
-        .header("x-forwarded-proto", if ctx.is_https { "https" } else { "http" })
+        .header("host", &host_header)
+        .header("x-forwarded-for", &client_ip)
+        .header("x-real-ip", &client_ip)
+        .header(
+            "x-forwarded-proto",
+            if ctx.is_https { "https" } else { "http" },
+        )
         .body(body_bytes.to_vec());
 
     match req_builder.send().await {
@@ -1542,12 +1685,24 @@ async fn proxy_request_inner(
                 .unwrap_or(hyper::StatusCode::BAD_GATEWAY);
             let mut builder = Response::builder().status(status);
             for (k, v) in resp.headers() {
-                if HOP_BY_HOP.contains(&k.as_str()) { continue; }
+                if HOP_BY_HOP.contains(&k.as_str()) {
+                    continue;
+                }
                 builder = builder.header(k.as_str(), v.as_bytes());
             }
             let body = resp.bytes().await.unwrap_or_default();
-            log_access_async(&ctx.db, &ctx.svc_id, &matched_route, &client_ip, &user_agent, "ok").await;
-            builder.body(Full::new(Bytes::from(body))).unwrap_or_else(|_| bad_gateway("response build"))
+            log_access_async(
+                &ctx.db,
+                &ctx.svc_id,
+                &matched_route,
+                &client_ip,
+                &user_agent,
+                "ok",
+            )
+            .await;
+            builder
+                .body(Full::new(Bytes::from(body)))
+                .unwrap_or_else(|_| bad_gateway("response build"))
         }
         Err(e) => {
             eprintln!("[webservice] upstream error {upstream_url}: {e}");
@@ -1567,9 +1722,17 @@ async fn ws_tunnel(
 ) -> hyper::Response<http_body_util::Full<bytes::Bytes>> {
     use hyper::header::{CONNECTION, UPGRADE};
     // Resolve backend host:port
-    let backend_host = upstream_base.splitn(3, '/').nth(2).unwrap_or("").to_string();
+    let backend_host = upstream_base
+        .splitn(3, '/')
+        .nth(2)
+        .unwrap_or("")
+        .to_string();
     // Build the HTTP upgrade request to send to backend
-    let ws_scheme = if upstream_base.starts_with("https") { "wss" } else { "ws" };
+    let ws_scheme = if upstream_base.starts_with("https") {
+        "wss"
+    } else {
+        "ws"
+    };
     let backend_url = format!("{ws_scheme}://{backend_host}{upstream_path}");
     let _ = (backend_url, is_https); // used below
 
@@ -1623,7 +1786,9 @@ fn simple_response(
     hyper::Response::builder()
         .status(status)
         .header("content-type", "text/plain")
-        .body(http_body_util::Full::new(bytes::Bytes::from(body.to_string())))
+        .body(http_body_util::Full::new(bytes::Bytes::from(
+            body.to_string(),
+        )))
         .unwrap()
 }
 
@@ -1652,27 +1817,33 @@ async fn log_access_async(
     ua: &str,
     auth_result: &str,
 ) {
-    use std::sync::Mutex;
     use std::collections::HashSet;
+    use std::sync::Mutex;
     static SEEN: std::sync::OnceLock<Mutex<HashSet<String>>> = std::sync::OnceLock::new();
     let seen = SEEN.get_or_init(|| Mutex::new(HashSet::new()));
     let browser = parse_browser(ua);
-    let today   = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let key     = format!("{today}\x00{}\x00{client_ip}\x00{browser}", route.id);
-    let is_new  = seen.lock().map(|mut s| s.insert(key)).unwrap_or(true);
-    if !is_new { return; }
-    if let Ok(mut s) = seen.lock() { if s.len() > 100_000 { s.clear(); } }
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let key = format!("{today}\x00{}\x00{client_ip}\x00{browser}", route.id);
+    let is_new = seen.lock().map(|mut s| s.insert(key)).unwrap_or(true);
+    if !is_new {
+        return;
+    }
+    if let Ok(mut s) = seen.lock() {
+        if s.len() > 100_000 {
+            s.clear();
+        }
+    }
     let log = crate::models::AccessLog {
-        id:          crate::state::new_id(),
-        service_id:  service_id.to_string(),
-        route_id:    route.id.clone(),
-        route_name:  route.name.clone(),
-        domain:      route.domain.clone(),
+        id: crate::state::new_id(),
+        service_id: service_id.to_string(),
+        route_id: route.id.clone(),
+        route_name: route.name.clone(),
+        domain: route.domain.clone(),
         status_code: 0,
-        client_ip:   client_ip.to_string(),
-        user_agent:  browser,
+        client_ip: client_ip.to_string(),
+        user_agent: browser,
         auth_result: auth_result.to_string(),
-        time:        now_rfc3339(),
+        time: now_rfc3339(),
     };
     let _ = db.append_access_log(&log).await;
 }
@@ -1681,15 +1852,25 @@ async fn log_access_async(
 fn ip_allowed(rules: &[IpFilterRule], scope_type: &str, target_id: &str, client_ip: &str) -> bool {
     let ip: Option<std::net::IpAddr> = client_ip.parse().ok();
     for rule in rules {
-        if !rule.enabled { continue; }
+        if !rule.enabled {
+            continue;
+        }
         let ok = rule.scopes.iter().any(|s| {
             s.scope_type == scope_type && (s.target_id.is_empty() || s.target_id == target_id)
         });
-        if !ok { continue; }
+        if !ok {
+            continue;
+        }
         let mut all: Vec<&str> = rule.manual_ips.iter().map(String::as_str).collect();
-        for att in &rule.attachments { all.extend(att.ips.iter().map(String::as_str)); }
+        for att in &rule.attachments {
+            all.extend(att.ips.iter().map(String::as_str));
+        }
         let matched = ip_in_list(&ip, client_ip, &all);
-        return if rule.mode == "blacklist" { !matched } else { matched };
+        return if rule.mode == "blacklist" {
+            !matched
+        } else {
+            matched
+        };
     }
     true
 }
@@ -1697,13 +1878,21 @@ fn ip_allowed(rules: &[IpFilterRule], scope_type: &str, target_id: &str, client_
 fn ip_in_list(ip: &Option<std::net::IpAddr>, raw: &str, list: &[&str]) -> bool {
     for e in list {
         let e = e.trim();
-        if e.is_empty() { continue; }
+        if e.is_empty() {
+            continue;
+        }
         if let Ok(net) = e.parse::<ipnet::IpNet>() {
-            if let Some(a) = ip { if net.contains(a) { return true; } }
+            if let Some(a) = ip {
+                if net.contains(a) {
+                    return true;
+                }
+            }
         } else if e == raw {
             return true;
         } else if let (Some(a), Ok(b)) = (ip, e.parse::<std::net::IpAddr>()) {
-            if *a == b { return true; }
+            if *a == b {
+                return true;
+            }
         }
     }
     false
@@ -1745,7 +1934,9 @@ async fn run_tls_autorenew(
                             x.status = "active".to_string();
                             x.error_msg.clear();
                             Some(x.clone())
-                        } else { None }
+                        } else {
+                            None
+                        }
                     };
                     if let Some(cert) = updated {
                         let _ = db.save_tls_cert(&cert).await;
@@ -1759,7 +1950,9 @@ async fn run_tls_autorenew(
                             x.status = "error".to_string();
                             x.error_msg = e.to_string();
                             Some(x.clone())
-                        } else { None }
+                        } else {
+                            None
+                        }
                     };
                     if let Some(cert) = updated {
                         let _ = db.save_tls_cert(&cert).await;
