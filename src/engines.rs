@@ -2,7 +2,6 @@
 
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
-use futures_util::StreamExt as _;
 use reqwest::Client;
 use tokio::{
     io,
@@ -16,6 +15,10 @@ use crate::models::{
     Config, DdnsRule, IpFilterRule, IpRecord, PortForwardRule, TlsRule, WebRoute, WebServiceRule,
 };
 use crate::state::now_rfc3339;
+
+// hyper reverse-proxy imports
+use bytes::Bytes;
+use http_body_util::{BodyExt as _, Full};
 
 // ─── Port-forward stats ───────────────────────────────────────────────────────
 
@@ -70,7 +73,7 @@ pub struct RuntimeEngines {
 }
 
 impl RuntimeEngines {
-    pub async fn apply_portforwards(&self, rules: &[PortForwardRule]) {
+    pub async fn apply_portforwards(&self, rules: &[PortForwardRule], data: Arc<RwLock<crate::models::RuntimeData>>) {
         let stats = self.pf_stats.clone();
         let history = self.pf_history.clone();
 
@@ -113,12 +116,13 @@ impl RuntimeEngines {
                 .collect(),
             move |r, rx| {
                 let stats3 = stats.clone();
+                let data3 = data.clone();
                 tokio::spawn(async move {
                     let st = {
                         let mut s = stats3.write().await;
                         s.entry(r.id.clone()).or_insert_with(PfStats::new).clone()
                     };
-                    run_forwarder_with_stats(r, rx, st).await;
+                    run_forwarder_with_stats(r, rx, st, data3).await;
                 });
             },
         )
@@ -127,6 +131,13 @@ impl RuntimeEngines {
 
     pub async fn get_pf_history(&self, id: &str) -> Vec<StatSnapshot> {
         self.pf_history.read().await.get(id).cloned().unwrap_or_default()
+    }
+
+    /// Stop a single DDNS worker by id (used by refresh-now to prevent race).
+    pub async fn stop_ddns(&self, id: &str) {
+        if let Some(tx) = self.ddns.write().await.remove(id) {
+            let _ = tx.send(());
+        }
     }
 
     pub async fn apply_ddns(
@@ -237,6 +248,7 @@ async fn run_forwarder_with_stats(
     rule: PortForwardRule,
     mut stop: oneshot::Receiver<()>,
     stats: Arc<PfStats>,
+    data: Arc<RwLock<crate::models::RuntimeData>>,
 ) {
     let listen_addr = rule.effective_listen_addr();
     let target_addr = rule.effective_target_addr();
@@ -264,12 +276,17 @@ async fn run_forwarder_with_stats(
     let proto = rule.protocol.to_lowercase();
 
     // "both" = start TCP + UDP concurrently
+    let rule_id = rule.id.clone();
     if proto == "both" {
         let (stop_tx1, stop_rx1) = oneshot::channel::<()>();
         let (stop_tx2, stop_rx2) = oneshot::channel::<()>();
         let stats1 = stats.clone();
-        let t1 = tokio::spawn(run_tcp_forwarder(listen, target, stop_rx1, stats1));
-        let t2 = tokio::spawn(run_udp_forwarder(listen, target, stop_rx2));
+        let data1 = data.clone();
+        let data2 = data.clone();
+        let rid1 = rule_id.clone();
+        let rid2 = rule_id.clone();
+        let t1 = tokio::spawn(run_tcp_forwarder(listen, target, stop_rx1, stats1, data1, rid1));
+        let t2 = tokio::spawn(run_udp_forwarder(listen, target, stop_rx2, data2, rid2));
         let _ = stop.await;
         let _ = stop_tx1.send(());
         let _ = stop_tx2.send(());
@@ -278,12 +295,12 @@ async fn run_forwarder_with_stats(
     }
 
     if proto == "udp" {
-        run_udp_forwarder(listen, target, stop).await;
+        run_udp_forwarder(listen, target, stop, data, rule_id).await;
         return;
     }
 
     // Default to TCP
-    run_tcp_forwarder(listen, target, stop, stats).await;
+    run_tcp_forwarder(listen, target, stop, stats, data, rule_id).await;
     eprintln!("[portforward] {} stopped", rule.id);
 }
 
@@ -292,6 +309,8 @@ async fn run_tcp_forwarder(
     target: SocketAddr,
     mut stop: oneshot::Receiver<()>,
     stats: Arc<PfStats>,
+    data: Arc<RwLock<crate::models::RuntimeData>>,
+    rule_id: String,
 ) {
     let listener = match TcpListener::bind(listen).await {
         Ok(v) => v,
@@ -305,7 +324,15 @@ async fn run_tcp_forwarder(
         tokio::select! {
             _ = &mut stop => break,
             c = listener.accept() => {
-                if let Ok((inbound, _)) = c {
+                if let Ok((inbound, peer)) = c {
+                    let client_ip = peer.ip().to_string();
+                    // Live IP filter check
+                    let ipfilter = data.read().await.ipfilter.clone();
+                    if !ip_allowed(&ipfilter, "portforward", &rule_id, &client_ip) {
+                        eprintln!("[portforward] TCP blocked {client_ip} → {listen}");
+                        drop(inbound);
+                        continue;
+                    }
                     let st = stats.clone();
                     st.conns.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     tokio::spawn(async move {
@@ -348,6 +375,8 @@ async fn run_udp_forwarder(
     listen: SocketAddr,
     target: SocketAddr,
     mut stop: oneshot::Receiver<()>,
+    data: Arc<RwLock<crate::models::RuntimeData>>,
+    rule_id: String,
 ) {
     let inbound = match UdpSocket::bind(listen).await {
         Ok(s) => Arc::new(s),
@@ -366,6 +395,14 @@ async fn run_udp_forwarder(
             _ = &mut stop => break,
             r = inbound.recv_from(&mut buf) => {
                 let (n, client) = match r { Ok(x) => x, Err(_) => continue };
+                // Live IP filter check
+                {
+                    let ipfilter = data.read().await.ipfilter.clone();
+                    if !ip_allowed(&ipfilter, "portforward", &rule_id, &client.ip().to_string()) {
+                        eprintln!("[portforward] UDP blocked {} → {listen}", client.ip());
+                        continue;
+                    }
+                }
                 let data = buf[..n].to_vec();
 
                 let outbound = {
@@ -1121,7 +1158,7 @@ async fn run_webservice(
     enable_https: bool,
     mut stop: oneshot::Receiver<()>,
     tls_rules: Vec<TlsRule>,
-    ipfilter: Vec<crate::models::IpFilterRule>,
+    ipfilter: Vec<IpFilterRule>,
     db: Db,
     data: Arc<RwLock<crate::models::RuntimeData>>,
 ) {
@@ -1129,25 +1166,17 @@ async fn run_webservice(
 
     let addr: SocketAddr = match format!("0.0.0.0:{listen_port}").parse() {
         Ok(v) => v,
-        Err(e) => {
-            eprintln!("[webservice] invalid listen port {listen_port}: {e}");
-            return;
-        }
+        Err(e) => { eprintln!("[webservice] invalid port {listen_port}: {e}"); return; }
     };
-
-    let listener = match TcpListener::bind(addr).await {
+    let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(v) => v,
-        Err(e) => {
-            eprintln!("[webservice] bind {addr} failed: {e}");
-            return;
-        }
+        Err(e) => { eprintln!("[webservice] bind {addr} failed: {e}"); return; }
     };
 
-    // Build initial TLS acceptor from snapshot; refreshed on cert update via rematch_and_restart
+    // Build initial TLS acceptor from cert snapshot
     let initial_routes: Vec<WebRoute> = {
         let d = data.read().await;
-        d.webservice.iter().find(|s| s.id == svc_id)
-            .map(|s| s.routes.clone()).unwrap_or_default()
+        d.webservice.iter().find(|s| s.id == svc_id).map(|s| s.routes.clone()).unwrap_or_default()
     };
     let tls_acceptor: Option<TlsAcceptor> = if enable_https {
         build_tls_config(&initial_routes, &tls_rules).map(TlsAcceptor::from)
@@ -1156,107 +1185,77 @@ async fn run_webservice(
     };
 
     let tls_rules = Arc::new(tls_rules);
-    let ipfilter = Arc::new(ipfilter);
-    let svc_id = Arc::new(svc_id);
+    let ipfilter  = Arc::new(ipfilter);
+    let svc_id    = Arc::new(svc_id);
+
     eprintln!("[webservice] {} listening on {addr} (https={enable_https})", svc_id);
 
     loop {
         tokio::select! {
             _ = &mut stop => break,
-            c = listener.accept() => {
-                if let Ok((stream, peer)) = c {
-                    let svc_id2 = svc_id.clone();
-                    let data2 = data.clone();
-                    let tls_acceptor2 = tls_acceptor.clone();
-                    let ipfilter2 = ipfilter.clone();
-                    let db_conn = db.clone();
-                    let listen_port2 = listen_port;
-                    tokio::spawn(async move {
-                        // Read live service snapshot for this request (hot reload)
-                        let svc_snap = {
-                            let d = data2.read().await;
-                            d.webservice.iter().find(|s| s.id == *svc_id2).cloned()
-                        };
-                        let svc_snap = match svc_snap {
-                            Some(s) => Arc::new(s),
-                            None => return,
-                        };
-                        // Also read live ipfilter snapshot
-                        let ipf_live = {
-                            let d = data2.read().await;
-                            Arc::new(d.ipfilter.clone())
-                        };
-                        // Use ipf_live if non-empty, else fall back to startup snapshot
-                        let ipfilter_used = if !ipf_live.is_empty() { ipf_live } else { ipfilter2 };
-
-                        if let Some(acceptor) = tls_acceptor2 {
-                            let mut buf = [0u8; 1];
-                            match tokio::io::AsyncReadExt::peek(
-                                &mut tokio::io::BufReader::new(&stream), &mut buf
-                            ).await {
-                                Ok(1) if buf[0] == 0x16 => {
-                                    match acceptor.accept(stream).await {
-                                        Ok(tls_stream) => {
-                                            handle_http_connection_tls(tls_stream, peer, svc_snap, ipfilter_used, db_conn).await;
-                                        }
-                                        Err(e) => {
-                                            eprintln!("[webservice] TLS error from {peer}: {e}");
-                                        }
-                                    }
-                                }
-                                _ => {
-                                    handle_http_redirect_to_https(stream, peer, svc_snap, listen_port2).await;
-                                }
-                            }
-                        } else {
-                            handle_http_connection_plain(stream, peer, svc_snap, ipfilter_used, db_conn).await;
-                        }
-                    });
-                }
+            conn = listener.accept() => {
+                let (stream, peer) = match conn { Ok(v) => v, Err(_) => continue };
+                let svc_id2   = svc_id.clone();
+                let data2     = data.clone();
+                let ipf2      = ipfilter.clone();
+                let db2       = db.clone();
+                let tls2      = tls_acceptor.clone();
+                let port      = listen_port;
+                tokio::spawn(async move {
+                    dispatch_connection(stream, peer, svc_id2, data2, ipf2, db2, tls2, port).await;
+                });
             }
         }
     }
-    eprintln!("[webservice] {} stopped", rule.id);
+    eprintln!("[webservice] {} stopped", svc_id);
 }
 
-async fn handle_http_redirect_to_https(
-    mut stream: TcpStream,
+/// Peek first byte to distinguish TLS from plain HTTP, then dispatch to hyper.
+async fn dispatch_connection(
+    stream: TcpStream,
     peer: SocketAddr,
-    rule: Arc<WebServiceRule>,
+    svc_id: Arc<String>,
+    data: Arc<RwLock<crate::models::RuntimeData>>,
+    ipfilter: Arc<Vec<IpFilterRule>>,
+    db: Db,
+    tls_acceptor: Option<tokio_rustls::TlsAcceptor>,
     listen_port: u16,
 ) {
-    use tokio::io::{AsyncWriteExt, AsyncReadExt, AsyncBufReadExt};
-    let mut first_byte = [0u8; 1];
-    if stream.read_exact(&mut first_byte).await.is_err() { return; }
-    // Read the rest of the HTTP request to be polite, then redirect
-    // Use tokio::io::BufReader with a prepended byte
-    // Since we can't un-read, we parse request_line manually:
-    // first_byte[0] is first char of "GET / HTTP/1.1\r\n"
-    let mut rest_line = String::new();
-    {
-        use tokio::io::AsyncBufReadExt;
-        let mut br = tokio::io::BufReader::new(&mut stream);
-        let _ = br.read_line(&mut rest_line).await;
-    }
-    let full_line = format!("{}{}", first_byte[0] as char, rest_line);
-    let path = full_line.trim().splitn(3, ' ').nth(1).unwrap_or("/").to_string();
-    // Read headers to get Host
-    let mut host_header = String::new();
-    let mut buf = [0u8; 4096];
-    // Read headers in chunks (not line by line to avoid borrow issues)
-    let _ = stream.read(&mut buf).await;
-    let header_str = String::from_utf8_lossy(&buf);
-    for line in header_str.lines() {
-        if let Some((k, v)) = line.split_once(':') {
-            if k.trim().eq_ignore_ascii_case("host") {
-                host_header = v.trim().to_string();
-                break;
+    use tokio::io::AsyncReadExt;
+    if let Some(acceptor) = tls_acceptor {
+        let mut buf = [0u8; 1];
+        match tokio::io::AsyncReadExt::peek(&mut tokio::io::BufReader::new(&stream), &mut buf).await {
+            Ok(1) if buf[0] == 0x16 => {
+                // TLS
+                match acceptor.accept(stream).await {
+                    Ok(tls) => serve_hyper_tls(tls, peer, svc_id, data, ipfilter, db, true).await,
+                    Err(e)  => eprintln!("[webservice] TLS accept {peer}: {e}"),
+                }
+            }
+            _ => {
+                // Plain HTTP → redirect to HTTPS
+                redirect_to_https(stream, peer, listen_port).await;
             }
         }
+    } else {
+        serve_hyper_plain(stream, peer, svc_id, data, ipfilter, db).await;
     }
-    let port = listen_port;
-    let host_bare = host_header.split(':').next().unwrap_or(host_header.as_str());
-    let host_bare = if host_bare.is_empty() { &peer.ip().to_string() } else { host_bare };
+}
+
+/// Send 301 to HTTPS for plain-HTTP connections on a TLS-enabled service.
+async fn redirect_to_https(mut stream: TcpStream, peer: SocketAddr, port: u16) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut buf = [0u8; 4096];
+    let n = stream.read(&mut buf).await.unwrap_or(0);
+    let req = String::from_utf8_lossy(&buf[..n]);
+    let path = req.lines().next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .unwrap_or("/").to_string();
+    let host = req.lines()
+        .find(|l| l.to_lowercase().starts_with("host:"))
+        .and_then(|l| l.splitn(2, ':').nth(1))
+        .unwrap_or("").trim().to_string();
+    let host_bare = host.split(':').next().unwrap_or(&host);
     let location = if port == 443 {
         format!("https://{host_bare}{path}")
     } else {
@@ -1266,244 +1265,353 @@ async fn handle_http_redirect_to_https(
         "HTTP/1.1 301 Moved Permanently\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     );
     let _ = stream.write_all(resp.as_bytes()).await;
+    let _ = peer;
 }
 
-async fn handle_http_connection_plain(
+// ─── Hyper service context ─────────────────────────────────────────────────────
+
+#[derive(Clone)]
+struct ProxyCtx {
+    peer:     SocketAddr,
+    svc_id:   Arc<String>,
+    data:     Arc<RwLock<crate::models::RuntimeData>>,
+    ipfilter: Arc<Vec<IpFilterRule>>,
+    db:       Db,
+    is_https: bool,
+}
+
+async fn serve_hyper_plain(
     stream: TcpStream,
     peer: SocketAddr,
-    rule: Arc<WebServiceRule>,
-    ipfilter: Arc<Vec<crate::models::IpFilterRule>>,
+    svc_id: Arc<String>,
+    data: Arc<RwLock<crate::models::RuntimeData>>,
+    ipfilter: Arc<Vec<IpFilterRule>>,
     db: Db,
 ) {
-    handle_connection_inner(stream, peer, rule, ipfilter, db, false).await;
+    let ctx = ProxyCtx { peer, svc_id, data, ipfilter, db, is_https: false };
+    let svc = hyper::service::service_fn(move |req| {
+        let ctx = ctx.clone();
+        async move { proxy_request(req, ctx).await }
+    });
+    if let Err(e) = hyper::server::conn::http1::Builder::new()
+        .serve_connection(hyper_util::rt::TokioIo::new(stream), svc)
+        .with_upgrades()   // ← enables WebSocket upgrade
+        .await
+    {
+        if !is_benign_hyper_error(&e) {
+            eprintln!("[webservice] hyper plain conn error: {e}");
+        }
+    }
 }
 
-async fn handle_http_connection_tls(
+async fn serve_hyper_tls(
     stream: tokio_rustls::server::TlsStream<TcpStream>,
     peer: SocketAddr,
-    rule: Arc<WebServiceRule>,
-    ipfilter: Arc<Vec<crate::models::IpFilterRule>>,
-    db: Db,
-) {
-    handle_connection_inner(stream, peer, rule, ipfilter, db, true).await;
-}
-
-async fn handle_connection_inner<S>(
-    stream: S,
-    peer: SocketAddr,
-    rule: Arc<WebServiceRule>,
+    svc_id: Arc<String>,
+    data: Arc<RwLock<crate::models::RuntimeData>>,
     ipfilter: Arc<Vec<IpFilterRule>>,
     db: Db,
     is_https: bool,
-) where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
-{
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-
-    let (read_half, mut write_half) = tokio::io::split(stream);
-    let mut reader = BufReader::new(read_half);
-
-    // ── Parse request line ─────────────────────────────────────────────────
-    let mut request_line = String::new();
-    if reader.read_line(&mut request_line).await.is_err() { return; }
-    let parts: Vec<&str> = request_line.trim().splitn(3, ' ').collect();
-    if parts.len() < 2 { return; }
-    let method = parts[0].to_string();
-    let path   = parts[1].to_string();
-
-    // ── Parse headers ──────────────────────────────────────────────────────
-    let mut headers: Vec<(String, String)> = vec![];
-    let mut host_header    = String::new();
-    let mut content_length: Option<usize> = None;
-    let mut cookie_header  = String::new();
-    let mut is_websocket   = false;
-    let mut conn_upgrade   = false;
-    let mut user_agent     = String::new();
-
-    loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line).await.is_err() { break; }
-        let line = line.trim_end();
-        if line.is_empty() { break; }
-        if let Some((k, v)) = line.split_once(':') {
-            let key = k.trim().to_lowercase();
-            let val = v.trim().to_string();
-            match key.as_str() {
-                "host"           => host_header   = val.clone(),
-                "content-length" => content_length = val.parse().ok(),
-                "cookie"         => cookie_header  = val.clone(),
-                "upgrade"        => if val.to_lowercase() == "websocket" { is_websocket = true; },
-                "connection"     => if val.to_lowercase().contains("upgrade") { conn_upgrade = true; },
-                "user-agent"     => user_agent = val.clone(),
-                _ => {}
-            }
-            headers.push((key, val));
+) {
+    let ctx = ProxyCtx { peer, svc_id, data, ipfilter, db, is_https };
+    let svc = hyper::service::service_fn(move |req| {
+        let ctx = ctx.clone();
+        async move { proxy_request(req, ctx).await }
+    });
+    if let Err(e) = hyper::server::conn::http1::Builder::new()
+        .serve_connection(hyper_util::rt::TokioIo::new(stream), svc)
+        .with_upgrades()
+        .await
+    {
+        if !is_benign_hyper_error(&e) {
+            eprintln!("[webservice] hyper tls conn error: {e}");
         }
     }
+}
 
-    let client_ip = peer.ip().to_string();
+fn is_benign_hyper_error(e: &hyper::Error) -> bool {
+    // connection reset / client hangup are normal
+    e.is_incomplete_message() || e.is_canceled() || e.is_closed()
+}
+
+// ─── Core reverse-proxy request handler ──────────────────────────────────────
+
+const HOP_BY_HOP: &[&str] = &[
+    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+    "te", "trailers", "transfer-encoding", "upgrade",
+];
+
+async fn proxy_request(
+    req: hyper::Request<hyper::body::Incoming>,
+    ctx: ProxyCtx,
+) -> Result<hyper::Response<http_body_util::Full<bytes::Bytes>>, std::convert::Infallible> {
+    Ok(proxy_request_inner(req, ctx).await)
+}
+
+async fn proxy_request_inner(
+    req: hyper::Request<hyper::body::Incoming>,
+    ctx: ProxyCtx,
+) -> hyper::Response<http_body_util::Full<bytes::Bytes>> {
+    use http_body_util::{BodyExt, Full};
+    use hyper::{Method, Request, Response, StatusCode};
+    use bytes::Bytes;
+
+    let client_ip = ctx.peer.ip().to_string();
+
+    // ── Live route + ipfilter snapshot ────────────────────────────────────
+    let (svc_snap, ipf_live) = {
+        let d = ctx.data.read().await;
+        let svc = d.webservice.iter().find(|s| s.id == *ctx.svc_id).cloned();
+        let ipf = d.ipfilter.clone();
+        (svc, ipf)
+    };
+    let svc_snap = match svc_snap {
+        Some(s) => Arc::new(s),
+        None    => return bad_gateway("service not found"),
+    };
+    let ipfilter = if !ipf_live.is_empty() { Arc::new(ipf_live) } else { ctx.ipfilter.clone() };
 
     // ── Route matching ─────────────────────────────────────────────────────
-    let matched_route = match find_route_for_request(&rule, &host_header) {
+    let host_header = req.headers().get("host")
+        .and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+    let matched_route = match find_route_for_request(&svc_snap, &host_header) {
         Some((r, _)) => r.clone(),
-        None => {
-            let _ = write_half.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n").await;
-            return;
-        }
+        None => return bad_gateway(&format!("no route for host: {host_header}")),
     };
 
-    // ── Per-request IP filter ──────────────────────────────────────────────
+    // ── IP filter ──────────────────────────────────────────────────────────
     if !ip_allowed(&ipfilter, "webservice", &matched_route.id, &client_ip) {
-        let _ = write_half.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 9\r\n\r\nForbidden").await;
-        return;
+        return simple_response(StatusCode::FORBIDDEN, "Forbidden");
     }
+
+    let path = req.uri().path_and_query().map(|pq| pq.as_str()).unwrap_or("/").to_string();
+    let user_agent = req.headers().get("user-agent")
+        .and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
 
     // ── Auth check (cookie-based) ──────────────────────────────────────────
     if matched_route.auth_enabled && !matched_route.auth_pass_hash.is_empty() {
         let cookie_name   = format!("vane_auth_{}", &matched_route.id[..8.min(matched_route.id.len())]);
         let session_token = auth_session_token(&matched_route.id, &matched_route.auth_pass_hash);
-        let cookie_ok = cookie_header.split(';').any(|c| {
-            let c = c.trim();
-            c.split_once('=').map(|(k, v)| k.trim() == cookie_name && v.trim() == session_token).unwrap_or(false)
-        });
+        let cookie_ok = req.headers().get_all("cookie").iter()
+            .flat_map(|v| v.to_str().unwrap_or("").split(';'))
+            .any(|c| {
+                let c = c.trim();
+                c.split_once('=').map(|(k, v)| k.trim() == cookie_name && v.trim() == session_token).unwrap_or(false)
+            });
+
         if !cookie_ok {
-            if method == "POST" && path == "/__vane_login__" {
-                let body_len = content_length.unwrap_or(0).min(65536);
-                let mut body = vec![0u8; body_len];
-                let _ = reader.read_exact(&mut body).await;
-                let form_str = String::from_utf8_lossy(&body);
+            if req.method() == Method::POST && path == "/__vane_login__" {
+                let body_bytes = req.collect().await.unwrap_or_default().to_bytes();
+                let form = String::from_utf8_lossy(&body_bytes);
                 let (mut user, mut pass, mut next) = (String::new(), String::new(), "/".to_string());
-                for part in form_str.split('&') {
+                for part in form.split('&') {
                     if let Some((k, v)) = part.split_once('=') {
                         let v = urlencoding::decode(v).unwrap_or_default().to_string();
                         match k { "username"=>user=v, "password"=>pass=v, "next"=>next=v, _=>{} }
                     }
                 }
                 if next.is_empty() { next = "/".to_string(); }
-                let auth_ok = user == matched_route.auth_user
+                let ok = user == matched_route.auth_user
                     && bcrypt::verify(&pass, &matched_route.auth_pass_hash).unwrap_or(false);
-                if auth_ok {
-                    let sf = if is_https { "; Secure" } else { "" };
+                if ok {
+                    let sf = if ctx.is_https { "; Secure" } else { "" };
                     let sc = format!("{cookie_name}={session_token}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax{sf}");
-                    let resp = format!("HTTP/1.1 302 Found\r\nLocation: {next}\r\nSet-Cookie: {sc}\r\nContent-Length: 0\r\n\r\n");
-                    let _ = write_half.write_all(resp.as_bytes()).await;
+                    return Response::builder()
+                        .status(StatusCode::FOUND)
+                        .header("Location", next)
+                        .header("Set-Cookie", sc)
+                        .body(Full::new(Bytes::new()))
+                        .unwrap();
                 } else {
                     let page = build_login_page(&path, "用户名或密码错误", &matched_route.domain);
-                    let resp = format!("HTTP/1.1 401 Unauthorized\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n\r\n{page}", page.len());
-                    let _ = write_half.write_all(resp.as_bytes()).await;
+                    return Response::builder()
+                        .status(StatusCode::UNAUTHORIZED)
+                        .header("Content-Type", "text/html; charset=utf-8")
+                        .body(Full::new(Bytes::from(page)))
+                        .unwrap();
                 }
-                return;
             }
-            log_access_async(&db, &rule.id, &matched_route, &client_ip, &user_agent, "no_auth").await;
+            log_access_async(&ctx.db, &ctx.svc_id, &matched_route, &client_ip, &user_agent, "no_auth").await;
             let page = build_login_page(&path, "", &matched_route.domain);
-            let resp = format!("HTTP/1.1 401 Unauthorized\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n\r\n{page}", page.len());
-            let _ = write_half.write_all(resp.as_bytes()).await;
-            return;
+            return Response::builder()
+                .status(StatusCode::UNAUTHORIZED)
+                .header("Content-Type", "text/html; charset=utf-8")
+                .body(Full::new(Bytes::from(page)))
+                .unwrap();
         }
     }
 
-    // ── Build upstream URL (support backend path prefix) ──────────────────
+    // ── Build upstream URL ─────────────────────────────────────────────────
     let backend_raw = matched_route.backend_url.trim_end_matches('/');
-    if backend_raw.is_empty() {
-        let _ = write_half.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n").await;
-        return;
-    }
+    if backend_raw.is_empty() { return bad_gateway("empty backend"); }
     let (upstream_base, backend_prefix) = parse_backend_base(backend_raw);
     let upstream_path = if backend_prefix.is_empty() { path.clone() } else { format!("{backend_prefix}{path}") };
     let upstream_url  = format!("{upstream_base}{upstream_path}");
 
-    // ── WebSocket: raw TCP tunnel ──────────────────────────────────────────
-    if is_websocket && conn_upgrade {
-        let backend_host = upstream_base.split("://").nth(1).unwrap_or("").to_string();
-        let mut ws_req = format!("{method} {upstream_path} HTTP/1.1\r\nHost: {backend_host}\r\n");
-        const HOP: &[&str] = &["connection","keep-alive","proxy-authenticate",
-            "proxy-authorization","te","trailers","transfer-encoding"];
-        for (k, v) in &headers {
-            if HOP.contains(&k.as_str()) { continue; }
-            ws_req.push_str(&format!("{k}: {v}\r\n"));
-        }
-        ws_req.push_str(&format!("X-Forwarded-For: {client_ip}\r\nX-Real-IP: {client_ip}\r\n"));
-        ws_req.push_str(&format!("X-Forwarded-Proto: {}\r\n\r\n", if is_https {"https"} else {"http"}));
-        match TcpStream::connect(&backend_host).await {
-            Ok(mut backend) => {
-                let _ = backend.write_all(ws_req.as_bytes()).await;
-                let client_read = reader.into_inner();
-                let (mut br, mut bw) = backend.split();
-                let (mut cr, mut cw) = (client_read, write_half);
-                let _ = tokio::join!(
-                    tokio::io::copy(&mut br, &mut cw),
-                    tokio::io::copy(&mut cr, &mut bw),
-                );
-            }
-            Err(_) => {
-                let _ = write_half.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n").await;
-            }
-        }
-        log_access_async(&db, &rule.id, &matched_route, &client_ip, &user_agent, "websocket").await;
-        return;
+    let method     = req.method().clone();
+    let req_headers = req.headers().clone();
+
+    // ── WebSocket upgrade ──────────────────────────────────────────────────
+    let is_upgrade = req_headers.get("upgrade")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.to_lowercase() == "websocket")
+        .unwrap_or(false);
+
+    if is_upgrade {
+        log_access_async(&ctx.db, &ctx.svc_id, &matched_route, &client_ip, &user_agent, "websocket").await;
+        return ws_tunnel(req, &upstream_base, &upstream_path, &client_ip, ctx.is_https).await;
     }
 
-    // ── Regular HTTP proxy with streaming response ─────────────────────────
-    const HOP_BY_HOP: &[&str] = &["connection","keep-alive","proxy-authenticate",
-        "proxy-authorization","te","trailers","transfer-encoding","upgrade"];
+    // ── HTTP reverse proxy via hyper client ───────────────────────────────
+    let body_bytes = match req.collect().await {
+        Ok(b) => b.to_bytes(),
+        Err(_) => return bad_gateway("read request body failed"),
+    };
 
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .timeout(Duration::from_secs(300))
-        .build()
-        .unwrap_or_default();
+    let mut upstream_req = Request::builder()
+        .method(method)
+        .uri(&upstream_url);
 
-    let mut req_builder = client.request(
+    for (k, v) in &req_headers {
+        let key = k.as_str();
+        if HOP_BY_HOP.contains(&key) { continue; }
+        upstream_req = upstream_req.header(k, v);
+    }
+    // Overwrite / add proxy headers
+    upstream_req = upstream_req
+        .header("host",               &host_header)
+        .header("x-forwarded-for",    &client_ip)
+        .header("x-real-ip",          &client_ip)
+        .header("x-forwarded-proto",  if ctx.is_https { "https" } else { "http" });
+
+    let upstream_req = match upstream_req.body(http_body_util::Full::new(body_bytes)) {
+        Ok(r) => r,
+        Err(e) => return bad_gateway(&format!("build upstream req: {e}")),
+    };
+
+    // Use reqwest for upstream (handles TLS, HTTP/2, redirects, timeouts out of the box)
+    static UPSTREAM_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    let upstream_client = UPSTREAM_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .timeout(Duration::from_secs(300))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("build upstream client")
+    });
+
+    let mut req_builder = upstream_client.request(
         reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET),
         &upstream_url,
     );
-    for (k, v) in &headers {
-        if HOP_BY_HOP.contains(&k.as_str()) { continue; }
-        req_builder = req_builder.header(k.as_str(), v.as_str());
+    for (k, v) in &req_headers {
+        let key = k.as_str();
+        if HOP_BY_HOP.contains(&key) { continue; }
+        req_builder = req_builder.header(k, v);
     }
     req_builder = req_builder
-        .header("X-Forwarded-For", &client_ip)
-        .header("X-Real-IP",       &client_ip)
-        .header("X-Forwarded-Proto", if is_https { "https" } else { "http" })
-        .header("Host", &host_header);
-
-    if let Some(len) = content_length {
-        if len > 0 {
-            let mut body = vec![0u8; len.min(64 * 1024 * 1024)];
-            let _ = reader.read_exact(&mut body).await;
-            req_builder = req_builder.body(body);
-        }
-    }
+        .header("host",              &host_header)
+        .header("x-forwarded-for",   &client_ip)
+        .header("x-real-ip",         &client_ip)
+        .header("x-forwarded-proto", if ctx.is_https { "https" } else { "http" })
+        .body(body_bytes.to_vec());
 
     match req_builder.send().await {
         Ok(resp) => {
-            let status = resp.status();
-            let mut head = format!("HTTP/1.1 {} {}\r\n", status.as_u16(), status.canonical_reason().unwrap_or(""));
+            let status = hyper::StatusCode::from_u16(resp.status().as_u16())
+                .unwrap_or(hyper::StatusCode::BAD_GATEWAY);
+            let mut builder = Response::builder().status(status);
             for (k, v) in resp.headers() {
-                let key = k.as_str();
-                if HOP_BY_HOP.contains(&key) { continue; }
-                if let Ok(val) = v.to_str() { head.push_str(&format!("{key}: {val}\r\n")); }
+                if HOP_BY_HOP.contains(&k.as_str()) { continue; }
+                builder = builder.header(k.as_str(), v.as_bytes());
             }
-            head.push_str("\r\n");
-            let _ = write_half.write_all(head.as_bytes()).await;
-            // Stream body chunks
-            let mut byte_stream = resp.bytes_stream();
-            while let Some(chunk) = byte_stream.next().await {
-                match chunk {
-                    Ok(bytes) => { if write_half.write_all(&bytes).await.is_err() { break; } }
-                    Err(_) => break,
-                }
-            }
+            let body = resp.bytes().await.unwrap_or_default();
+            log_access_async(&ctx.db, &ctx.svc_id, &matched_route, &client_ip, &user_agent, "ok").await;
+            builder.body(Full::new(Bytes::from(body))).unwrap_or_else(|_| bad_gateway("response build"))
         }
         Err(e) => {
             eprintln!("[webservice] upstream error {upstream_url}: {e}");
-            let _ = write_half.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n").await;
+            bad_gateway(&format!("upstream: {e}"))
         }
     }
-    log_access_async(&db, &rule.id, &matched_route, &client_ip, &user_agent, "ok").await;
 }
 
-/// Parse backend URL into (scheme://host:port, /path/prefix)
+// ─── WebSocket tunnel ─────────────────────────────────────────────────────────
+
+async fn ws_tunnel(
+    req: hyper::Request<hyper::body::Incoming>,
+    upstream_base: &str,
+    upstream_path: &str,
+    client_ip: &str,
+    is_https: bool,
+) -> hyper::Response<http_body_util::Full<bytes::Bytes>> {
+    use hyper::header::{CONNECTION, UPGRADE};
+    // Resolve backend host:port
+    let backend_host = upstream_base.splitn(3, '/').nth(2).unwrap_or("").to_string();
+    // Build the HTTP upgrade request to send to backend
+    let ws_scheme = if upstream_base.starts_with("https") { "wss" } else { "ws" };
+    let backend_url = format!("{ws_scheme}://{backend_host}{upstream_path}");
+    let _ = (backend_url, is_https); // used below
+
+    // Perform the raw TCP tunnel via hyper's on_upgrade
+    let upgraded_client = hyper::upgrade::on(req);
+    let backend_host2 = backend_host.clone();
+    let upstream_path2 = upstream_path.to_string();
+    let client_ip2 = client_ip.to_string();
+
+    tokio::spawn(async move {
+        match upgraded_client.await {
+            Ok(client_io) => {
+                match TcpStream::connect(&backend_host2).await {
+                    Ok(mut backend) => {
+                        use tokio::io::AsyncWriteExt;
+                        // Send the initial WS handshake to backend
+                        let handshake = format!(
+                            "GET {upstream_path2} HTTP/1.1\r\nHost: {backend_host2}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nX-Forwarded-For: {client_ip2}\r\n\r\n"
+                        );
+                        let _ = backend.write_all(handshake.as_bytes()).await;
+                        // Bidirectional copy
+                        let mut client_io = hyper_util::rt::TokioIo::new(client_io);
+                        let (mut br, mut bw) = backend.split();
+                        let _ = tokio::join!(
+                            tokio::io::copy(&mut br, &mut client_io),
+                            tokio::io::copy(&mut client_io, &mut bw),
+                        );
+                    }
+                    Err(e) => eprintln!("[webservice] ws backend connect {backend_host2}: {e}"),
+                }
+            }
+            Err(e) => eprintln!("[webservice] ws upgrade: {e}"),
+        }
+    });
+
+    // Return 101 Switching Protocols to trigger hyper's upgrade mechanism
+    hyper::Response::builder()
+        .status(hyper::StatusCode::SWITCHING_PROTOCOLS)
+        .header(CONNECTION, "Upgrade")
+        .header(UPGRADE, "websocket")
+        .body(http_body_util::Full::new(bytes::Bytes::new()))
+        .unwrap()
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+fn bad_gateway(msg: &str) -> hyper::Response<http_body_util::Full<bytes::Bytes>> {
+    simple_response(hyper::StatusCode::BAD_GATEWAY, msg)
+}
+
+fn simple_response(
+    status: hyper::StatusCode,
+    body: &str,
+) -> hyper::Response<http_body_util::Full<bytes::Bytes>> {
+    hyper::Response::builder()
+        .status(status)
+        .header("content-type", "text/plain")
+        .body(http_body_util::Full::new(bytes::Bytes::from(body.to_string())))
+        .unwrap()
+}
+
+/// Parse backend URL into (scheme://host[:port], /path/prefix)
 fn parse_backend_base(backend: &str) -> (String, String) {
     if let Ok(u) = url::Url::parse(backend) {
         let path = u.path().trim_end_matches('/').to_string();
@@ -1519,7 +1627,7 @@ fn parse_backend_base(backend: &str) -> (String, String) {
     }
 }
 
-/// Deduplicated access log writer (today+route+IP, mirrors Go).
+/// Deduplicated access-log writer (today + routeID + clientIP + browser).
 async fn log_access_async(
     db: &Db,
     service_id: &str,
@@ -1533,49 +1641,46 @@ async fn log_access_async(
     static SEEN: std::sync::OnceLock<Mutex<HashSet<String>>> = std::sync::OnceLock::new();
     let seen = SEEN.get_or_init(|| Mutex::new(HashSet::new()));
     let browser = parse_browser(ua);
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    // Dedup key: today + routeID + clientIP + browser (mirrors Go)
-    let key = format!("{today}\x00{}\x00{client_ip}\x00{browser}", route.id);
-    let is_new = seen.lock().map(|mut s| s.insert(key)).unwrap_or(true);
+    let today   = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let key     = format!("{today}\x00{}\x00{client_ip}\x00{browser}", route.id);
+    let is_new  = seen.lock().map(|mut s| s.insert(key)).unwrap_or(true);
     if !is_new { return; }
     if let Ok(mut s) = seen.lock() { if s.len() > 100_000 { s.clear(); } }
     let log = crate::models::AccessLog {
-        id: crate::state::new_id(),
-        service_id: service_id.to_string(),
-        route_id:   route.id.clone(),
-        route_name: route.name.clone(),
-        domain:     route.domain.clone(),
+        id:          crate::state::new_id(),
+        service_id:  service_id.to_string(),
+        route_id:    route.id.clone(),
+        route_name:  route.name.clone(),
+        domain:      route.domain.clone(),
         status_code: 0,
-        client_ip:  client_ip.to_string(),
-        user_agent: browser,
+        client_ip:   client_ip.to_string(),
+        user_agent:  browser,
         auth_result: auth_result.to_string(),
-        time: now_rfc3339(),
+        time:        now_rfc3339(),
     };
     let _ = db.append_access_log(&log).await;
 }
 
-/// Check client IP against ip-filter rules (mirrors Go's CheckIPAllowed).
+/// Check client IP against ip-filter rules.
 fn ip_allowed(rules: &[IpFilterRule], scope_type: &str, target_id: &str, client_ip: &str) -> bool {
     let ip: Option<std::net::IpAddr> = client_ip.parse().ok();
     for rule in rules {
         if !rule.enabled { continue; }
-        let matches_scope = rule.scopes.iter().any(|s| {
+        let ok = rule.scopes.iter().any(|s| {
             s.scope_type == scope_type && (s.target_id.is_empty() || s.target_id == target_id)
         });
-        if !matches_scope { continue; }
-        let mut all_ips: Vec<&str> = rule.manual_ips.iter().map(String::as_str).collect();
-        for att in &rule.attachments {
-            all_ips.extend(att.ips.iter().map(String::as_str));
-        }
-        let matched = ip_in_list(&ip, client_ip, &all_ips);
+        if !ok { continue; }
+        let mut all: Vec<&str> = rule.manual_ips.iter().map(String::as_str).collect();
+        for att in &rule.attachments { all.extend(att.ips.iter().map(String::as_str)); }
+        let matched = ip_in_list(&ip, client_ip, &all);
         return if rule.mode == "blacklist" { !matched } else { matched };
     }
     true
 }
 
 fn ip_in_list(ip: &Option<std::net::IpAddr>, raw: &str, list: &[&str]) -> bool {
-    for entry in list {
-        let e = entry.trim();
+    for e in list {
+        let e = e.trim();
         if e.is_empty() { continue; }
         if let Ok(net) = e.parse::<ipnet::IpNet>() {
             if let Some(a) = ip { if net.contains(a) { return true; } }
@@ -1587,7 +1692,6 @@ fn ip_in_list(ip: &Option<std::net::IpAddr>, raw: &str, list: &[&str]) -> bool {
     }
     false
 }
-
 
 // ─── TLS auto-renew watcher ───────────────────────────────────────────────────
 

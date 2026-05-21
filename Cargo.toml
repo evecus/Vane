@@ -33,6 +33,11 @@ urlencoding = "2"
 tokio-rustls = "0.26"
 rustls = { version = "0.23", features = ["ring"] }
 rustls-pemfile = "2"
-# Database + encryption
 rusqlite = { version = "0.31", features = ["bundled"] }
 aes-gcm = "0.10"
+# Hyper for proper HTTP/1.1 + HTTP/2 reverse proxy
+hyper = { version = "1", features = ["http1", "http2", "server", "client"] }
+hyper-util = { version = "0.1", features = ["tokio", "http1"] }
+http-body-util = "0.1"
+bytes = "1"
+tower = { version = "0.4", features = ["util"] }

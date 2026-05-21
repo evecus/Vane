@@ -155,7 +155,7 @@ impl AppState {
 
     pub async fn apply_engines(&self) {
         let d = self.data.read().await.clone();
-        self.engines.apply_portforwards(&d.portforward).await;
+        self.engines.apply_portforwards(&d.portforward, self.data.clone()).await;
         self.engines.apply_ddns(&d.ddns, self.data.clone(), self.db.clone()).await;
         self.engines.apply_webservice(&d.webservice, &d.tls, &d.ipfilter, self.db.clone(), self.data.clone()).await;
         self.engines

@@ -954,8 +954,23 @@ pub async fn update_ddns_refresh_now(
     match rule {
         None => not_found("not found"),
         Some(r) => {
+            // Stop background worker first to avoid race (mirrors Go TriggerNow pattern)
+            state.engines.stop_ddns(&id).await;
+
             let client = reqwest::Client::new();
-            match crate::engines::sync_ddns_provider(&client, &r).await {
+            let sync_result = crate::engines::sync_ddns_provider(&client, &r).await;
+
+            // Restart worker if rule is still enabled
+            let still_enabled = state.data.read().await.ddns.iter()
+                .find(|x| x.id == id).map(|x| x.enabled).unwrap_or(false);
+            if still_enabled {
+                let d = state.data.read().await;
+                let rules: Vec<_> = d.ddns.clone();
+                drop(d);
+                state.engines.apply_ddns(&rules, state.data.clone(), state.db.clone()).await;
+            }
+
+            match sync_result {
                 Ok(ip) => {
                     let at = now_rfc3339();
                     let mut d = state.data.write().await;
