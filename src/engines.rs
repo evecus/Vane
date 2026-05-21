@@ -17,8 +17,6 @@ use crate::models::{
 use crate::state::now_rfc3339;
 
 // hyper reverse-proxy imports
-use bytes::Bytes;
-use http_body_util::{BodyExt as _, Full};
 
 // ─── Port-forward stats ───────────────────────────────────────────────────────
 
@@ -246,7 +244,7 @@ async fn reconcile_spawn<T: Clone + Send + 'static, F>(
 
 async fn run_forwarder_with_stats(
     rule: PortForwardRule,
-    mut stop: oneshot::Receiver<()>,
+    stop: oneshot::Receiver<()>,
     stats: Arc<PfStats>,
     data: Arc<RwLock<crate::models::RuntimeData>>,
 ) {
@@ -344,7 +342,7 @@ async fn run_tcp_forwarder(
     }
 }
 
-async fn proxy_tcp_stats(mut inbound: TcpStream, target: SocketAddr, stats: Arc<PfStats>) {
+async fn proxy_tcp_stats(inbound: TcpStream, target: SocketAddr, stats: Arc<PfStats>) {
     if let Ok(outbound) = TcpStream::connect(target).await {
         let (mut ri, mut wi) = inbound.into_split();
         let (mut ro, mut wo) = outbound.into_split();
@@ -1184,7 +1182,7 @@ async fn run_webservice(
         None
     };
 
-    let tls_rules = Arc::new(tls_rules);
+    let _tls_rules = Arc::new(tls_rules);
     let ipfilter  = Arc::new(ipfilter);
     let svc_id    = Arc::new(svc_id);
 
@@ -1344,15 +1342,18 @@ async fn serve_hyper_plain(
     }
 }
 
-async fn serve_hyper_tls(
-    stream: tokio_rustls::server::TlsStream<TcpStream>,
+async fn serve_hyper_tls<S>(
+    stream: tokio_rustls::server::TlsStream<S>,
     peer: SocketAddr,
     svc_id: Arc<String>,
     data: Arc<RwLock<crate::models::RuntimeData>>,
     ipfilter: Arc<Vec<IpFilterRule>>,
     db: Db,
     is_https: bool,
-) {
+)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     let ctx = ProxyCtx { peer, svc_id, data, ipfilter, db, is_https };
     let svc = hyper::service::service_fn(move |req| {
         let ctx = ctx.clone();
@@ -1393,7 +1394,7 @@ async fn proxy_request_inner(
     ctx: ProxyCtx,
 ) -> hyper::Response<http_body_util::Full<bytes::Bytes>> {
     use http_body_util::{BodyExt, Full};
-    use hyper::{Method, Request, Response, StatusCode};
+    use hyper::{Method, Response, StatusCode};
     use bytes::Bytes;
 
     let client_ip = ctx.peer.ip().to_string();
