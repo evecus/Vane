@@ -16,6 +16,8 @@ password-hash = "0.5"
 pbkdf2 = { version = "0.12", features = ["simple"] }
 rand_core = { version = "0.6", features = ["std"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart", "stream"] }
+futures-util = "0.3"
+url = "2"
 ipnet = "2"
 instant-acme = "0.7"
 rcgen = "0.13"
@@ -31,3 +33,6 @@ urlencoding = "2"
 tokio-rustls = "0.26"
 rustls = { version = "0.23", features = ["ring"] }
 rustls-pemfile = "2"
+# Database + encryption
+rusqlite = { version = "0.31", features = ["bundled"] }
+aes-gcm = "0.10"

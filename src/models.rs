@@ -2,12 +2,12 @@ use serde::{Deserialize, Serialize};
 
 // ─── Admin ────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     pub admin: AdminConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AdminConfig {
     pub username: String,
     pub password_hash: String,
@@ -442,4 +442,17 @@ pub struct RuntimeData {
     pub admin_logs: Vec<AdminLogRecord>,
     #[serde(default)]
     pub sessions_meta: Vec<SessionInfo>,
+}
+
+// ─── Backup ───────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FullBackup {
+    pub version: String,
+    pub admin: AdminConfig,
+    pub portforward: Vec<PortForwardRule>,
+    pub ddns: Vec<DdnsRule>,
+    pub webservice: Vec<WebServiceRule>,
+    pub tls: Vec<TlsRule>,
+    pub ipfilter: Vec<IpFilterRule>,
 }

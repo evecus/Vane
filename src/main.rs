@@ -1,5 +1,6 @@
 mod acme;
 mod auth;
+mod db;
 mod engines;
 mod handlers;
 mod models;
@@ -19,7 +20,7 @@ use tower_http::cors::{Any, CorsLayer};
 
 #[derive(Parser, Debug)]
 struct Cli {
-    /// Data directory (stores vane.json, runtime.json)
+    /// Data directory (stores secret.key, vane.db)
     #[arg(long, default_value = "data")]
     config: PathBuf,
 }
@@ -126,7 +127,7 @@ async fn main() -> anyhow::Result<()> {
             put(update_ipfilter).delete(delete_ipfilter),
         )
         .route("/api/ipfilter/:id/toggle", post(toggle_ipfilter))
-        // SPA fallback (serves embedded or disk-based frontend)
+        // SPA fallback
         .fallback(spa_fallback)
         .with_state(state)
         .layer(

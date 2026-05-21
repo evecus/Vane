@@ -94,15 +94,7 @@ fn client_ip_str(headers: &HeaderMap) -> String {
 async fn authorized(state: &AppState, headers: &HeaderMap) -> bool {
     state.cleanup_security_state().await;
     if let Some(t) = bearer(headers) {
-        let has = state.sessions.read().await.contains_key(&t);
-        let ok_exp = state
-            .session_expiry
-            .read()
-            .await
-            .get(&t)
-            .map(|x| *x > chrono::Utc::now().timestamp())
-            .unwrap_or(false);
-        if has && ok_exp {
+        if state.is_session_valid(&t).await {
             state.touch_session(&t).await;
             return true;
         }
@@ -375,19 +367,12 @@ pub async fn login(
         && verify_password(&req.password, &cfg.admin.password_hash);
     drop(cfg);
 
-    {
-        let mut d = state.data.write().await;
-        d.admin_logs.push(AdminLogRecord {
-            ts: now_rfc3339(),
-            ip: ip.clone(),
-            action: "login".to_string(),
-            success: ok,
-        });
-        if d.admin_logs.len() > 2000 {
-            let n = d.admin_logs.len() - 2000;
-            d.admin_logs.drain(0..n);
-        }
-    }
+    let _ = state.db.append_admin_log(&AdminLogRecord {
+        ts: now_rfc3339(),
+        ip: ip.clone(),
+        action: "login".to_string(),
+        success: ok,
+    }).await;
 
     if !ok {
         let mut a = state.login_attempts.write().await;
@@ -406,42 +391,14 @@ pub async fn login(
     state.login_attempts.write().await.remove(&ip);
 
     let token = generate_token();
-    let exp = chrono::Utc::now().timestamp() + 86400;
-    state
-        .sessions
-        .write()
-        .await
-        .insert(token.clone(), req.username.clone());
-    state
-        .session_expiry
-        .write()
-        .await
-        .insert(token.clone(), exp);
-
-    {
-        let mut d = state.data.write().await;
-        d.sessions_meta.push(SessionInfo {
-            token: token.clone(),
-            username: req.username.clone(),
-            created_at: now_rfc3339(),
-        });
-        if d.sessions_meta.len() > 1000 {
-            let n = d.sessions_meta.len() - 1000;
-            d.sessions_meta.drain(0..n);
-        }
-    }
-    let _ = state.persist_all().await;
+    state.add_session(&token, &req.username).await;
 
     ok_json(serde_json::json!({"token": token}))
 }
 
 pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Some(t) = bearer(&headers) {
-        state.sessions.write().await.remove(&t);
-        state.session_expiry.write().await.remove(&t);
-        let mut d = state.data.write().await;
-        d.sessions_meta.retain(|x| x.token != t);
-        let _ = state.persist_all().await;
+        state.remove_session(&t).await;
     }
     ok_json(serde_json::json!({"ok": true}))
 }
@@ -451,7 +408,8 @@ pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Respon
 pub async fn list_sessions(State(state): State<AppState>, headers: HeaderMap) -> Response {
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
-    ok_json(serde_json::to_value(&state.data.read().await.sessions_meta).unwrap_or_default())
+    let sessions = state.db.load_sessions().await.unwrap_or_default();
+    ok_json(serde_json::to_value(&sessions).unwrap_or_default())
 }
 
 pub async fn revoke_session(
@@ -461,11 +419,7 @@ pub async fn revoke_session(
 ) -> Response {
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
-    state.sessions.write().await.remove(&token);
-    state.session_expiry.write().await.remove(&token);
-    let mut d = state.data.write().await;
-    d.sessions_meta.retain(|x| x.token != token);
-    let _ = state.persist_all().await;
+    state.remove_session(&token).await;
     ok_json(serde_json::json!({"ok": true}))
 }
 
@@ -496,10 +450,7 @@ pub async fn get_dashboard(State(state): State<AppState>, headers: HeaderMap) ->
 pub async fn get_admin_logs(State(state): State<AppState>, headers: HeaderMap) -> Response {
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
-    let d = state.data.read().await;
-    let mut logs = d.admin_logs.clone();
-    logs.reverse();
-    logs.truncate(200);
+    let logs = state.db.load_admin_logs(200).await.unwrap_or_default();
     ok_json(serde_json::to_value(&logs).unwrap_or_default())
 }
 
@@ -515,13 +466,7 @@ pub async fn append_admin_log(
         action: v["action"].as_str().unwrap_or("").to_string(),
         success: v["success"].as_bool().unwrap_or(true),
     };
-    let mut d = state.data.write().await;
-    d.admin_logs.push(rec);
-    if d.admin_logs.len() > 2000 {
-        let n = d.admin_logs.len() - 2000;
-        d.admin_logs.drain(0..n);
-    }
-    let _ = state.persist_all().await;
+    let _ = state.db.append_admin_log(&rec).await;
     ok_json(serde_json::json!({"ok": true}))
 }
 
@@ -538,11 +483,10 @@ pub async fn query_admin_logs(
         .and_then(|x| x.parse().ok())
         .unwrap_or(100)
         .min(1000);
-    let mut logs = state.data.read().await.admin_logs.clone();
+    let mut logs = state.db.load_admin_logs(limit.max(1000)).await.unwrap_or_default();
     if !action.is_empty() {
         logs.retain(|x| x.action.contains(&action));
     }
-    logs.reverse();
     logs.truncate(limit);
     ok_json(serde_json::to_value(&logs).unwrap_or_default())
 }
@@ -627,7 +571,7 @@ pub async fn update_settings(
     let new_safe_entry = cfg.admin.safe_entry.clone();
     drop(cfg);
 
-    if let Err(e) = state.persist_all().await {
+    if let Err(e) = state.db.save_admin(&state.config.read().await.admin).await {
         return internal(&format!("保存失败: {e}"));
     }
 
@@ -657,21 +601,24 @@ pub async fn update_settings(
 pub async fn mark_welcome_shown(State(state): State<AppState>, headers: HeaderMap) -> Response {
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
-    state.config.write().await.admin.welcome_shown = true;
-    let _ = state.persist_all().await;
+    {
+        state.config.write().await.admin.welcome_shown = true;
+    }
+    let _ = state.db.save_admin(&state.config.read().await.admin).await;
     ok_json(serde_json::json!({"ok": true}))
 }
 
 pub async fn backup_settings(State(state): State<AppState>, headers: HeaderMap) -> Response {
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
-    let payload = serde_json::json!({
-        "config": *state.config.read().await,
-        "runtime": *state.data.read().await,
-    });
-    let blob = serde_json::to_vec_pretty(&payload).unwrap_or_default();
+    let admin = state.config.read().await.admin.clone();
+    let data = state.data.read().await.clone();
+    let blob = match state.db.export_backup(&data, &admin).await {
+        Ok(b) => b,
+        Err(e) => return internal(&format!("备份失败: {e}")),
+    };
     let filename = format!(
-        "vane-backup-{}.json",
+        "vane-backup-{}.enc",
         chrono::Utc::now().format("%Y%m%d-%H%M%S")
     );
     (
@@ -698,23 +645,24 @@ pub async fn restore_settings(
 ) -> Response {
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
-    let v: serde_json::Value = match serde_json::from_slice(&body) {
-        Ok(v) => v,
-        Err(_) => return bad_request("invalid JSON"),
+    let backup = match state.db.import_backup(&body).await {
+        Ok(b) => b,
+        Err(e) => return bad_request(&format!("备份文件无效: {e}")),
     };
-    if let Some(c) = v
-        .get("config")
-        .and_then(|x| serde_json::from_value(x.clone()).ok())
-    {
-        *state.config.write().await = c;
+    if let Err(e) = state.db.restore_from_backup(&backup).await {
+        return internal(&format!("恢复失败: {e}"));
     }
-    if let Some(d) = v
-        .get("runtime")
-        .and_then(|x| serde_json::from_value(x.clone()).ok())
-    {
-        *state.data.write().await = d;
-    }
-    let _ = state.persist_all().await;
+    // Reload in-memory state from DB
+    let new_data = RuntimeData {
+        portforward: backup.portforward.clone(),
+        ddns: backup.ddns.clone(),
+        webservice: backup.webservice.clone(),
+        tls: backup.tls.clone(),
+        ipfilter: backup.ipfilter.clone(),
+        ..Default::default()
+    };
+    *state.config.write().await = Config { admin: backup.admin };
+    *state.data.write().await = new_data;
     state.apply_engines().await;
 
     tokio::spawn(async {
@@ -764,7 +712,7 @@ pub async fn create_port_forward(
     let mut d = state.data.write().await;
     d.portforward.push(rule.clone());
     drop(d);
-    let _ = state.persist_all().await;
+    let _ = state.db.save_port_forward(&rule).await;
     if rule.enabled {
         state.apply_engines().await;
     }
@@ -813,7 +761,7 @@ pub async fn update_port_forward(
         }
     }
     drop(d);
-    let _ = state.persist_all().await;
+    let _ = state.db.save_port_forward(&req).await;
     state.apply_engines().await;
     ok_json(serde_json::to_value(&req).unwrap_or_default())
 }
@@ -828,8 +776,11 @@ pub async fn delete_port_forward(
     let mut d = state.data.write().await;
     d.portforward.retain(|x| x.id != id);
     clean_scopes_for_deleted_target(&mut d.ipfilter, "portforward", &id);
+    // Persist updated ip_filter rules (scope cleanup)
+    let ipf_snapshot = d.ipfilter.clone();
     drop(d);
-    let _ = state.persist_all().await;
+    let _ = state.db.delete_port_forward(&id).await;
+    for rule in &ipf_snapshot { let _ = state.db.save_ip_filter(rule).await; }
     state.apply_engines().await;
     ok_json(serde_json::json!({"ok": true}))
 }
@@ -857,8 +808,9 @@ pub async fn toggle_port_forward(
         if let Some(x) = d.portforward.iter_mut().find(|x| x.id == id) {
             x.enabled = false;
         }
+        let snap = d.portforward.iter().find(|x| x.id == id).cloned();
         drop(d);
-        let _ = state.persist_all().await;
+        if let Some(r) = snap { let _ = state.db.save_port_forward(&r).await; }
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error":"端口已被占用","port":port})),
@@ -866,7 +818,7 @@ pub async fn toggle_port_forward(
             .into_response();
     }
     drop(d);
-    let _ = state.persist_all().await;
+    let _ = state.db.save_port_forward(&rule).await;
     state.apply_engines().await;
     ok_json(serde_json::json!({"enabled": enabled}))
 }
@@ -887,7 +839,8 @@ pub async fn get_port_forward_stats(
     if !exists {
         return not_found("not found");
     }
-    ok_json(serde_json::json!({"history": []}))
+    let history = state.engines.get_pf_history(&id).await;
+    ok_json(serde_json::json!({"history": history}))
 }
 
 // ─── DDNS ─────────────────────────────────────────────────────────────────────
@@ -910,7 +863,7 @@ pub async fn create_ddns(
     let mut d = state.data.write().await;
     d.ddns.push(rule.clone());
     drop(d);
-    let _ = state.persist_all().await;
+    let _ = state.db.save_ddns(&rule).await;
     if rule.enabled {
         state.apply_engines().await;
     }
@@ -941,7 +894,7 @@ pub async fn update_ddns(
         }
     }
     drop(d);
-    let _ = state.persist_all().await;
+    let _ = state.db.save_ddns(&req).await;
     state.apply_engines().await;
     ok_json(serde_json::to_value(&req).unwrap_or_default())
 }
@@ -956,7 +909,7 @@ pub async fn delete_ddns(
     let mut d = state.data.write().await;
     d.ddns.retain(|x| x.id != id);
     drop(d);
-    let _ = state.persist_all().await;
+    let _ = state.db.delete_ddns(&id).await;
     state.apply_engines().await;
     ok_json(serde_json::json!({"ok": true}))
 }
@@ -977,7 +930,8 @@ pub async fn toggle_ddns(
         }
     };
     drop(d);
-    let _ = state.persist_all().await;
+    let snap = state.data.read().await.ddns.iter().find(|x| x.id == id).cloned();
+    if let Some(r) = snap { let _ = state.db.save_ddns(&r).await; }
     state.apply_engines().await;
     ok_json(serde_json::json!({"enabled": enabled}))
 }
@@ -1020,8 +974,9 @@ pub async fn update_ddns_refresh_now(
                             x.ip_history.drain(0..n);
                         }
                     }
+                    let updated = d.ddns.iter().find(|x| x.id == id).cloned();
                     drop(d);
-                    let _ = state.persist_all().await;
+                    if let Some(r) = updated { let _ = state.db.save_ddns(&r).await; }
                     ok_json(serde_json::json!({"ok": true, "ip": ip}))
                 }
                 Err(e) => {
@@ -1032,8 +987,9 @@ pub async fn update_ddns_refresh_now(
                         x.last_sync_err = e.to_string();
                         x.last_sync_at = at;
                     }
+                    let updated = d.ddns.iter().find(|x| x.id == id).cloned();
                     drop(d);
-                    let _ = state.persist_all().await;
+                    if let Some(r) = updated { let _ = state.db.save_ddns(&r).await; }
                     internal(&e.to_string())
                 }
             }
@@ -1212,7 +1168,7 @@ pub async fn create_webservice(
     let mut d = state.data.write().await;
     d.webservice.push(svc.clone());
     drop(d);
-    let _ = state.persist_all().await;
+    let _ = state.db.save_web_service(&svc).await;
     if svc.enabled {
         state.apply_engines().await;
     }
@@ -1258,7 +1214,7 @@ pub async fn update_webservice(
         }
     }
     drop(d);
-    let _ = state.persist_all().await;
+    let _ = state.db.save_web_service(&req).await;
     state.apply_engines().await;
     ok_json(serde_json::to_value(&req).unwrap_or_default())
 }
@@ -1281,8 +1237,10 @@ pub async fn delete_webservice(
     for rid in route_ids {
         clean_scopes_for_deleted_target(&mut d.ipfilter, "webservice", &rid);
     }
+    let ipf_snap = d.ipfilter.clone();
     drop(d);
-    let _ = state.persist_all().await;
+    let _ = state.db.delete_web_service(&id).await;
+    for rule in &ipf_snap { let _ = state.db.save_ip_filter(rule).await; }
     state.apply_engines().await;
     ok_json(serde_json::json!({"ok": true}))
 }
@@ -1303,19 +1261,47 @@ pub async fn toggle_webservice(
         }
     };
     if enabled && port > 0 && !is_port_available(port as u32) {
+        // Roll back
         if let Some(x) = d.webservice.iter_mut().find(|x| x.id == id) {
             x.enabled = false;
         }
+        let svc_snap = d.webservice.iter().find(|x| x.id == id).cloned();
         drop(d);
-        let _ = state.persist_all().await;
+        if let Some(svc) = svc_snap { let _ = state.db.save_web_service(&svc).await; }
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error":"端口已被占用","port":port})),
         )
             .into_response();
     }
+    let svc_snap = d.webservice.iter().find(|x| x.id == id).cloned();
     drop(d);
-    let _ = state.persist_all().await;
+    if let Some(svc) = &svc_snap { let _ = state.db.save_web_service(svc).await; }
+
+    if enabled {
+        // Check that at least one enabled route has a matched cert (when HTTPS enabled)
+        let has_valid_routes = svc_snap.as_ref().map(|s| {
+            if !s.enable_https { return true; }
+            s.routes.iter().any(|r| r.enabled && r.cert_status == "ok")
+        }).unwrap_or(false);
+        if svc_snap.as_ref().map(|s| s.enable_https).unwrap_or(false) && !has_valid_routes {
+            // Roll back enabled state
+            let mut d = state.data.write().await;
+            if let Some(x) = d.webservice.iter_mut().find(|x| x.id == id) {
+                x.enabled = false;
+                let snap = x.clone();
+                drop(d);
+                let _ = state.db.save_web_service(&snap).await;
+            } else {
+                drop(d);
+            }
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error":"请先添加子规则，证书匹配成功后方可启动"})),
+            ).into_response();
+        }
+    }
+
     state.apply_engines().await;
     ok_json(serde_json::json!({"enabled": enabled}))
 }
@@ -1405,7 +1391,7 @@ pub async fn create_route(
         Some(svc) => svc.routes.push(route.clone()),
     }
     drop(d);
-    let _ = state.persist_all().await;
+    let _ = state.db.save_web_route(&svc_id, &route).await;
     state.apply_engines().await;
 
     let mut resp = route.clone();
@@ -1482,7 +1468,7 @@ pub async fn update_route(
         }
     }
     drop(d);
-    let _ = state.persist_all().await;
+    let _ = state.db.save_web_route(&svc_id, &route).await;
     state.apply_engines().await;
 
     let mut resp = route.clone();
@@ -1501,8 +1487,10 @@ pub async fn delete_route(
         svc.routes.retain(|r| r.id != rid);
     }
     clean_scopes_for_deleted_target(&mut d.ipfilter, "webservice", &rid);
+    let ipf_snap = d.ipfilter.clone();
     drop(d);
-    let _ = state.persist_all().await;
+    let _ = state.db.delete_web_route(&rid).await;
+    for rule in &ipf_snap { let _ = state.db.save_ip_filter(rule).await; }
     state.apply_engines().await;
     ok_json(serde_json::json!({"ok": true}))
 }
@@ -1526,7 +1514,16 @@ pub async fn toggle_route(
         }
     };
     drop(d);
-    let _ = state.persist_all().await;
+    {
+        let d2 = state.data.read().await;
+        if let Some(svc) = d2.webservice.iter().find(|s| s.id == svc_id) {
+            if let Some(r) = svc.routes.iter().find(|r| r.id == rid) {
+                let r = r.clone(); let sid = svc_id.clone();
+                drop(d2);
+                let _ = state.db.save_web_route(&sid, &r).await;
+            }
+        }
+    }
     state.apply_engines().await;
     ok_json(serde_json::json!({"enabled": enabled}))
 }
@@ -1539,25 +1536,13 @@ pub async fn get_access_logs(
     Path(id): Path<String>,
 ) -> Response {
     require_auth!(&state, &headers);
-    let mut logs: Vec<_> = state
-        .data
-        .read()
-        .await
-        .access_logs
-        .iter()
-        .filter(|x| x.service_id == id)
-        .cloned()
-        .collect();
-    logs.reverse();
-    logs.truncate(200);
+    let logs = state.db.load_access_logs(Some(&id), 200).await.unwrap_or_default();
     ok_json(serde_json::to_value(&logs).unwrap_or_default())
 }
 
 pub async fn get_all_access_logs(State(state): State<AppState>, headers: HeaderMap) -> Response {
     require_auth!(&state, &headers);
-    let mut logs = state.data.read().await.access_logs.clone();
-    logs.reverse();
-    logs.truncate(500);
+    let logs = state.db.load_access_logs(None, 500).await.unwrap_or_default();
     ok_json(serde_json::to_value(&logs).unwrap_or_default())
 }
 
@@ -1574,14 +1559,11 @@ pub async fn query_access_logs(
         .and_then(|x| x.parse().ok())
         .unwrap_or(100)
         .min(1000);
-    let mut logs = state.data.read().await.access_logs.clone();
-    if !service.is_empty() {
-        logs.retain(|x| x.service_id == service);
-    }
+    let sid = if service.is_empty() { None } else { Some(service.as_str()) };
+    let mut logs = state.db.load_access_logs(sid, limit.max(1000)).await.unwrap_or_default();
     if !path_kw.is_empty() {
         logs.retain(|x| x.domain.contains(&path_kw));
     }
-    logs.reverse();
     logs.truncate(limit);
     ok_json(serde_json::to_value(&logs).unwrap_or_default())
 }
@@ -1604,13 +1586,7 @@ pub async fn append_access_log(
         auth_result: v["auth_result"].as_str().unwrap_or("").to_string(),
         time: v["time"].as_str().unwrap_or("").to_string(),
     };
-    let mut d = state.data.write().await;
-    d.access_logs.push(log);
-    if d.access_logs.len() > 5000 {
-        let n = d.access_logs.len() - 5000;
-        d.access_logs.drain(0..n);
-    }
-    let _ = state.persist_all().await;
+    let _ = state.db.append_access_log(&log).await;
     ok_json(serde_json::json!({"ok": true}))
 }
 
@@ -1620,9 +1596,7 @@ pub async fn clear_access_logs(
     Path(id): Path<String>,
 ) -> Response {
     require_auth!(&state, &headers);
-    let mut d = state.data.write().await;
-    d.access_logs.retain(|x| x.service_id != id);
-    let _ = state.persist_all().await;
+    let _ = state.db.clear_access_logs(&id).await;
     ok_json(serde_json::json!({"ok": true}))
 }
 
@@ -1657,7 +1631,7 @@ pub async fn create_tls(
     let mut d = state.data.write().await;
     d.tls.push(cert.clone());
     drop(d);
-    let _ = state.persist_all().await;
+    let _ = state.db.save_tls_cert(&cert).await;
     // Trigger route rematch so new cert is picked up
     let state2 = state.clone();
     tokio::spawn(async move {
@@ -1694,7 +1668,7 @@ pub async fn update_tls(
         }
     }
     drop(d);
-    let _ = state.persist_all().await;
+    let _ = state.db.save_tls_cert(&req).await;
     let state2 = state.clone();
     tokio::spawn(async move {
         state2.rematch_and_restart().await;
@@ -1712,7 +1686,7 @@ pub async fn delete_tls(
     let mut d = state.data.write().await;
     d.tls.retain(|x| x.id != id);
     drop(d);
-    let _ = state.persist_all().await;
+    let _ = state.db.delete_tls_cert(&id).await;
     let state2 = state.clone();
     tokio::spawn(async move {
         state2.rematch_and_restart().await;
@@ -1736,7 +1710,10 @@ pub async fn toggle_tls(
         }
     };
     drop(d);
-    let _ = state.persist_all().await;
+    {
+        let snap = state.data.read().await.tls.iter().find(|x| x.id == id).cloned();
+        if let Some(c) = snap { let _ = state.db.save_tls_cert(&c).await; }
+    }
     let state2 = state.clone();
     tokio::spawn(async move {
         state2.rematch_and_restart().await;
@@ -1752,58 +1729,50 @@ pub async fn issue_tls(
     require_auth!(&state, &headers);
     require_admin_ipfilter!(&state, &headers);
 
-    {
+    let cert = {
         let mut d = state.data.write().await;
         match d.tls.iter_mut().find(|x| x.id == id) {
             None => return not_found("cert not found"),
             Some(x) => {
                 x.status = "pending".to_string();
                 x.error_msg.clear();
+                x.clone()
             }
         }
-    }
-    let _ = state.persist_all().await;
-
-    let cert = state
-        .data
-        .read()
-        .await
-        .tls
-        .iter()
-        .find(|x| x.id == id)
-        .cloned();
-    let cert = match cert {
-        None => return not_found("cert not found"),
-        Some(c) => c,
     };
+    let _ = state.db.save_tls_cert(&cert).await;
 
     let state2 = state.clone();
     let id2 = id.clone();
     tokio::spawn(async move {
         match crate::acme::issue_cert(&cert).await {
             Ok((cert_pem, key_pem, issued_at, expires_at)) => {
-                let mut d = state2.data.write().await;
-                if let Some(x) = d.tls.iter_mut().find(|x| x.id == id2) {
-                    x.cert_pem = cert_pem;
-                    x.key_pem = key_pem;
-                    x.issued_at = issued_at;
-                    x.expires_at = expires_at;
-                    x.status = "active".to_string();
-                    x.error_msg.clear();
-                }
-                drop(d);
-                let _ = state2.persist_all().await;
+                let updated = {
+                    let mut d = state2.data.write().await;
+                    if let Some(x) = d.tls.iter_mut().find(|x| x.id == id2) {
+                        x.cert_pem = cert_pem;
+                        x.key_pem = key_pem;
+                        x.issued_at = issued_at;
+                        x.expires_at = expires_at;
+                        x.status = "active".to_string();
+                        x.error_msg.clear();
+                        Some(x.clone())
+                    } else { None }
+                };
+                if let Some(c) = updated { let _ = state2.db.save_tls_cert(&c).await; }
                 state2.rematch_and_restart().await;
             }
             Err(e) => {
                 eprintln!("[tls] issue {} failed: {e}", id2);
-                let mut d = state2.data.write().await;
-                if let Some(x) = d.tls.iter_mut().find(|x| x.id == id2) {
-                    x.status = "error".to_string();
-                    x.error_msg = e.to_string();
-                }
-                drop(d);
-                let _ = state2.persist_all().await;
+                let updated = {
+                    let mut d = state2.data.write().await;
+                    if let Some(x) = d.tls.iter_mut().find(|x| x.id == id2) {
+                        x.status = "error".to_string();
+                        x.error_msg = e.to_string();
+                        Some(x.clone())
+                    } else { None }
+                };
+                if let Some(c) = updated { let _ = state2.db.save_tls_cert(&c).await; }
             }
         }
     });
@@ -1935,7 +1904,7 @@ pub async fn upload_tls(
     let mut d = state.data.write().await;
     d.tls.push(cert.clone());
     drop(d);
-    let _ = state.persist_all().await;
+    let _ = state.db.save_tls_cert(&cert).await;
     let state2 = state.clone();
     tokio::spawn(async move {
         state2.rematch_and_restart().await;
@@ -2253,8 +2222,8 @@ pub async fn create_ipfilter(
     let mut d = state.data.write().await;
     d.ipfilter.push(body.clone());
     drop(d);
-    let _ = state.persist_all().await;
-    ok_json(serde_json::to_value(&body).unwrap_or_default())
+    let _ = state.db.save_ip_filter(&body).await;
+    (StatusCode::CREATED, Json(serde_json::to_value(&body).unwrap_or_default())).into_response()
 }
 
 pub async fn update_ipfilter(
@@ -2289,7 +2258,8 @@ pub async fn update_ipfilter(
         *x = body.clone();
     }
     drop(d);
-    let _ = state.persist_all().await;
+    let _ = state.db.save_ip_filter(&body).await;
+    state.apply_engines().await;
     ok_json(serde_json::to_value(&body).unwrap_or_default())
 }
 
@@ -2303,7 +2273,11 @@ pub async fn delete_ipfilter(
     let mut d = state.data.write().await;
     d.ipfilter.retain(|x| x.id != id);
     drop(d);
-    let _ = state.persist_all().await;
+    {
+        let snap = state.data.read().await.ipfilter.iter().find(|x| x.id == id).cloned();
+        if let Some(r) = snap { let _ = state.db.save_ip_filter(&r).await; }
+    }
+    state.apply_engines().await;
     ok_json(serde_json::json!({"ok": true}))
 }
 
@@ -2322,16 +2296,10 @@ pub async fn toggle_ipfilter(
             x.enabled
         }
     };
+    let rule = d.ipfilter.iter().find(|x| x.id == id).cloned();
     drop(d);
-    let _ = state.persist_all().await;
-    let rule = state
-        .data
-        .read()
-        .await
-        .ipfilter
-        .iter()
-        .find(|x| x.id == id)
-        .cloned();
+    if let Some(ref r) = rule { let _ = state.db.save_ip_filter(r).await; }
+    state.apply_engines().await;
     match rule {
         Some(r) => ok_json(serde_json::to_value(&r).unwrap_or_default()),
         None => ok_json(serde_json::json!({"enabled": enabled})),
