@@ -766,15 +766,15 @@ impl Db {
                 "SELECT id,service_id,route_id,route_name,domain,status_code,client_ip,user_agent,auth_result,time
                  FROM access_logs WHERE service_id=? ORDER BY time DESC LIMIT ?"
             )?;
-            stmt.query_map(params![sid, limit as i64], access_log_from_row)?
-                .filter_map(|r| r.ok()).collect()
+            let x = stmt.query_map(params![sid, limit as i64], access_log_from_row)?
+                .filter_map(|r| r.ok()).collect(); x
         } else {
             let mut stmt = conn.prepare(
                 "SELECT id,service_id,route_id,route_name,domain,status_code,client_ip,user_agent,auth_result,time
                  FROM access_logs ORDER BY time DESC LIMIT ?"
             )?;
-            stmt.query_map(params![limit as i64], access_log_from_row)?
-                .filter_map(|r| r.ok()).collect()
+            let x = stmt.query_map(params![limit as i64], access_log_from_row)?
+                .filter_map(|r| r.ok()).collect(); x
         };
         Ok(logs)
     }
