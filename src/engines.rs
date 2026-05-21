@@ -1352,7 +1352,7 @@ async fn serve_hyper_tls<S>(
     is_https: bool,
 )
 where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     let ctx = ProxyCtx { peer, svc_id, data, ipfilter, db, is_https };
     let svc = hyper::service::service_fn(move |req| {
