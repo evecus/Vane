@@ -43,6 +43,9 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Clean target dir (prevents stale host build-scripts in cross container)
+        run: cargo clean
+
       - name: Build x86_64 binary
         uses: houseabsolute/actions-rust-cross@v1
         with:
