@@ -1224,21 +1224,29 @@ async fn dispatch_connection(
     use tokio::io::AsyncReadExt;
     if let Some(acceptor) = tls_acceptor {
         let mut buf = [0u8; 1];
-        let mut br = tokio::io::BufReader::new(stream);
-        match br.peek(&mut buf).await {
-            Ok(1) if buf[0] == 0x16 => {
-                // TLS
-                let stream = br.into_inner();
-                match acceptor.accept(stream).await {
-                    Ok(tls) => serve_hyper_tls(tls, peer, svc_id, data, ipfilter, db, true).await,
-                    Err(e)  => eprintln!("[webservice] TLS accept {peer}: {e}"),
-                }
+        let n = (&mut stream).read(&mut buf).await.unwrap_or(0);
+        if n == 1 && buf[0] == 0x16 {
+            // TLS — put the byte back by prepending via a duplex pipe
+            use tokio::io::AsyncWriteExt;
+            let (mut server_end, client_end) = tokio::io::duplex(65536);
+            server_end.write_all(&buf[..n]).await.ok();
+            tokio::spawn(async move {
+                let _ = tokio::io::copy(&mut stream, &mut server_end).await;
+            });
+            match acceptor.accept(client_end).await {
+                Ok(tls) => serve_hyper_tls(tls, peer, svc_id, data, ipfilter, db, true).await,
+                Err(e)  => eprintln!("[webservice] TLS accept {peer}: {e}"),
             }
-            _ => {
-                // Plain HTTP → redirect to HTTPS
-                let stream = br.into_inner();
-                redirect_to_https(stream, peer, listen_port).await;
-            }
+        } else {
+            // Plain HTTP → redirect to HTTPS
+            // Put the peeked byte back and forward via a duplex pipe
+            use tokio::io::AsyncWriteExt;
+            let (mut server_end, client_end) = tokio::io::duplex(65536);
+            server_end.write_all(&buf[..n]).await.ok();
+            tokio::spawn(async move {
+                let _ = tokio::io::copy(&mut stream, &mut server_end).await;
+            });
+            redirect_to_https_async(client_end, peer, listen_port).await;
         }
     } else {
         serve_hyper_plain(stream, peer, svc_id, data, ipfilter, db).await;
@@ -1247,6 +1255,35 @@ async fn dispatch_connection(
 
 /// Send 301 to HTTPS for plain-HTTP connections on a TLS-enabled service.
 async fn redirect_to_https(mut stream: TcpStream, peer: SocketAddr, port: u16) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut buf = [0u8; 4096];
+    let n = stream.read(&mut buf).await.unwrap_or(0);
+    let req = String::from_utf8_lossy(&buf[..n]);
+    let path = req.lines().next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .unwrap_or("/").to_string();
+    let host = req.lines()
+        .find(|l| l.to_lowercase().starts_with("host:"))
+        .and_then(|l| l.splitn(2, ':').nth(1))
+        .unwrap_or("").trim().to_string();
+    let host_bare = host.split(':').next().unwrap_or(&host);
+    let location = if port == 443 {
+        format!("https://{host_bare}{path}")
+    } else {
+        format!("https://{host_bare}:{port}{path}")
+    };
+    let resp = format!(
+        "HTTP/1.1 301 Moved Permanently\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    let _ = stream.write_all(resp.as_bytes()).await;
+    let _ = peer;
+}
+
+/// Same as redirect_to_https but accepts any AsyncRead+AsyncWrite (e.g. tokio::io::DuplexStream).
+async fn redirect_to_https_async<S>(mut stream: S, peer: SocketAddr, port: u16)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut buf = [0u8; 4096];
     let n = stream.read(&mut buf).await.unwrap_or(0);
@@ -1469,27 +1506,6 @@ async fn proxy_request_inner(
     let body_bytes = match req.collect().await {
         Ok(b) => b.to_bytes(),
         Err(_) => return bad_gateway("read request body failed"),
-    };
-
-    let mut upstream_req = Request::builder()
-        .method(method)
-        .uri(&upstream_url);
-
-    for (k, v) in &req_headers {
-        let key = k.as_str();
-        if HOP_BY_HOP.contains(&key) { continue; }
-        upstream_req = upstream_req.header(k, v);
-    }
-    // Overwrite / add proxy headers
-    upstream_req = upstream_req
-        .header("host",               &host_header)
-        .header("x-forwarded-for",    &client_ip)
-        .header("x-real-ip",          &client_ip)
-        .header("x-forwarded-proto",  if ctx.is_https { "https" } else { "http" });
-
-    let upstream_req = match upstream_req.body(http_body_util::Full::new(body_bytes)) {
-        Ok(r) => r,
-        Err(e) => return bad_gateway(&format!("build upstream req: {e}")),
     };
 
     // Use reqwest for upstream (handles TLS, HTTP/2, redirects, timeouts out of the box)
