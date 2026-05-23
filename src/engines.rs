@@ -267,7 +267,7 @@ impl RuntimeEngines {
 async fn reconcile_spawn<T: Clone + Send + 'static, F>(
     map: &Arc<RwLock<HashMap<String, oneshot::Sender<()>>>>,
     enabled: Vec<(String, T)>,
-    mut spawn: F,
+    spawn: F,
 ) where
     F: FnMut(T, oneshot::Receiver<()>),
 {
@@ -277,7 +277,7 @@ async fn reconcile_spawn<T: Clone + Send + 'static, F>(
 async fn reconcile_spawn_force<T: Clone + Send + 'static, F>(
     map: &Arc<RwLock<HashMap<String, oneshot::Sender<()>>>>,
     enabled: Vec<(String, T)>,
-    mut spawn: F,
+    spawn: F,
 ) where
     F: FnMut(T, oneshot::Receiver<()>),
 {
@@ -1787,7 +1787,8 @@ async fn proxy_request_inner(
 
     match req_builder.send().await {
         Ok(resp) => {
-            let status = hyper::StatusCode::from_u16(resp.status().as_u16())
+            let http_status_code = resp.status().as_u16();
+            let status = hyper::StatusCode::from_u16(http_status_code)
                 .unwrap_or(hyper::StatusCode::BAD_GATEWAY);
             let mut builder = Response::builder().status(status);
             for (k, v) in resp.headers() {
@@ -1797,7 +1798,6 @@ async fn proxy_request_inner(
                 builder = builder.header(k.as_str(), v.as_bytes());
             }
             let body = resp.bytes().await.unwrap_or_default();
-            let http_status_code = resp.status().as_u16();
             log_access_async_with_status(
                 &ctx.db,
                 &ctx.svc_id,
