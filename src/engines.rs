@@ -184,33 +184,60 @@ impl RuntimeEngines {
         db: Db,
         data: Arc<RwLock<crate::models::RuntimeData>>,
     ) {
+        self.apply_webservice_inner(rules, tls_rules, ipfilter, db, data, false).await;
+    }
+
+    pub async fn apply_webservice_force(
+        &self,
+        rules: &[WebServiceRule],
+        tls_rules: &[TlsRule],
+        ipfilter: &[crate::models::IpFilterRule],
+        db: Db,
+        data: Arc<RwLock<crate::models::RuntimeData>>,
+    ) {
+        self.apply_webservice_inner(rules, tls_rules, ipfilter, db, data, true).await;
+    }
+
+    async fn apply_webservice_inner(
+        &self,
+        rules: &[WebServiceRule],
+        tls_rules: &[TlsRule],
+        ipfilter: &[crate::models::IpFilterRule],
+        db: Db,
+        data: Arc<RwLock<crate::models::RuntimeData>>,
+        force_restart: bool,
+    ) {
         let tls_rules = tls_rules.to_vec();
         let ipfilter = ipfilter.to_vec();
-        reconcile_spawn(
-            &self.webservice,
-            rules
-                .iter()
-                .filter(|r| r.enabled)
-                .map(|r| (r.id.clone(), r.clone()))
-                .collect(),
-            move |r, rx| {
-                let tls = tls_rules.clone();
-                let ipf = ipfilter.clone();
-                let db2 = db.clone();
-                let data2 = data.clone();
-                tokio::spawn(run_webservice(
-                    r.id.clone(),
-                    r.listen_port,
-                    r.enable_https,
-                    rx,
-                    tls,
-                    ipf,
-                    db2,
-                    data2,
-                ));
-            },
-        )
-        .await;
+        let spawn_fn = move |r: WebServiceRule, rx| {
+            let tls = tls_rules.clone();
+            let ipf = ipfilter.clone();
+            let db2 = db.clone();
+            let data2 = data.clone();
+            tokio::spawn(run_webservice(
+                r.id.clone(),
+                r.listen_port,
+                r.enable_https,
+                rx,
+                tls,
+                ipf,
+                db2,
+                data2,
+            ));
+        };
+        if force_restart {
+            reconcile_spawn_force(
+                &self.webservice,
+                rules.iter().filter(|r| r.enabled).map(|r| (r.id.clone(), r.clone())).collect(),
+                spawn_fn,
+            ).await;
+        } else {
+            reconcile_spawn(
+                &self.webservice,
+                rules.iter().filter(|r| r.enabled).map(|r| (r.id.clone(), r.clone())).collect(),
+                spawn_fn,
+            ).await;
+        }
     }
 
     pub async fn apply_tls(
@@ -244,20 +271,54 @@ async fn reconcile_spawn<T: Clone + Send + 'static, F>(
 ) where
     F: FnMut(T, oneshot::Receiver<()>),
 {
+    reconcile_spawn_inner(map, enabled, false, spawn).await;
+}
+
+async fn reconcile_spawn_force<T: Clone + Send + 'static, F>(
+    map: &Arc<RwLock<HashMap<String, oneshot::Sender<()>>>>,
+    enabled: Vec<(String, T)>,
+    mut spawn: F,
+) where
+    F: FnMut(T, oneshot::Receiver<()>),
+{
+    reconcile_spawn_inner(map, enabled, true, spawn).await;
+}
+
+async fn reconcile_spawn_inner<T: Clone + Send + 'static, F>(
+    map: &Arc<RwLock<HashMap<String, oneshot::Sender<()>>>>,
+    enabled: Vec<(String, T)>,
+    force_restart: bool,
+    mut spawn: F,
+) where
+    F: FnMut(T, oneshot::Receiver<()>),
+{
     let ids: std::collections::HashSet<_> = enabled.iter().map(|(id, _)| id.clone()).collect();
     {
         let mut m = map.write().await;
+        // Stop removed entries
         let to_stop: Vec<String> = m.keys().filter(|k| !ids.contains(*k)).cloned().collect();
         for id in to_stop {
             if let Some(tx) = m.remove(&id) {
                 let _ = tx.send(());
             }
         }
+        // If force_restart, also stop entries that are being re-added
+        if force_restart {
+            for (id, _) in &enabled {
+                if let Some(tx) = m.remove(id) {
+                    let _ = tx.send(());
+                }
+            }
+        }
+    }
+    // Small delay when force-restarting to let OS free the port
+    if force_restart && !enabled.is_empty() {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
     for (id, r) in enabled {
         let mut m = map.write().await;
         if m.contains_key(&id) {
-            continue; // already running
+            continue; // already running (not force)
         }
         let (tx, rx) = oneshot::channel();
         m.insert(id, tx);
@@ -1253,6 +1314,7 @@ async fn run_webservice(
 }
 
 /// Peek first byte to distinguish TLS from plain HTTP, then dispatch to hyper.
+/// Uses a PrefixedStream to safely put the peeked byte back without races.
 async fn dispatch_connection(
     mut stream: TcpStream,
     peer: SocketAddr,
@@ -1265,33 +1327,76 @@ async fn dispatch_connection(
 ) {
     use tokio::io::AsyncReadExt;
     if let Some(acceptor) = tls_acceptor {
-        let mut buf = [0u8; 1];
-        let n = (&mut stream).read(&mut buf).await.unwrap_or(0);
-        if n == 1 && buf[0] == 0x16 {
-            // TLS — put the byte back by prepending via a duplex pipe
-            use tokio::io::AsyncWriteExt;
-            let (mut server_end, client_end) = tokio::io::duplex(65536);
-            server_end.write_all(&buf[..n]).await.ok();
-            tokio::spawn(async move {
-                let _ = tokio::io::copy(&mut stream, &mut server_end).await;
-            });
-            match acceptor.accept(client_end).await {
+        let mut first_byte = [0u8; 1];
+        let n = (&mut stream).read(&mut first_byte).await.unwrap_or(0);
+        // Reconstruct the stream with the peeked byte prepended
+        let prefixed = PrefixedStream::new(if n == 1 { first_byte[0] } else { 0 }, n == 1, stream);
+        if n == 1 && first_byte[0] == 0x16 {
+            // TLS ClientHello
+            match acceptor.accept(prefixed).await {
                 Ok(tls) => serve_hyper_tls(tls, peer, svc_id, data, ipfilter, db, true).await,
                 Err(e) => eprintln!("[webservice] TLS accept {peer}: {e}"),
             }
         } else {
-            // Plain HTTP → redirect to HTTPS
-            // Put the peeked byte back and forward via a duplex pipe
-            use tokio::io::AsyncWriteExt;
-            let (mut server_end, client_end) = tokio::io::duplex(65536);
-            server_end.write_all(&buf[..n]).await.ok();
-            tokio::spawn(async move {
-                let _ = tokio::io::copy(&mut stream, &mut server_end).await;
-            });
-            redirect_to_https_async(client_end, peer, listen_port).await;
+            // Plain HTTP → send 301 redirect to HTTPS
+            redirect_to_https_async(prefixed, peer, listen_port).await;
         }
     } else {
         serve_hyper_plain(stream, peer, svc_id, data, ipfilter, db).await;
+    }
+}
+
+/// A stream that prefixes a single peeked byte before delegating to the inner stream.
+struct PrefixedStream {
+    prefix: u8,
+    has_prefix: bool,
+    inner: TcpStream,
+}
+
+impl PrefixedStream {
+    fn new(prefix: u8, has_prefix: bool, inner: TcpStream) -> Self {
+        Self { prefix, has_prefix, inner }
+    }
+}
+
+impl tokio::io::AsyncRead for PrefixedStream {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        if self.has_prefix {
+            if buf.remaining() > 0 {
+                buf.put_slice(&[self.prefix]);
+                self.has_prefix = false;
+                return std::task::Poll::Ready(Ok(()));
+            }
+        }
+        std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl tokio::io::AsyncWrite for PrefixedStream {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }
 
@@ -1673,6 +1778,7 @@ async fn proxy_request_inner(
         .header("host", &host_header)
         .header("x-forwarded-for", &client_ip)
         .header("x-real-ip", &client_ip)
+        .header("x-forwarded-host", &host_header)
         .header(
             "x-forwarded-proto",
             if ctx.is_https { "https" } else { "http" },
@@ -1691,13 +1797,15 @@ async fn proxy_request_inner(
                 builder = builder.header(k.as_str(), v.as_bytes());
             }
             let body = resp.bytes().await.unwrap_or_default();
-            log_access_async(
+            let http_status_code = resp.status().as_u16();
+            log_access_async_with_status(
                 &ctx.db,
                 &ctx.svc_id,
                 &matched_route,
                 &client_ip,
                 &user_agent,
                 "ok",
+                http_status_code,
             )
             .await;
             builder
@@ -1718,25 +1826,31 @@ async fn ws_tunnel(
     upstream_base: &str,
     upstream_path: &str,
     client_ip: &str,
-    is_https: bool,
+    _is_https: bool,
 ) -> hyper::Response<http_body_util::Full<bytes::Bytes>> {
     use hyper::header::{CONNECTION, UPGRADE};
-    // Resolve backend host:port
+
+    // Resolve backend host:port from upstream_base (e.g. "http://127.0.0.1:8080")
     let backend_host = upstream_base
-        .splitn(3, '/')
-        .nth(2)
+        .trim_start_matches("http://")
+        .trim_start_matches("https://")
+        .split('/')
+        .next()
         .unwrap_or("")
         .to_string();
-    // Build the HTTP upgrade request to send to backend
-    let ws_scheme = if upstream_base.starts_with("https") {
-        "wss"
-    } else {
-        "ws"
-    };
-    let backend_url = format!("{ws_scheme}://{backend_host}{upstream_path}");
-    let _ = (backend_url, is_https); // used below
 
-    // Perform the raw TCP tunnel via hyper's on_upgrade
+    // Collect all original WS headers to forward to backend
+    let mut extra_headers = String::new();
+    for (k, v) in req.headers() {
+        let key = k.as_str().to_lowercase();
+        if key == "host" || key == "connection" || key == "upgrade" {
+            continue;
+        }
+        if let Ok(val) = v.to_str() {
+            extra_headers.push_str(&format!("{}: {}\r\n", k.as_str(), val));
+        }
+    }
+
     let upgraded_client = hyper::upgrade::on(req);
     let backend_host2 = backend_host.clone();
     let upstream_path2 = upstream_path.to_string();
@@ -1748,9 +1862,9 @@ async fn ws_tunnel(
                 match TcpStream::connect(&backend_host2).await {
                     Ok(mut backend) => {
                         use tokio::io::AsyncWriteExt;
-                        // Send the initial WS handshake to backend
+                        // Forward the proper WS handshake preserving all original headers
                         let handshake = format!(
-                            "GET {upstream_path2} HTTP/1.1\r\nHost: {backend_host2}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nX-Forwarded-For: {client_ip2}\r\n\r\n"
+                            "GET {upstream_path2} HTTP/1.1\r\nHost: {backend_host2}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nX-Forwarded-For: {client_ip2}\r\nX-Real-IP: {client_ip2}\r\n{extra_headers}\r\n"
                         );
                         let _ = backend.write_all(handshake.as_bytes()).await;
                         // Bidirectional copy
@@ -1764,7 +1878,6 @@ async fn ws_tunnel(
         }
     });
 
-    // Return 101 Switching Protocols to trigger hyper's upgrade mechanism
     hyper::Response::builder()
         .status(hyper::StatusCode::SWITCHING_PROTOCOLS)
         .header(CONNECTION, "Upgrade")
@@ -1817,21 +1930,41 @@ async fn log_access_async(
     ua: &str,
     auth_result: &str,
 ) {
+    log_access_async_with_status(db, service_id, route, client_ip, ua, auth_result, 0).await;
+}
+
+async fn log_access_async_with_status(
+    db: &Db,
+    service_id: &str,
+    route: &WebRoute,
+    client_ip: &str,
+    ua: &str,
+    auth_result: &str,
+    status_code: u16,
+) {
     use std::collections::HashSet;
     use std::sync::Mutex;
-    static SEEN: std::sync::OnceLock<Mutex<HashSet<String>>> = std::sync::OnceLock::new();
-    let seen = SEEN.get_or_init(|| Mutex::new(HashSet::new()));
+    // Dedup store: keys are "YYYY-MM-DD\x00routeID\x00clientIP\x00browser"
+    // We track the last-seen date and flush the set when the day rolls over.
+    static SEEN: std::sync::OnceLock<Mutex<(String, HashSet<String>)>> = std::sync::OnceLock::new();
+    let seen = SEEN.get_or_init(|| Mutex::new((String::new(), HashSet::new())));
     let browser = parse_browser(ua);
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let key = format!("{today}\x00{}\x00{client_ip}\x00{browser}", route.id);
-    let is_new = seen.lock().map(|mut s| s.insert(key)).unwrap_or(true);
+    let is_new = seen.lock().map(|mut guard| {
+        let (ref mut last_day, ref mut set) = *guard;
+        // Clear on day rollover
+        if *last_day != today {
+            set.clear();
+            *last_day = today.clone();
+        }
+        if set.len() > 100_000 {
+            set.clear();
+        }
+        set.insert(key)
+    }).unwrap_or(true);
     if !is_new {
         return;
-    }
-    if let Ok(mut s) = seen.lock() {
-        if s.len() > 100_000 {
-            s.clear();
-        }
     }
     let log = crate::models::AccessLog {
         id: crate::state::new_id(),
@@ -1839,7 +1972,7 @@ async fn log_access_async(
         route_id: route.id.clone(),
         route_name: route.name.clone(),
         domain: route.domain.clone(),
-        status_code: 0,
+        status_code,
         client_ip: client_ip.to_string(),
         user_agent: browser,
         auth_result: auth_result.to_string(),

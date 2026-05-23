@@ -183,8 +183,10 @@ impl AppState {
     pub async fn rematch_and_restart(&self) {
         rematch_all_routes(&self.data).await;
         let d = self.data.read().await.clone();
+        // Use force_restart so that TLS cert changes and route updates take effect
+        // on already-running webservice workers.
         self.engines
-            .apply_webservice(
+            .apply_webservice_force(
                 &d.webservice,
                 &d.tls,
                 &d.ipfilter,
