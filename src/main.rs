@@ -23,6 +23,13 @@ pub static VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // rustls 0.23+ 需要在进程级别显式安装加密后端，否则所有 TLS 操作（ACME、
+    // HTTPS 客户端、反向代理 TLS 握手）会在运行时 panic。
+    // 必须在任何 rustls/reqwest/instant-acme/tokio-rustls 调用前执行。
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install rustls crypto provider");
+
     // Tracing
     tracing_subscriber::fmt()
         .with_env_filter(
