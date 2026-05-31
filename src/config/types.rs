@@ -126,19 +126,6 @@ pub struct WebRoute {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WebAccessLog {
-    pub id: String,
-    pub service_id: String,
-    pub route_id: String,
-    pub route_name: String,
-    pub domain: String,
-    pub status_code: u16,
-    pub client_ip: String,
-    pub user_agent: String,
-    pub time: String,
-}
-
 // ─── TLS Cert ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
