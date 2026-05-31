@@ -175,26 +175,38 @@ impl Manager {
             let (resolved_zone_id, record_id) = cf_create_txt_record(token, zone_id, &txt_name, &dns_value).await
                 .with_context(|| format!("create TXT record for {}", domain))?;
             dns_records.push((resolved_zone_id, record_id, txt_name.clone()));
+            info!("[tls] TXT record created for {} value={}", txt_name, dns_value);
+
+            // 等待 DNS 传播再通知 ACME 服务器验证。
+            // Cloudflare 本身几秒内就生效，但 Let's Encrypt 的验证服务器需要
+            // 从权威 DNS 查询，实际传播可能需要 30-90 秒。
+            info!("[tls] waiting 90s for DNS propagation before notifying ACME...");
+            sleep(Duration::from_secs(90)).await;
 
             order.set_challenge_ready(&challenge.url).await
                 .context("set challenge ready")?;
+            info!("[tls] notified ACME challenge ready for {}", domain);
         }
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
         loop {
             sleep(Duration::from_secs(15)).await;
             order.refresh().await.context("refresh order")?;
-            match order.state().status {
+            let state = order.state();
+            info!("[tls] order status: {:?}", state.status);
+            match state.status {
                 OrderStatus::Ready => break,
                 OrderStatus::Invalid => {
+                    // 记录 ACME 服务器返回的具体拒绝原因
+                    let reason = format!("{:?}", state);
                     cleanup_txt_records(token, &dns_records).await;
-                    return Err(anyhow!("ACME order invalid"));
+                    return Err(anyhow!("ACME order invalid: {}", reason));
                 }
                 _ => {}
             }
             if std::time::Instant::now() > deadline {
                 cleanup_txt_records(token, &dns_records).await;
-                return Err(anyhow!("ACME DNS-01 challenge timed out"));
+                return Err(anyhow!("ACME DNS-01 challenge timed out after 600s"));
             }
         }
 
@@ -226,6 +238,7 @@ impl Manager {
 
         let key_pem = key_pair.serialize_pem();
         let expires_at = parse_cert_expiry(&cert_chain_pem).unwrap_or_default();
+        info!("[tls] certificate issued successfully, expires: {}", expires_at);
 
         Ok((cert_chain_pem, key_pem, expires_at))
     }
