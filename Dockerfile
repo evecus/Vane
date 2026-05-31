@@ -1,23 +1,37 @@
-FROM alpine:latest
+# syntax=docker/dockerfile:1
+# Multi-arch image using pre-built musl binaries from CI.
+# Build context must contain: vane-linux-amd64, vane-linux-arm64
 
-# 安装基础库，如时区数据和证书（用于 HTTPS 请求）
+FROM alpine:3.20
+
+ARG TARGETARCH
+ARG VERSION=dev
+
+LABEL org.opencontainers.image.title="Vane"
+LABEL org.opencontainers.image.description="Vane Network Manager (Rust)"
+LABEL org.opencontainers.image.version="${VERSION}"
+
+# Runtime deps (ca-certs for ACME/HTTPS, tzdata for correct time display)
 RUN apk add --no-cache ca-certificates tzdata
 
 WORKDIR /app
 
-# 使用 buildx 提供的变量自动识别架构
-ARG TARGETARCH
-# 将前面步骤生成的二进制文件复制到容器内
-# 这里假设二进制文件命名为 vane-linux-amd64 和 vane-linux-arm64
-COPY vane-linux-${TARGETARCH} /app/vane
+# Copy the correct binary based on build platform
+COPY vane-linux-amd64 vane-linux-amd64
+COPY vane-linux-arm64 vane-linux-arm64
 
-RUN chmod +x /app/vane
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+      cp vane-linux-arm64 vane; \
+    else \
+      cp vane-linux-amd64 vane; \
+    fi && \
+    chmod +x vane && \
+    rm -f vane-linux-amd64 vane-linux-arm64
 
-# 按照你的要求，默认数据路径为 /app/data
 VOLUME ["/app/data"]
-
-# 暴露端口
 EXPOSE 4455
 
-# 启动命令，默认加上 --config 参数
-ENTRYPOINT ["/app/vane", "--config", "/app/data"]
+ENV RUST_LOG=vane=info
+
+ENTRYPOINT ["/app/vane"]
+CMD ["--config", "/app/data"]

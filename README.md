@@ -1,64 +1,108 @@
-#                                           Vane
+# Vane (Rust)
 
-> 轻量级网络服务管理工具 — 端口转发 · DDNS · Web服务 · TLS证书
+Vane 的 Rust 重写版本。单一二进制，内嵌前端，零外部依赖。
 
-<div align="center">
-<br>
-<img width="200" src="https://raw.githubusercontent.com/evecus/Vane/master/web/public/icon-512.png" alt="Vane">
-<br>
-</div>
+## 功能
 
-## ✨ 功能特性
+- **端口转发** — TCP / UDP，带流量统计
+- **DDNS** — Cloudflare，自动检测公网 IP
+- **反向代理** — 域名路由，SNI TLS，Basic Auth
+- **TLS 证书** — ACME DNS-01（Let's Encrypt / ZeroSSL）自动申请与续签
+- **IP 过滤** — 白名单 / 黑名单，支持 CIDR
+- **配置加密** — AES-256-GCM 本地加密存储（SQLite bundled）
 
-| 模块 | 功能 |
-|------|------|
-| 🔵 **端口转发** | TCP/UDP 端口转发，实时流量监控 |
-| 🟢 **DDNS** | 动态域名，支持 Cloudflare / 阿里云 / DNSPod / 腾讯云 |
-| 🟣 **Web 服务** | 反向代理，HTTP → HTTPS，多域名多后端 |
-| 🟠 **TLS 证书** | Let's Encrypt DNS-01 自动申请续期 + 手动上传 |
+## 构建
 
-## 🚀 快速开始
+### 前置条件
 
-```bash
-# 下载二进制
-wget https://github.com/evecus/vane/releases/latest/download/vane-linux-amd64
-chmod +x vane-linux-amd64
+- Rust 1.80+
+- Node.js 20+（构建前端）
 
-# 运行
-./vane-linux-amd64 --config /path(可选)
-
-# 访问管理界面
-# http://your-ip:4455
-# 默认账号: admin / vane1234  （请及时修改密码）
-```
-
-## 🏗️ 从源码构建
+### 本地构建
 
 ```bash
-# 1. 构建前端
+# 构建前端
 cd web && npm ci && npm run build && cd ..
 
-# 2. 构建 Rust 二进制
+# 构建 release 二进制（当前平台）
 cargo build --release
-cp target/release/vane ./vane
 
-# 3. 运行
-./vane --config /path(可选)
+# 交叉编译 amd64 musl（静态链接）
+rustup target add x86_64-unknown-linux-musl
+cargo build --release --target x86_64-unknown-linux-musl
+
+# 交叉编译 arm64 musl
+rustup target add aarch64-unknown-linux-musl
+# 需要: apt install gcc-aarch64-linux-gnu musl-tools
+# 并在 .cargo/config.toml 中配置 aarch64 链接器
+cargo build --release --target aarch64-unknown-linux-musl
 ```
 
-## 📦 项目结构
+### .cargo/config.toml（arm64 交叉编译）
 
-```
-vane/
-├── src/main.rs          # Rust 入口
-├── web/                 # Vue3 前端
-└── .github/workflows/   # CI/CD
+```toml
+[target.aarch64-unknown-linux-musl]
+linker = "aarch64-linux-gnu-gcc"
 ```
 
-## ⚙️ 配置文件
+## 运行
 
-首次运行自动创建 `vane.json`，所有配置通过 Web 界面管理。
+```bash
+./vane                        # 数据目录默认为二进制同级 ./data/
+./vane --config /etc/vane     # 指定数据目录
+VANE_SECRET=mysecret ./vane   # 自定义加密密钥（否则随机生成并写入 data/secret.key）
+```
 
-## 📄 License
+首次启动访问 `http://0.0.0.0:4455`，账号 `admin / admin`。
+
+## Docker
+
+```bash
+docker run -d \
+  --name vane \
+  --restart unless-stopped \
+  -p 4455:4455 \
+  -v /etc/vane:/app/data \
+  yourname/vane:latest
+```
+
+## 项目结构
+
+```
+src/
+├── main.rs               # 入口，服务启动
+├── assets.rs             # rust-embed 前端嵌入
+├── config/
+│   ├── mod.rs            # Config 共享状态
+│   ├── types.rs          # 所有数据类型
+│   ├── crypto.rs         # AES-256-GCM + PBKDF2
+│   ├── db.rs             # SQLite (bundled) CRUD
+│   └── ipfilter.rs       # IP 过滤逻辑
+├── module/
+│   ├── portforward.rs    # TCP/UDP 端口转发
+│   ├── ddns.rs           # DDNS + Cloudflare API
+│   ├── tls.rs            # ACME DNS-01 证书
+│   └── webservice.rs     # 反向代理 + SNI TLS
+└── api/
+    ├── mod.rs            # axum 路由注册
+    ├── auth.rs           # 登录/Session/速率限制
+    ├── dashboard.rs
+    ├── settings.rs       # 设置/备份/恢复
+    ├── portforward.rs
+    ├── ddns.rs
+    ├── tls.rs
+    ├── webservice.rs
+    └── ipfilter.rs
+web/                      # 前端源码（Vue 3，原版不动）
+```
+
+## 环境变量
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `VANE_SECRET` | 配置加密主密钥 | 随机生成，存入 `data/secret.key` |
+| `RUST_LOG` | 日志级别 | `vane=info` |
+
+## License
 
 MIT
