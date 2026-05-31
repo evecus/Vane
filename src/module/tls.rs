@@ -1,8 +1,8 @@
 use crate::config::{db, Config, TlsCert};
 use anyhow::{anyhow, Context, Result};
 use instant_acme::{
-    Account, AuthorizationStatus, ChallengeType, Identifier, LetsEncrypt,
-    NewAccount, NewOrder, OrderStatus,
+    Account, AuthorizationStatus, ChallengeType, ExternalAccountKey, Identifier,
+    LetsEncrypt, NewAccount, NewOrder, OrderStatus,
 };
 use rcgen::{CertificateParams, DistinguishedName, KeyPair};
 use std::collections::HashSet;
@@ -11,6 +11,26 @@ use tokio::time::{sleep, Duration};
 use tracing::{error, info, warn};
 
 const ZEROSSL_DIR: &str = "https://acme.zerossl.com/v2/DV90";
+
+/// 内置 ZeroSSL EAB 账号。key: 邮箱, value: (kid, hmac_key_base64url)
+/// 与 Go 版保持完全一致，用户选择对应邮箱时自动注入 EAB，无需手动填写。
+static BUILTIN_ZEROSSL_ACCOUNTS: &[(&str, &str, &str)] = &[
+    (
+        "76q7n@dollicons.com",
+        "JhL5gkVe0-zPKoH5G6_Z5A",
+        "L24OuPHmeUS3RyN9wp28eaJqTBrYT7BVBXvHU3BvmNOh85Mpx3nz65sKsiY1Cik4jrAVKNvFVdRFk69tfT0tAQ",
+    ),
+    (
+        "jamie@gmail.com",
+        "RumPLRDS1IaG5YrHKUqG-g",
+        "Opr7ZlT9t1g2Mp3nwMjn1dl9sUC2-yp6pGjf-E2PzGXBJTXoLsp_gPzv35eS0zK4mw6nQPCIDUPJcF5632jalw",
+    ),
+    (
+        "gings@gmail.com",
+        "16nmO6yCbhkm_Ny6sphJuQ",
+        "hPOv1bdSDCNTJmASQvzXqJICcOuPxuBUEOnp7zFVnAzKimJMfSbL9RHGkyY2Pig_bwgcseSWU0XUcsY_OQnEbQ",
+    ),
+];
 
 // ─── Manager ──────────────────────────────────────────────────────────────────
 
@@ -136,6 +156,52 @@ impl Manager {
             LetsEncrypt::Production.url().to_string()
         };
 
+        // ZeroSSL 需要 EAB（External Account Binding）才能注册 ACME 账号。
+        //
+        // EAB 来源优先级（与 Go 版保持一致）：
+        //   1. provider_conf.zerossl_key_id / zerossl_api_key
+        //      前端"使用私有账号=关闭"时，会把内置账号的 kid+hmac 直接写入这两个字段后
+        //      调用 PUT /tls/:id 保存，再 POST /tls/:id/issue；
+        //      前端"使用私有账号=开启"时，用户手动填写的也存在这两个字段。
+        //   2. 如果上面为空，尝试用 cert.email 匹配内置账号（auto-fix，兼容旧数据）。
+        //   3. 都没有 → 报错，ZeroSSL 无法注册。
+        let eab_kid_hmac: Option<(String, Vec<u8>)> = if cert.ca_provider == "zerossl" {
+            // 1. 优先读 provider_conf 里的 zerossl_key_id / zerossl_api_key
+            let (kid_str, hmac_str) = if !cert.provider_conf.zerossl_key_id.is_empty()
+                && !cert.provider_conf.zerossl_api_key.is_empty()
+            {
+                (cert.provider_conf.zerossl_key_id.clone(), cert.provider_conf.zerossl_api_key.clone())
+            } else {
+                // 2. fallback：用 email 匹配内置账号（兼容旧数据）
+                BUILTIN_ZEROSSL_ACCOUNTS.iter()
+                    .find(|(email, _, _)| *email == cert.email.as_str())
+                    .map(|(_, kid, hmac)| (kid.to_string(), hmac.to_string()))
+                    .unwrap_or_default()
+            };
+
+            if kid_str.is_empty() || hmac_str.is_empty() {
+                return Err(anyhow!(
+                    "ZeroSSL 需要 EAB 凭据（EAB Key ID 和 EAB HMAC Key），请在证书设置中填写或选择内置账号"
+                ));
+            }
+
+            match base64_url_decode(&hmac_str) {
+                Ok(raw) => {
+                    info!("[tls] using ZeroSSL EAB kid={}", kid_str);
+                    Some((kid_str, raw))
+                }
+                Err(e) => {
+                    return Err(anyhow!("ZeroSSL HMAC key 解码失败: {}（应为 Base64url 格式）", e));
+                }
+            }
+        } else {
+            None
+        };
+
+        let external_account = eab_kid_hmac.as_ref().map(|(kid, key_bytes)| {
+            ExternalAccountKey::new(kid.clone(), key_bytes)
+        });
+
         let (account, _creds) = Account::create(
             &NewAccount {
                 contact: &[&format!("mailto:{}", cert.email)],
@@ -143,7 +209,7 @@ impl Manager {
                 only_return_existing: false,
             },
             &server_url,
-            None,
+            external_account.as_ref(),
         ).await.context("create ACME account")?;
 
         let identifiers: Vec<Identifier> = domains.iter()
@@ -366,4 +432,27 @@ pub fn extract_domains_from_cert_pem(cert_pem: &str) -> Vec<String> {
         }
     }
     domains.into_iter().collect()
+}
+
+// ─── Base64url decode（无 padding，支持 - _ 字符）─────────────────────────────
+// ZeroSSL 下发的 HMAC Key 是 Base64url 格式（RFC 4648 §5，无 padding）。
+// instant-acme ExternalAccountKey::new 接受原始字节，需要先解码。
+fn base64_url_decode(s: &str) -> Result<Vec<u8>> {
+    use base64::{Engine as _, engine::general_purpose};
+
+    // 先尝试无 padding 的 Base64url
+    if let Ok(raw) = general_purpose::URL_SAFE_NO_PAD.decode(s) {
+        return Ok(raw);
+    }
+    // 补 padding 后再试
+    let pad = match s.len() % 4 {
+        2 => format!("{}==", s),
+        3 => format!("{}=", s),
+        _ => s.to_string(),
+    };
+    if let Ok(raw) = general_purpose::URL_SAFE.decode(&pad) {
+        return Ok(raw);
+    }
+    // 最后尝试标准 Base64
+    general_purpose::STANDARD.decode(s).map_err(|e| anyhow!("base64 decode: {}", e))
 }
