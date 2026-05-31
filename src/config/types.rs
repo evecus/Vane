@@ -77,10 +77,12 @@ pub struct DdnsRule {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderConf {
+    // Cloudflare DNS
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub api_token: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub zone_id: String,
+    // 其他 DNS 服务商（保留兼容）
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub access_key_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -89,6 +91,11 @@ pub struct ProviderConf {
     pub secret_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub secret_key: String,
+    // ZeroSSL EAB（前端字段名必须与 Go 版一致）
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub zerossl_key_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub zerossl_api_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
