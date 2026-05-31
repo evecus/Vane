@@ -1,0 +1,18 @@
+# Cross.toml — cross-rs/cross 配置
+# cross 在 Docker 容器内编译，默认只挂载项目根目录，
+# web/dist/ 已经在根目录下，会被自动包含。
+
+[build.env]
+# 将 GitHub Actions 注入的版本环境变量透传进容器
+passthrough = [
+    "CARGO_PKG_VERSION",
+    "RELEASE_VERSION",
+]
+
+# aarch64 musl — 使用 cross 官方镜像（内置 musl-cross 工具链）
+[target.aarch64-unknown-linux-musl]
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-musl:main"
+
+# x86_64 musl — 使用 cross 官方镜像
+[target.x86_64-unknown-linux-musl]
+image = "ghcr.io/cross-rs/x86_64-unknown-linux-musl:main"
