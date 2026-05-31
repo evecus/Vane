@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Vane
+    name: Build Vane (ARM64 musl)
     runs-on: ubuntu-latest
 
     steps:
@@ -38,19 +38,16 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
 
       - name: Build frontend
         working-directory: web
         run: |
-          npm install
+          npm ci
           npm run build
 
-      # ── Rust 工具链 ───────────────────────────────────────────────────────────
-      - name: Install cross-compile toolchain (arm64 musl)
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y gcc-aarch64-linux-gnu musl-tools
-
+      # ── Rust + cross ──────────────────────────────────────────────────────────
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -61,21 +58,18 @@ jobs:
         with:
           key: aarch64-unknown-linux-musl
 
-      # aarch64 musl 链接器配置
-      - name: Configure linker
-        run: |
-          mkdir -p .cargo
-          cat >> .cargo/config.toml << 'EOF'
-          [target.aarch64-unknown-linux-musl]
-          linker = "aarch64-linux-gnu-gcc"
-          EOF
+      # cross 解决 glibc 交叉编译器无法链接 musl + SQLite bundled 的问题
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross --locked
 
-      # ── 编译 ARM64 ────────────────────────────────────────────────────────────
-      - name: Build linux/arm64
+      # ── 编译 ARM64 musl ───────────────────────────────────────────────────────
+      - name: Inject version
         run: |
-          # 注入版本号
           sed -i "s/^version = .*/version = \"${RELEASE_VERSION#v}\"/" Cargo.toml
-          cargo build --release --target aarch64-unknown-linux-musl
+
+      - name: Build linux/arm64 (musl)
+        run: |
+          cross build --release --target aarch64-unknown-linux-musl
           cp target/aarch64-unknown-linux-musl/release/vane vane-linux-arm64
           chmod +x vane-linux-arm64
 
@@ -100,10 +94,9 @@ jobs:
             ```
             访问 `http://your-ip:4455`，默认账号 `admin / admin`
 
-            ### 平台
             | 平台 | 文件 |
             |------|------|
-            | Linux ARM64 | `vane-linux-arm64` |
+            | Linux ARM64 (musl) | `vane-linux-arm64` |
 
           files: |
             vane-linux-arm64
