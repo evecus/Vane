@@ -92,6 +92,13 @@ pub async fn update_service(
 }
 
 pub async fn delete_service(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+    // Collect all route IDs before removing the service (needed for scope cleanup)
+    let route_ids: Vec<String> = state.cfg.read()
+        .web_services.iter()
+        .find(|s| s.id == id)
+        .map(|s| s.routes.iter().map(|r| r.id.clone()).collect())
+        .unwrap_or_default();
+
     state.ws.stop(&id);
     state.cfg.write().web_services.retain(|s| s.id != id);
 
@@ -101,6 +108,25 @@ pub async fn delete_service(State(state): State<AppState>, Path(id): Path<String
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response();
         }
     }
+
+    // Cascade: remove ip_filter scope entries for every route in this service.
+    let mut all_modified: Vec<crate::config::types::IpFilterRule> = Vec::new();
+    for route_id in &route_ids {
+        let modified = state.cfg.clean_scopes_for_deleted_target("webservice", route_id);
+        all_modified.extend(modified);
+    }
+    if !all_modified.is_empty() {
+        if let Some(dd) = state.cfg.read().data_dir.clone() {
+            // Deduplicate by rule id before persisting
+            let mut seen = std::collections::HashSet::new();
+            for rule in &all_modified {
+                if seen.insert(rule.id.clone()) {
+                    let _ = db::save_ip_filter_rule(&dd, rule);
+                }
+            }
+        }
+    }
+
     Json(serde_json::json!({"ok": true})).into_response()
 }
 
@@ -282,6 +308,17 @@ pub async fn delete_route(
     }
     let dd = state.cfg.read().data_dir.clone();
     if let Some(dd) = dd { let _ = db::delete_web_route(&dd, &route_id); }
+
+    // Cascade: remove ip_filter scope entries referencing this route.
+    let modified_rules = state.cfg.clean_scopes_for_deleted_target("webservice", &route_id);
+    if !modified_rules.is_empty() {
+        if let Some(dd) = state.cfg.read().data_dir.clone() {
+            for rule in &modified_rules {
+                let _ = db::save_ip_filter_rule(&dd, rule);
+            }
+        }
+    }
+
     Json(serde_json::json!({"ok": true})).into_response()
 }
 

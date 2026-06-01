@@ -1,8 +1,7 @@
 use crate::api::AppState;
 use crate::config::{db, ipfilter::has_scope_conflict, types::*};
 use axum::{
-    body::Bytes,
-    extract::{Path, State},
+    extract::{Multipart, Path, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
@@ -133,11 +132,44 @@ pub async fn toggle_rule(State(state): State<AppState>, Path(id): Path<String>) 
     Json(serde_json::json!({"ok": true, "enabled": enabled})).into_response()
 }
 
-pub async fn upload_file(State(_state): State<AppState>, body: Bytes) -> impl IntoResponse {
-    // Expect multipart or raw text — accept raw text for simplicity
-    let text = std::str::from_utf8(&body).unwrap_or("").to_string();
-    let ips = parse_ip_list(&text);
-    Json(serde_json::json!({"ips": ips, "count": ips.len()}))
+/// Parse an uploaded IP list file (multipart/form-data, field name "file").
+/// Returns { name, ips, count } — matching the Go version's response shape,
+/// which the frontend uses to store the attachment name alongside the IP list.
+pub async fn upload_file(
+    State(_state): State<AppState>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    while let Ok(Some(field)) = multipart.next_field().await {
+        // Accept the field regardless of its name, but prefer the "file" field.
+        let filename = field
+            .file_name()
+            .unwrap_or("upload.txt")
+            .to_string();
+        let data = match field.bytes().await {
+            Ok(b) => b,
+            Err(_) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "failed to read file"})),
+                )
+                    .into_response()
+            }
+        };
+        let text = String::from_utf8_lossy(&data);
+        let ips = parse_ip_list(&text);
+        let count = ips.len();
+        return Json(serde_json::json!({
+            "name": filename,
+            "ips": ips,
+            "count": count,
+        }))
+        .into_response();
+    }
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({"error": "no file uploaded"})),
+    )
+        .into_response()
 }
 
 fn parse_ip_list(text: &str) -> Vec<String> {

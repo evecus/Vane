@@ -1,7 +1,7 @@
 use crate::api::AppState;
 use crate::config::{db, types::now_rfc3339};
 use axum::{
-    extract::{Request, State},
+    extract::{ConnectInfo, Request, State},
     http::{HeaderMap, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
@@ -11,6 +11,7 @@ use chrono::Utc;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Mutex;
 
 // ─── Admin login log ──────────────────────────────────────────────────────────
@@ -88,9 +89,11 @@ pub struct LoginReq {
 pub async fn login(
     State(state): State<AppState>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Json(req): Json<LoginReq>,
 ) -> impl IntoResponse {
-    let ip = extract_client_ip(&headers);
+    let socket_ip = connect_info.map(|c| c.0.ip().to_string());
+    let ip = extract_client_ip(&headers, socket_ip.as_deref());
 
     if !check_rate_limit(&ip) {
         log_admin(&ip, false);
@@ -141,11 +144,15 @@ pub async fn logout(
 pub async fn auth_middleware(
     State(state): State<AppState>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     req: Request,
     next: Next,
 ) -> Response {
-    // IP filter on admin scope
-    let client_ip = extract_client_ip(&headers);
+    // IP filter on admin scope — prefer X-Real-IP/X-Forwarded-For (set by a
+    // trusted reverse proxy), then fall back to the real socket address so that
+    // direct connections are never mis-identified as 127.0.0.1.
+    let socket_ip = connect_info.map(|c| c.0.ip().to_string());
+    let client_ip = extract_client_ip(&headers, socket_ip.as_deref());
     if !state.cfg.check_ip_allowed("admin", "", &client_ip) {
         return (StatusCode::FORBIDDEN, "Forbidden").into_response();
     }
@@ -210,13 +217,22 @@ fn generate_token() -> String {
     hex::encode(b)
 }
 
-fn extract_client_ip(headers: &HeaderMap) -> String {
-    // X-Real-IP from trusted proxy, or fall back to empty
+/// Extract the real client IP.
+///
+/// Priority:
+///   1. `X-Real-IP` header — set by a trusted reverse proxy (nginx `proxy_set_header X-Real-IP $remote_addr`).
+///   2. First address in `X-Forwarded-For` — set by many proxies/CDNs.
+///   3. `socket_ip` — the actual TCP connection peer address (reliable for direct connections).
+///
+/// The `socket_ip` fallback ensures that when Vane is accessed directly (no proxy),
+/// the real source address is used instead of the previous hard-coded "127.0.0.1".
+fn extract_client_ip(headers: &HeaderMap, socket_ip: Option<&str>) -> String {
     headers.get("x-real-ip")
         .or_else(|| headers.get("x-forwarded-for"))
         .and_then(|v| v.to_str().ok())
         .map(|s| s.split(',').next().unwrap_or("").trim().to_string())
         .filter(|s| !s.is_empty())
+        .or_else(|| socket_ip.map(|s| s.to_string()))
         .unwrap_or_else(|| "127.0.0.1".to_string())
 }
 

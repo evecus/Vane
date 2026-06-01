@@ -4,7 +4,7 @@ pub mod ipfilter;
 pub mod types;
 
 pub use db::DataDir;
-pub use ipfilter::check_ip_allowed;
+pub use ipfilter::{check_ip_allowed, clean_scopes_for_deleted_target};
 pub use types::*;
 
 use anyhow::Result;
@@ -47,6 +47,25 @@ impl Config {
     ) -> bool {
         let inner = self.read();
         check_ip_allowed(&inner.ip_filter, scope_type, target_id, client_ip)
+    }
+
+    /// Remove stale scope entries left behind when a portforward/webservice target
+    /// is deleted.  Returns the (cloned) rules that were modified so the caller
+    /// can persist them.
+    pub fn clean_scopes_for_deleted_target(
+        &self,
+        scope_type: &str,
+        target_id: &str,
+    ) -> Vec<crate::config::types::IpFilterRule> {
+        let mut inner = self.write();
+        let modified_ids =
+            clean_scopes_for_deleted_target(&mut inner.ip_filter, scope_type, target_id);
+        inner
+            .ip_filter
+            .iter()
+            .filter(|r| modified_ids.contains(&r.id))
+            .cloned()
+            .collect()
     }
 }
 

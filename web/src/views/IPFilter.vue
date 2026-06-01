@@ -315,7 +315,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from '@/stores/i18n'
 import { api } from '@/stores/auth'
 import {
@@ -351,6 +351,14 @@ async function load() {
   } catch {}
 }
 load()
+
+// 当用户从其他页面切回 IPFilter 时自动重新加载，确保
+// 端口转发/路由删除后残留的 scope 标签能及时更新
+function handleVisibility() {
+  if (document.visibilityState === 'visible') load()
+}
+onMounted(() => document.addEventListener('visibilitychange', handleVisibility))
+onUnmounted(() => document.removeEventListener('visibilitychange', handleVisibility))
 
 // ── 分组目标列表（用于 Modal 中的分组展示）────────────────────────────────
 const targetGroups = computed(() => {
@@ -449,8 +457,9 @@ async function toggle(rule) {
   toggling.value = rule.id
   try {
     const { data } = await api.post(`/ipfilter/${rule.id}/toggle`)
+    // Backend returns {ok, enabled} — update only the enabled field in-place
     const idx = rules.value.findIndex(r => r.id === rule.id)
-    if (idx !== -1) rules.value[idx] = data
+    if (idx !== -1) rules.value[idx] = { ...rules.value[idx], enabled: data.enabled }
   } catch {}
   toggling.value = null
 }

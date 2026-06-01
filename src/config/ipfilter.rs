@@ -75,6 +75,25 @@ fn ip_in_list(ip: Option<IpAddr>, raw: &str, list: &[&str]) -> bool {
     false
 }
 
+/// Remove scope entries that reference a deleted target from all ip_filter rules.
+/// Returns the list of rule IDs that were modified (need to be persisted).
+pub fn clean_scopes_for_deleted_target(
+    rules: &mut Vec<IpFilterRule>,
+    scope_type: &str,
+    target_id: &str,
+) -> Vec<String> {
+    let mut modified = Vec::new();
+    for rule in rules.iter_mut() {
+        let before = rule.scopes.len();
+        rule.scopes
+            .retain(|s| !(s.scope_type == scope_type && s.target_id == target_id));
+        if rule.scopes.len() != before {
+            modified.push(rule.id.clone());
+        }
+    }
+    modified
+}
+
 /// Check for conflicting scopes across rules (excludes the rule with excludeID).
 pub fn has_scope_conflict(
     rules: &[IpFilterRule],

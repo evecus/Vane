@@ -119,6 +119,17 @@ pub async fn delete_pf(
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response();
         }
     }
+
+    // Cascade: remove any ip_filter scope entries that referenced this rule.
+    let modified_rules = state.cfg.clean_scopes_for_deleted_target("portforward", &id);
+    if !modified_rules.is_empty() {
+        if let Some(dd) = state.cfg.read().data_dir.clone() {
+            for rule in &modified_rules {
+                let _ = db::save_ip_filter_rule(&dd, rule);
+            }
+        }
+    }
+
     Json(serde_json::json!({"ok": true})).into_response()
 }
 
