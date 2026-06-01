@@ -10,10 +10,22 @@ use axum::{
 use serde::Deserialize;
 
 pub async fn list_certs(State(state): State<AppState>) -> impl IntoResponse {
-    // Strip key_pem from response (never send private key in list)
+    // Strip key_pem from response (never send private key in list).
+    // Also inject `days_left` (computed from expires_at) and `domain`
+    // (first entry of domains[] for display) so the dashboard can use them directly.
     let certs: Vec<serde_json::Value> = state.cfg.read().tls_certs.iter().map(|c| {
         let mut v = serde_json::to_value(c).unwrap();
-        v.as_object_mut().map(|m| { m.remove("key_pem"); });
+        if let Some(m) = v.as_object_mut() {
+            m.remove("key_pem");
+            // Inject computed days_left
+            m.insert("days_left".into(), serde_json::json!(c.days_until_expiry()));
+            // Ensure a flat `domain` field for the dashboard card
+            // (prefer first entry of domains[], fall back to stored domain field)
+            let display_domain = c.domains.first().cloned()
+                .filter(|d| !d.is_empty())
+                .unwrap_or_else(|| c.domain.clone());
+            m.insert("domain".into(), serde_json::json!(display_domain));
+        }
         v
     }).collect();
     Json(certs)
