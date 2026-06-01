@@ -254,6 +254,9 @@ function certBarStyle(days) {
   return `width: ${pct}%; background: ${color}`
 }
 function domainLabel(r) {
+  // domains[] is the canonical field (array of configured domains).
+  // Fall back to the legacy sub_domain + domain combo for older records.
+  if (r.domains && r.domains.length > 0) return r.domains[0]
   return (r.sub_domain ? r.sub_domain + '.' : '') + (r.domain || '')
 }
 
