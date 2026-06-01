@@ -55,6 +55,18 @@ pub async fn update_service(
     Path(id): Path<String>,
     Json(req): Json<ServiceReq>,
 ) -> impl IntoResponse {
+    // If the port is changing, verify the new port is available before we
+    // stop the running service (avoids an unrecoverable stopped-with-no-port state).
+    if let Some(new_port) = req.listen_port {
+        let current_port = state.cfg.read().web_services.iter()
+            .find(|s| s.id == id)
+            .map(|s| s.listen_port);
+        if let Some(current) = current_port {
+            if current != new_port && !crate::config::types::is_port_available(new_port) {
+                return (StatusCode::CONFLICT, Json(serde_json::json!({"error": format!("端口 {} 已被占用", new_port)}))).into_response();
+            }
+        }
+    }
     {
         let mut cfg = state.cfg.write();
         let Some(s) = cfg.web_services.iter_mut().find(|s| s.id == id) else {
@@ -211,9 +223,14 @@ pub async fn update_route(
                 Ok(h) => h,
                 Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
             },
-            _ => existing_hash,
+            // Keep the existing hash only when one is already stored.
+            // If there is no existing hash (first-time enable), a password is required.
+            _ if !existing_hash.is_empty() => existing_hash,
+            _ => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "开启访问验证时必须设置密码"}))).into_response(),
         }
     } else {
+        // Always wipe the hash when auth is turned off so a stale credential
+        // can never accidentally re-enable the gate on the next toggle.
         String::new()
     };
 

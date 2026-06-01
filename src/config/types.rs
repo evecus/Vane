@@ -117,7 +117,7 @@ pub struct WebService {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct WebRoute {
     pub id: String,
     pub name: String,
@@ -128,9 +128,30 @@ pub struct WebRoute {
     pub cert_status: String, // "ok" | "no_cert" | "cert_inactive"
     pub auth_enabled: bool,
     pub auth_user: String,
-    #[serde(default, skip_serializing)]
+    #[serde(default)]
     pub auth_pass_hash: String,
     pub created_at: String,
+}
+
+impl serde::Serialize for WebRoute {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut st = s.serialize_struct("WebRoute", 11)?;
+        st.serialize_field("id", &self.id)?;
+        st.serialize_field("name", &self.name)?;
+        st.serialize_field("domain", &self.domain)?;
+        st.serialize_field("backend_url", &self.backend_url)?;
+        st.serialize_field("enabled", &self.enabled)?;
+        st.serialize_field("matched_cert_id", &self.matched_cert_id)?;
+        st.serialize_field("cert_status", &self.cert_status)?;
+        st.serialize_field("auth_enabled", &self.auth_enabled)?;
+        st.serialize_field("auth_user", &self.auth_user)?;
+        // Never expose the hash; send a simple flag so the frontend knows
+        // whether a password is currently stored.
+        st.serialize_field("auth_pass_set", if self.auth_pass_hash.is_empty() { "" } else { "set" })?;
+        st.serialize_field("created_at", &self.created_at)?;
+        st.end()
+    }
 }
 
 // ─── TLS Cert ─────────────────────────────────────────────────────────────────
