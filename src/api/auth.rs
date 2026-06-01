@@ -52,6 +52,7 @@ struct LoginAttempt {
 
 const MAX_LOGIN_ATTEMPTS: u32 = 10;
 const LOGIN_WINDOW_SECS: i64 = 600; // 10 minutes
+const GC_INTERVAL_SECS: u64 = 1800; // 30 minutes
 
 static LOGIN_ATTEMPTS: Lazy<Mutex<HashMap<String, LoginAttempt>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -61,21 +62,38 @@ fn check_rate_limit(ip: &str) -> bool {
     let now = Utc::now();
     if let Some(a) = map.get_mut(ip) {
         if (now - a.window_at).num_seconds() > LOGIN_WINDOW_SECS {
-            a.count = 0;
+            // Window expired — reset and allow this attempt
+            a.count = 1;
             a.window_at = now;
+            return true;
         }
-        if a.count >= MAX_LOGIN_ATTEMPTS {
-            return false;
-        }
+        // Increment BEFORE the check: attempt #10 is the last allowed.
+        // The old code checked then incremented, so attempt #11 was the first
+        // rejected — an off-by-one that gave attackers one extra free try.
         a.count += 1;
+        a.count <= MAX_LOGIN_ATTEMPTS
     } else {
         map.insert(ip.to_string(), LoginAttempt { count: 1, window_at: now });
+        true
     }
-    true
 }
 
 fn clear_rate_limit(ip: &str) {
     LOGIN_ATTEMPTS.lock().unwrap().remove(ip);
+}
+
+/// Periodically remove stale rate-limit entries to prevent unbounded memory
+/// growth when hit by many source IPs (distributed brute-force scan).
+/// Mirrors the Go version's init() cleanup goroutine.
+pub async fn purge_rate_limit_loop() {
+    let mut ticker =
+        tokio::time::interval(std::time::Duration::from_secs(GC_INTERVAL_SECS));
+    loop {
+        ticker.tick().await;
+        let now = Utc::now();
+        let mut map = LOGIN_ATTEMPTS.lock().unwrap();
+        map.retain(|_, a| (now - a.window_at).num_seconds() <= LOGIN_WINDOW_SECS * 2);
+    }
 }
 
 // ─── Login / Logout ───────────────────────────────────────────────────────────

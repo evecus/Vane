@@ -82,6 +82,9 @@ async fn main() -> anyhow::Result<()> {
         api::auth::purge_sessions_loop(state_clone).await;
     });
 
+    // Spawn rate-limit map GC task (prevents unbounded memory growth under scan attacks)
+    tokio::spawn(api::auth::purge_rate_limit_loop());
+
     let api_router = api::build_router(state.clone());
 
     // Static file handler with safe-entry and SPA fallback
