@@ -318,11 +318,11 @@
                 <div>
                   <label class="input-label">
                     密码
-                    <span v-if="routeForm.auth_pass_hash === 'set'" class="text-xs font-normal text-emerald-500 ml-1 normal-case tracking-normal">已设置，留空保持不变</span>
-                    <span v-else-if="routeForm.id" class="text-xs font-normal text-slate-400 ml-1 normal-case tracking-normal">留空则保持原密码不变</span>
+                    <span v-if="routeForm.auth_pass_set === 'set'" class="text-xs font-normal text-emerald-500 ml-1 normal-case tracking-normal">已设置，留空保持不变</span>
+                    <span v-else-if="routeForm.id && !routeForm.auth_pass_set" class="text-xs font-normal text-amber-500 ml-1 normal-case tracking-normal">请设置密码</span>
                   </label>
                   <input v-model="routeAuthPass" type="password" class="input font-mono"
-                         :placeholder="routeForm.auth_pass_hash === 'set' ? '不修改请留空' : '••••••••'"
+                         :placeholder="routeForm.auth_pass_set === 'set' ? '留空则不修改密码' : '请输入新密码'"
                          autocomplete="new-password" />
                 </div>
               </div>
@@ -632,9 +632,11 @@ async function saveRoute() {
       routeError.value = '开启访问验证时，账号不能为空'
       return
     }
-    // New route: password required; edit: only required if no existing hash
-    const isNew = !editingRoute.value
-    if (isNew && !routeAuthPass.value) {
+    // Require a password when:
+    //   a) creating a new route, or
+    //   b) editing an existing route that has no password stored yet
+    const needsPassword = !editingRoute.value || !routeForm.value.auth_pass_set
+    if (needsPassword && !routeAuthPass.value) {
       routeError.value = '开启访问验证时，密码不能为空'
       return
     }
@@ -642,8 +644,9 @@ async function saveRoute() {
   const id = currentSvcID.value
   const payload = {
     ...routeForm.value,
+    auth_pass_set: undefined, // read-only flag, never send back
     auth_pass_hash: undefined, // never send hash back to backend
-    auth_pass: routeAuthPass.value || undefined,
+    auth_password: routeAuthPass.value || undefined,
   }
   routeSaving.value = true
   try {
