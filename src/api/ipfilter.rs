@@ -51,6 +51,7 @@ pub struct FilterRuleReq {
     mode: Option<String>,
     scopes: Option<Vec<IpFilterScope>>,
     manual_ips: Option<Vec<String>>,
+    attachments: Option<Vec<IpFilterAttachment>>,
 }
 
 pub async fn create_rule(State(state): State<AppState>, Json(req): Json<FilterRuleReq>) -> impl IntoResponse {
@@ -119,6 +120,9 @@ pub async fn update_rule(
         if let Some(v) = req.mode { r.mode = v; }
         if let Some(v) = req.scopes { r.scopes = v; }
         if let Some(v) = req.manual_ips { r.manual_ips = v; }
+        // If the request includes attachments (uploaded file IPs), use them.
+        // Otherwise preserve the existing attachments so uploaded IPs aren't lost.
+        if let Some(v) = req.attachments { r.attachments = v; }
     }
 
     let rule = state.cfg.read().ip_filter.iter().find(|r| r.id == id).cloned();

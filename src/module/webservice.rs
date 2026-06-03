@@ -206,6 +206,63 @@ impl Manager {
         };
         info!("[webservice] listening on {} (https={})", addr, svc.enable_https);
 
+        // When HTTPS is enabled on port 443, also bind port 80 to redirect HTTP → HTTPS
+        if svc.enable_https && svc.listen_port == 443 {
+            let ln80 = match TcpListener::bind("0.0.0.0:80").await {
+                Ok(l) => {
+                    info!("[webservice] :80 redirect listener started for svc {}", svc_id);
+                    l
+                }
+                Err(e) => {
+                    warn!("[webservice] :80 redirect unavailable (port busy): {}", e);
+                    // Fall through without a :80 listener
+                    let mgr = Arc::clone(&self);
+                    let mut stop2 = stop.clone();
+                    tokio::spawn(async move {
+                        loop {
+                            tokio::select! {
+                                _ = stop2.changed() => { if *stop2.borrow() { break; } }
+                                res = listener.accept() => {
+                                    match res {
+                                        Ok((stream, peer)) => {
+                                            let mgr2 = Arc::clone(&mgr);
+                                            let id = svc_id.clone();
+                                            tokio::spawn(async move {
+                                                mgr2.handle_conn(stream, peer, &id).await;
+                                            });
+                                        }
+                                        Err(e) => { error!("[webservice] accept error: {}", e); }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                    return;
+                }
+            };
+
+            let mgr80 = Arc::clone(&self);
+            let mut stop80 = stop.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = stop80.changed() => { if *stop80.borrow() { break; } }
+                        res = ln80.accept() => {
+                            match res {
+                                Ok((stream, _peer)) => {
+                                    let mgr = Arc::clone(&mgr80);
+                                    tokio::spawn(async move {
+                                        mgr.serve_redirect(stream, 443).await;
+                                    });
+                                }
+                                Err(e) => { error!("[webservice] :80 accept error: {}", e); }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
         loop {
             tokio::select! {
                 _ = stop.changed() => { if *stop.borrow() { break; } }

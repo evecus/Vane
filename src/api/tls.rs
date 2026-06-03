@@ -8,6 +8,7 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
+use std::io::Write;
 
 pub async fn list_certs(State(state): State<AppState>) -> impl IntoResponse {
     // Strip key_pem from response (never send private key in list).
@@ -193,25 +194,80 @@ pub async fn download_cert(State(state): State<AppState>, Path(id): Path<String>
     let Some(cert) = cert else {
         return (StatusCode::NOT_FOUND, "not found").into_response();
     };
-    if cert.cert_pem.is_empty() {
-        return (StatusCode::NOT_FOUND, "no certificate").into_response();
+    if cert.cert_pem.is_empty() || cert.key_pem.is_empty() {
+        return (StatusCode::BAD_REQUEST, "证书尚未签发，无法下载").into_response();
     }
 
-    let domain = cert.domain.replace('*', "wildcard");
-    let filename = format!("{}.pem", sanitize_filename(&domain));
-    let mut bundle = cert.cert_pem.clone();
-    if !cert.key_pem.is_empty() {
-        bundle.push('\n');
-        bundle.push_str(&cert.key_pem);
+    // Split cert chain: first PEM block = server cert, rest = intermediate/issuer
+    let (server_cert, issuer_cert) = split_cert_chain(&cert.cert_pem);
+    let (server_cert, issuer_cert) = if server_cert.is_empty() {
+        (cert.cert_pem.clone(), String::new())
+    } else {
+        (server_cert, issuer_cert)
+    };
+
+    let safe_name = sanitize_filename(if cert.domain.is_empty() { "cert" } else { &cert.domain });
+    let safe_name = if safe_name.is_empty() { "cert".to_string() } else { safe_name };
+
+    // Build zip in memory
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        use zip::write::SimpleFileOptions;
+        let mut zw = zip::ZipWriter::new(&mut buf);
+        let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+        let fullchain = if issuer_cert.is_empty() {
+            server_cert.clone()
+        } else {
+            format!("{}{}", server_cert, issuer_cert)
+        };
+
+        // .crt and .pem = fullchain (server cert + intermediate)
+        let _ = zw.start_file(format!("{}.crt", safe_name), opts);
+        let _ = zw.write_all(fullchain.as_bytes());
+        let _ = zw.start_file(format!("{}.pem", safe_name), opts);
+        let _ = zw.write_all(fullchain.as_bytes());
+
+        if !issuer_cert.is_empty() {
+            let _ = zw.start_file(format!("{}_issuerCertificate.crt", safe_name), opts);
+            let _ = zw.write_all(issuer_cert.as_bytes());
+        }
+
+        // Private key
+        let _ = zw.start_file(format!("{}.key", safe_name), opts);
+        let _ = zw.write_all(cert.key_pem.as_bytes());
+
+        // info.json with metadata
+        let domains = if cert.domains.is_empty() && !cert.domain.is_empty() {
+            vec![cert.domain.clone()]
+        } else {
+            cert.domains.clone()
+        };
+        let info = serde_json::json!({
+            "domain":     cert.domain,
+            "domains":    domains,
+            "issued_at":  cert.issued_at,
+            "expires_at": cert.expires_at,
+            "source":     cert.source,
+            "name":       cert.name,
+        });
+        let info_bytes = serde_json::to_vec_pretty(&info).unwrap_or_default();
+        let _ = zw.start_file("info.json", opts);
+        let _ = zw.write_all(&info_bytes);
+
+        let _ = zw.finish();
     }
+
+    let zip_bytes = buf.into_inner();
+    let filename = format!("{}-certs.zip", safe_name);
 
     (
         StatusCode::OK,
         [
-            (header::CONTENT_TYPE, "application/x-pem-file"),
-            (header::CONTENT_DISPOSITION, &format!("attachment; filename=\"{}\"", filename)),
+            (header::CONTENT_TYPE, "application/zip".to_string()),
+            (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"", filename)),
         ],
-        bundle,
+        zip_bytes,
     ).into_response()
 }
 
@@ -244,5 +300,34 @@ fn parse_cert_expiry(cert_pem: &str) -> Option<String> {
 }
 
 fn sanitize_filename(s: &str) -> String {
-    s.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '_' }).collect()
+    s.chars().map(|c| match c {
+        '*' => '_',
+        '"' | '\r' | '\n' | '\\' | '/' | ':' | '?' | '<' | '>' | '|' => '_',
+        _ => c,
+    }).collect()
+}
+
+/// Split a PEM certificate chain into the server cert (first block)
+/// and the issuer/intermediate certs (remaining blocks).
+fn split_cert_chain(pem_chain: &str) -> (String, String) {
+    let mut server = String::new();
+    let mut issuer = String::new();
+    let mut current = String::new();
+    let mut first = true;
+
+    for line in pem_chain.lines() {
+        current.push_str(line);
+        current.push('\n');
+        if line.starts_with("-----END ") {
+            if first {
+                server = current.clone();
+                first = false;
+            } else {
+                issuer.push_str(&current);
+            }
+            current.clear();
+        }
+    }
+
+    (server, issuer)
 }
