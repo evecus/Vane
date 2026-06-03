@@ -66,11 +66,7 @@ impl Manager {
     pub fn start_all(self: &Arc<Self>) {
         let rules: Vec<PortForwardRule> = {
             let cfg = self.cfg.read();
-            cfg.port_forwards
-                .iter()
-                .filter(|r| r.enabled)
-                .cloned()
-                .collect()
+            cfg.port_forwards.iter().filter(|r| r.enabled).cloned().collect()
         };
         for rule in rules {
             if let Err(e) = self.start(&rule.id) {
@@ -117,9 +113,7 @@ impl Manager {
         }
 
         let mut inner = self.inner.lock().unwrap();
-        inner
-            .workers
-            .insert(id.to_string(), WorkerEntry { stop: stops, stats });
+        inner.workers.insert(id.to_string(), WorkerEntry { stop: stops, stats });
         Ok(())
     }
 
@@ -165,24 +159,13 @@ impl Manager {
 
 // ─── TCP worker ───────────────────────────────────────────────────────────────
 
-async fn run_tcp(
-    rule: PortForwardRule,
-    stats: Arc<Stats>,
-    mut stop: watch::Receiver<bool>,
-    cfg: Config,
-) {
+async fn run_tcp(rule: PortForwardRule, stats: Arc<Stats>, mut stop: watch::Receiver<bool>, cfg: Config) {
     let addr = format!("0.0.0.0:{}", rule.listen_port);
     let listener = match TcpListener::bind(&addr).await {
         Ok(l) => l,
-        Err(e) => {
-            error!("[portforward] TCP listen {} error: {}", addr, e);
-            return;
-        }
+        Err(e) => { error!("[portforward] TCP listen {} error: {}", addr, e); return; }
     };
-    info!(
-        "[portforward] TCP {} → {}:{}",
-        addr, rule.target_ip, rule.target_port
-    );
+    info!("[portforward] TCP {} → {}:{}", addr, rule.target_ip, rule.target_port);
 
     loop {
         tokio::select! {
@@ -217,18 +200,10 @@ async fn handle_tcp(src: TcpStream, target: String, stats: Arc<Stats>) {
     let dst = match tokio::time::timeout(
         std::time::Duration::from_secs(10),
         TcpStream::connect(&target),
-    )
-    .await
-    {
+    ).await {
         Ok(Ok(d)) => d,
-        Ok(Err(e)) => {
-            error!("[portforward] TCP dial {} error: {}", target, e);
-            return;
-        }
-        Err(_) => {
-            error!("[portforward] TCP dial {} timeout", target);
-            return;
-        }
+        Ok(Err(e)) => { error!("[portforward] TCP dial {} error: {}", target, e); return; }
+        Err(_) => { error!("[portforward] TCP dial {} timeout", target); return; }
     };
 
     let (mut src_r, mut src_w) = src.into_split();
@@ -248,24 +223,13 @@ async fn handle_tcp(src: TcpStream, target: String, stats: Arc<Stats>) {
 
 // ─── UDP worker ───────────────────────────────────────────────────────────────
 
-async fn run_udp(
-    rule: PortForwardRule,
-    stats: Arc<Stats>,
-    mut stop: watch::Receiver<bool>,
-    cfg: Config,
-) {
+async fn run_udp(rule: PortForwardRule, stats: Arc<Stats>, mut stop: watch::Receiver<bool>, cfg: Config) {
     let addr = format!("0.0.0.0:{}", rule.listen_port);
     let sock = match UdpSocket::bind(&addr).await {
         Ok(s) => Arc::new(s),
-        Err(e) => {
-            error!("[portforward] UDP bind {} error: {}", addr, e);
-            return;
-        }
+        Err(e) => { error!("[portforward] UDP bind {} error: {}", addr, e); return; }
     };
-    info!(
-        "[portforward] UDP {} → {}:{}",
-        addr, rule.target_ip, rule.target_port
-    );
+    info!("[portforward] UDP {} → {}:{}", addr, rule.target_ip, rule.target_port);
 
     let target = format!("{}:{}", rule.target_ip, rule.target_port);
     let mut buf = vec![0u8; 65535];
@@ -309,20 +273,17 @@ async fn handle_udp(
         Ok(s) => s,
         Err(_) => return,
     };
-    if dst.send_to(&data, &target).await.is_err() {
-        return;
-    }
+    if dst.send_to(&data, &target).await.is_err() { return; }
     let mut resp = vec![0u8; 65535];
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), dst.recv(&mut resp))
-        .await
-        .ok()
-        .and_then(|r| r.ok())
-        .map(|n| {
-            use std::sync::atomic::Ordering::Relaxed;
-            stats.bytes_out.fetch_add(n as i64, Relaxed);
-            let data = resp[..n].to_vec();
-            tokio::spawn(async move {
-                let _ = src.send_to(&data, client).await;
-            });
-        });
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        dst.recv(&mut resp),
+    ).await.ok().and_then(|r| r.ok()).map(|n| {
+        use std::sync::atomic::Ordering::Relaxed;
+        stats.bytes_out.fetch_add(n as i64, Relaxed);
+        let data = resp[..n].to_vec();
+        tokio::spawn(async move { let _ = src.send_to(&data, client).await; });
+    });
 }
+
+

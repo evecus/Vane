@@ -14,30 +14,21 @@ pub async fn list_certs(State(state): State<AppState>) -> impl IntoResponse {
     // Strip key_pem from response (never send private key in list).
     // Also inject `days_left` (computed from expires_at) and `domain`
     // (first entry of domains[] for display) so the dashboard can use them directly.
-    let certs: Vec<serde_json::Value> = state
-        .cfg
-        .read()
-        .tls_certs
-        .iter()
-        .map(|c| {
-            let mut v = serde_json::to_value(c).unwrap();
-            if let Some(m) = v.as_object_mut() {
-                m.remove("key_pem");
-                // Inject computed days_left
-                m.insert("days_left".into(), serde_json::json!(c.days_until_expiry()));
-                // Ensure a flat `domain` field for the dashboard card
-                // (prefer first entry of domains[], fall back to stored domain field)
-                let display_domain = c
-                    .domains
-                    .first()
-                    .cloned()
-                    .filter(|d| !d.is_empty())
-                    .unwrap_or_else(|| c.domain.clone());
-                m.insert("domain".into(), serde_json::json!(display_domain));
-            }
-            v
-        })
-        .collect();
+    let certs: Vec<serde_json::Value> = state.cfg.read().tls_certs.iter().map(|c| {
+        let mut v = serde_json::to_value(c).unwrap();
+        if let Some(m) = v.as_object_mut() {
+            m.remove("key_pem");
+            // Inject computed days_left
+            m.insert("days_left".into(), serde_json::json!(c.days_until_expiry()));
+            // Ensure a flat `domain` field for the dashboard card
+            // (prefer first entry of domains[], fall back to stored domain field)
+            let display_domain = c.domains.first().cloned()
+                .filter(|d| !d.is_empty())
+                .unwrap_or_else(|| c.domain.clone());
+            m.insert("domain".into(), serde_json::json!(display_domain));
+        }
+        v
+    }).collect();
     Json(certs)
 }
 
@@ -54,14 +45,9 @@ pub struct CertReq {
     email: Option<String>,
 }
 
-pub async fn create_cert(
-    State(state): State<AppState>,
-    Json(req): Json<CertReq>,
-) -> impl IntoResponse {
+pub async fn create_cert(State(state): State<AppState>, Json(req): Json<CertReq>) -> impl IntoResponse {
     let domains = req.domains.unwrap_or_default();
-    let domain = req
-        .domain
-        .unwrap_or_else(|| domains.first().cloned().unwrap_or_default());
+    let domain = req.domain.unwrap_or_else(|| domains.first().cloned().unwrap_or_default());
     let cert = TlsCert {
         id: new_id(),
         name: req.name.unwrap_or_default(),
@@ -85,11 +71,7 @@ pub async fn create_cert(
     let dd = state.cfg.read().data_dir.clone();
     if let Some(dd) = dd {
         if let Err(e) = db::save_tls_cert(&dd, &cert) {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response();
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response();
         }
     }
     state.cfg.write().tls_certs.push(cert.clone());
@@ -104,83 +86,40 @@ pub async fn update_cert(
     {
         let mut cfg = state.cfg.write();
         let Some(c) = cfg.tls_certs.iter_mut().find(|c| c.id == id) else {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "not found"})),
-            )
-                .into_response();
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "not found"}))).into_response();
         };
-        if let Some(v) = req.name {
-            c.name = v;
-        }
-        if let Some(v) = req.domains {
-            c.domains = v;
-        }
-        if let Some(v) = req.domain {
-            c.domain = v;
-        }
-        if let Some(v) = req.source {
-            c.source = v;
-        }
-        if let Some(v) = req.ca_provider {
-            c.ca_provider = v;
-        }
-        if let Some(v) = req.provider {
-            c.provider = v;
-        }
-        if let Some(v) = req.provider_conf {
-            c.provider_conf = v;
-        }
-        if let Some(v) = req.auto_renew {
-            c.auto_renew = v;
-        }
-        if let Some(v) = req.email {
-            c.email = v;
-        }
+        if let Some(v) = req.name { c.name = v; }
+        if let Some(v) = req.domains { c.domains = v; }
+        if let Some(v) = req.domain { c.domain = v; }
+        if let Some(v) = req.source { c.source = v; }
+        if let Some(v) = req.ca_provider { c.ca_provider = v; }
+        if let Some(v) = req.provider { c.provider = v; }
+        if let Some(v) = req.provider_conf { c.provider_conf = v; }
+        if let Some(v) = req.auto_renew { c.auto_renew = v; }
+        if let Some(v) = req.email { c.email = v; }
     }
 
-    let cert = state
-        .cfg
-        .read()
-        .tls_certs
-        .iter()
-        .find(|c| c.id == id)
-        .cloned();
+    let cert = state.cfg.read().tls_certs.iter().find(|c| c.id == id).cloned();
     let Some(cert) = cert else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "not found"})),
-        )
-            .into_response();
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "not found"}))).into_response();
     };
 
     let dd = state.cfg.read().data_dir.clone();
     if let Some(dd) = dd {
         if let Err(e) = db::save_tls_cert(&dd, &cert) {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response();
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response();
         }
     }
     Json(cert).into_response()
 }
 
-pub async fn delete_cert(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+pub async fn delete_cert(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     state.cfg.write().tls_certs.retain(|c| c.id != id);
 
     let dd = state.cfg.read().data_dir.clone();
     if let Some(dd) = dd {
         if let Err(e) = db::delete_tls_cert(&dd, &id) {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response();
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response();
         }
     }
 
@@ -189,14 +128,9 @@ pub async fn delete_cert(
     Json(serde_json::json!({"ok": true})).into_response()
 }
 
-pub async fn issue_cert(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+pub async fn issue_cert(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     let tls = state.tls.clone();
-    tokio::spawn(async move {
-        let _ = tls.issue_cert(&id).await;
-    });
+    tokio::spawn(async move { let _ = tls.issue_cert(&id).await; });
     Json(serde_json::json!({"ok": true, "message": "证书申请已开始，请稍后刷新查看状态"}))
 }
 
@@ -212,22 +146,12 @@ pub async fn upload_cert(State(state): State<AppState>, body: Bytes) -> impl Int
 
     let req: UploadReq = match serde_json::from_slice(&body) {
         Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response()
-        }
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
     };
 
     // Validate key pair
     if let Err(e) = validate_pem_pair(&req.cert_pem, &req.key_pem) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": format!("invalid cert/key: {}", e)})),
-        )
-            .into_response();
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("invalid cert/key: {}", e)}))).into_response();
     }
 
     let domains = crate::module::tls::extract_domains_from_cert_pem(&req.cert_pem);
@@ -257,11 +181,7 @@ pub async fn upload_cert(State(state): State<AppState>, body: Bytes) -> impl Int
     let dd = state.cfg.read().data_dir.clone();
     if let Some(dd) = dd {
         if let Err(e) = db::save_tls_cert(&dd, &cert) {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response();
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response();
         }
     }
     state.cfg.write().tls_certs.push(cert.clone());
@@ -269,17 +189,8 @@ pub async fn upload_cert(State(state): State<AppState>, body: Bytes) -> impl Int
     (StatusCode::CREATED, Json(cert)).into_response()
 }
 
-pub async fn download_cert(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
-    let cert = state
-        .cfg
-        .read()
-        .tls_certs
-        .iter()
-        .find(|c| c.id == id)
-        .cloned();
+pub async fn download_cert(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+    let cert = state.cfg.read().tls_certs.iter().find(|c| c.id == id).cloned();
     let Some(cert) = cert else {
         return (StatusCode::NOT_FOUND, "not found").into_response();
     };
@@ -295,24 +206,15 @@ pub async fn download_cert(
         (server_cert, issuer_cert)
     };
 
-    let safe_name = sanitize_filename(if cert.domain.is_empty() {
-        "cert"
-    } else {
-        &cert.domain
-    });
-    let safe_name = if safe_name.is_empty() {
-        "cert".to_string()
-    } else {
-        safe_name
-    };
+    let safe_name = sanitize_filename(if cert.domain.is_empty() { "cert" } else { &cert.domain });
+    let safe_name = if safe_name.is_empty() { "cert".to_string() } else { safe_name };
 
     // Build zip in memory
     let mut buf = std::io::Cursor::new(Vec::new());
     {
         use zip::write::SimpleFileOptions;
         let mut zw = zip::ZipWriter::new(&mut buf);
-        let opts =
-            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
         let fullchain = if issuer_cert.is_empty() {
             server_cert.clone()
@@ -363,39 +265,21 @@ pub async fn download_cert(
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, "application/zip".to_string()),
-            (
-                header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{}\"", filename),
-            ),
+            (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"", filename)),
         ],
         zip_bytes,
-    )
-        .into_response()
+    ).into_response()
 }
 
-pub async fn get_cert_pem(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
-    let cert = state
-        .cfg
-        .read()
-        .tls_certs
-        .iter()
-        .find(|c| c.id == id)
-        .cloned();
+pub async fn get_cert_pem(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+    let cert = state.cfg.read().tls_certs.iter().find(|c| c.id == id).cloned();
     let Some(cert) = cert else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "not found"})),
-        )
-            .into_response();
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "not found"}))).into_response();
     };
     Json(serde_json::json!({
         "cert_pem": cert.cert_pem,
         "key_pem": cert.key_pem,
-    }))
-    .into_response()
+    })).into_response()
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -403,11 +287,9 @@ pub async fn get_cert_pem(
 fn validate_pem_pair(cert_pem: &str, key_pem: &str) -> anyhow::Result<()> {
     use rustls_pemfile::{certs, private_key};
     use std::io::BufReader;
-    let certs: Vec<_> =
-        certs(&mut BufReader::new(cert_pem.as_bytes())).collect::<Result<Vec<_>, _>>()?;
-    if certs.is_empty() {
-        anyhow::bail!("no certificate in PEM");
-    }
+    let certs: Vec<_> = certs(&mut BufReader::new(cert_pem.as_bytes()))
+        .collect::<Result<Vec<_>, _>>()?;
+    if certs.is_empty() { anyhow::bail!("no certificate in PEM"); }
     let _key = private_key(&mut BufReader::new(key_pem.as_bytes()))?
         .ok_or_else(|| anyhow::anyhow!("no private key in PEM"))?;
     Ok(())
@@ -418,13 +300,11 @@ fn parse_cert_expiry(cert_pem: &str) -> Option<String> {
 }
 
 fn sanitize_filename(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            '*' => '_',
-            '"' | '\r' | '\n' | '\\' | '/' | ':' | '?' | '<' | '>' | '|' => '_',
-            _ => c,
-        })
-        .collect()
+    s.chars().map(|c| match c {
+        '*' => '_',
+        '"' | '\r' | '\n' | '\\' | '/' | ':' | '?' | '<' | '>' | '|' => '_',
+        _ => c,
+    }).collect()
 }
 
 /// Split a PEM certificate chain into the server cert (first block)
