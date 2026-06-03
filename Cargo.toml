@@ -1,6 +1,6 @@
 [package]
 name = "vane"
-version = "2.0.1"
+version = "2.0.0"
 edition = "2021"
 
 [[bin]]
@@ -21,6 +21,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 aes-gcm = "0.10"
 pbkdf2 = { version = "0.12", features = ["sha2"] }
 sha2 = "0.10"
+sha1 = "0.10"
 hmac = "0.12"
 bcrypt = "0.15"
 rand = "0.8"
