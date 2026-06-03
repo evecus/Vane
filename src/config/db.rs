@@ -202,6 +202,24 @@ fn migrate(conn: &Connection) -> Result<()> {
             attachments_enc TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS access_logs (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            service_id  TEXT NOT NULL DEFAULT '',
+            route_id    TEXT NOT NULL DEFAULT '',
+            route_name  TEXT NOT NULL DEFAULT '',
+            domain      TEXT NOT NULL DEFAULT '',
+            client_ip   TEXT NOT NULL DEFAULT '',
+            user_agent  TEXT NOT NULL DEFAULT '',
+            time        TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_access_logs_time ON access_logs(time);
+        CREATE TABLE IF NOT EXISTS admin_login_logs (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip      TEXT NOT NULL,
+            success INTEGER NOT NULL DEFAULT 0,
+            time    TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_admin_login_logs_time ON admin_login_logs(time);
     "#)?;
     Ok(())
 }
@@ -666,6 +684,98 @@ pub fn session_purge_expired(dd: &DataDir) -> Result<()> {
     dd.with_conn(|conn| {
         conn.execute("DELETE FROM sessions WHERE expires_at <= ?", params![now])?;
         Ok(())
+    })
+}
+
+// ─── Access log persistence ───────────────────────────────────────────────────
+
+/// Batch-insert web-service access log entries.
+/// Older rows are trimmed so the table never exceeds `keep` rows total.
+pub fn flush_access_logs(dd: &DataDir, logs: &[crate::module::webservice::AccessLog], keep: usize) -> Result<()> {
+    if logs.is_empty() { return Ok(()); }
+    dd.with_conn(|conn| {
+        let tx = conn.unchecked_transaction()?;
+        for l in logs {
+            tx.execute(
+                "INSERT INTO access_logs(service_id,route_id,route_name,domain,client_ip,user_agent,time) VALUES(?,?,?,?,?,?,?)",
+                params![l.service_id, l.route_id, l.route_name, l.domain, l.client_ip, l.user_agent, l.time],
+            )?;
+        }
+        // Keep only the newest `keep` rows
+        tx.execute(
+            "DELETE FROM access_logs WHERE id NOT IN (SELECT id FROM access_logs ORDER BY id DESC LIMIT ?)",
+            params![keep as i64],
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+}
+
+pub fn load_access_logs(dd: &DataDir, service_id: &str, limit: usize) -> Result<Vec<crate::module::webservice::AccessLog>> {
+    dd.with_conn(|conn| {
+        let sql = if service_id.is_empty() {
+            "SELECT service_id,route_id,route_name,domain,client_ip,user_agent,time FROM access_logs ORDER BY id DESC LIMIT ?1".to_string()
+        } else {
+            "SELECT service_id,route_id,route_name,domain,client_ip,user_agent,time FROM access_logs WHERE service_id=?2 ORDER BY id DESC LIMIT ?1".to_string()
+        };
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = if service_id.is_empty() {
+            stmt.query_map(params![limit as i64], row_to_access_log)?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        } else {
+            stmt.query_map(params![limit as i64, service_id], row_to_access_log)?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        Ok(rows)
+    })
+}
+
+fn row_to_access_log(row: &rusqlite::Row<'_>) -> rusqlite::Result<crate::module::webservice::AccessLog> {
+    Ok(crate::module::webservice::AccessLog {
+        service_id: row.get(0)?,
+        route_id:   row.get(1)?,
+        route_name: row.get(2)?,
+        domain:     row.get(3)?,
+        client_ip:  row.get(4)?,
+        user_agent: row.get(5)?,
+        time:       row.get(6)?,
+    })
+}
+
+// ─── Admin login log persistence ──────────────────────────────────────────────
+
+pub fn flush_admin_login_logs(dd: &DataDir, logs: &[crate::api::auth::AdminLoginRecord], keep: usize) -> Result<()> {
+    if logs.is_empty() { return Ok(()); }
+    dd.with_conn(|conn| {
+        let tx = conn.unchecked_transaction()?;
+        for l in logs {
+            tx.execute(
+                "INSERT INTO admin_login_logs(ip,success,time) VALUES(?,?,?)",
+                params![l.ip, l.success as i32, l.time],
+            )?;
+        }
+        tx.execute(
+            "DELETE FROM admin_login_logs WHERE id NOT IN (SELECT id FROM admin_login_logs ORDER BY id DESC LIMIT ?)",
+            params![keep as i64],
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+}
+
+pub fn load_admin_login_logs(dd: &DataDir, limit: usize) -> Result<Vec<crate::api::auth::AdminLoginRecord>> {
+    dd.with_conn(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT ip,success,time FROM admin_login_logs ORDER BY id DESC LIMIT ?"
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok(crate::api::auth::AdminLoginRecord {
+                ip:      row.get(0)?,
+                success: row.get::<_, i32>(1)? == 1,
+                time:    row.get(2)?,
+            })
+        })?.collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
     })
 }
 

@@ -1,4 +1,4 @@
-use crate::config::{Config, TlsCert, WebRoute, WebService};
+use crate::config::{Config, DataDir, TlsCert, WebRoute, WebService};
 use anyhow::{anyhow, Result};
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
@@ -115,15 +115,33 @@ pub struct Manager {
     cfg: Config,
     handles: Mutex<HashMap<String, ServiceHandle>>,
     pub logs: Arc<Mutex<LogStore>>,
+    dd: Option<std::sync::Arc<DataDir>>,
 }
 
 impl Manager {
     pub fn new(cfg: Config) -> Arc<Self> {
+        let dd = cfg.read().data_dir.clone();
         Arc::new(Self {
             cfg,
             handles: Mutex::new(HashMap::new()),
             logs: Arc::new(Mutex::new(LogStore::default())),
+            dd,
         })
+    }
+
+    /// Drain all in-memory logs into the DB and trim to `keep` total rows.
+    /// Called by the periodic flush task in main.rs.
+    pub fn flush_logs_to_db(&self, keep: usize) {
+        let Some(ref dd) = self.dd else { return; };
+        let batch: Vec<AccessLog> = {
+            let mut store = self.logs.lock().unwrap();
+            // Take a snapshot of what's accumulated, leave memory empty so
+            // the next window starts fresh (avoids double-writing on next flush).
+            std::mem::take(&mut store.logs)
+        };
+        if let Err(e) = crate::config::db::flush_access_logs(dd, &batch, keep) {
+            tracing::warn!("[webservice] flush_logs_to_db error: {}", e);
+        }
     }
 
     pub fn start_all(self: &Arc<Self>) {
@@ -161,7 +179,23 @@ impl Manager {
     }
 
     pub fn get_logs(&self, service_id: &str, limit: usize) -> Vec<AccessLog> {
-        self.logs.lock().unwrap().list(service_id, limit)
+        // Merge persisted logs (older) + in-memory logs (newer), newest-first.
+        let mut mem: Vec<AccessLog> = self.logs.lock().unwrap().list(service_id, limit);
+        if let Some(ref dd) = self.dd {
+            if let Ok(mut db_logs) = crate::config::db::load_access_logs(dd, service_id, limit) {
+                // db_logs are already newest-first; append mem (also newest-first)
+                // then dedup on time+route_id+client_ip and take `limit`.
+                db_logs.extend(mem.drain(..));
+                let mut seen = std::collections::HashSet::new();
+                db_logs.retain(|l| {
+                    let k = format!("{}|{}|{}", l.time, l.route_id, l.client_ip);
+                    seen.insert(k)
+                });
+                db_logs.truncate(limit);
+                return db_logs;
+            }
+        }
+        mem
     }
 
     async fn run_service(self: Arc<Self>, svc: WebService, mut stop: watch::Receiver<bool>, svc_id: String) {

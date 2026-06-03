@@ -85,6 +85,29 @@ async fn main() -> anyhow::Result<()> {
     // Spawn rate-limit map GC task (prevents unbounded memory growth under scan attacks)
     tokio::spawn(api::auth::purge_rate_limit_loop());
 
+    // Spawn log persistence task: flush every 30 minutes, keep latest 2000 rows per log type.
+    {
+        let ws_clone   = Arc::clone(&ws);
+        let cfg_clone  = cfg.clone();
+        tokio::spawn(async move {
+            const FLUSH_INTERVAL_SECS: u64 = 30 * 60;
+            const ACCESS_LOG_KEEP:  usize  = 2000;
+            const ADMIN_LOG_KEEP:   usize  = 200;
+
+            let mut ticker = tokio::time::interval(
+                std::time::Duration::from_secs(FLUSH_INTERVAL_SECS)
+            );
+            ticker.tick().await; // skip the immediate first tick
+            loop {
+                ticker.tick().await;
+                ws_clone.flush_logs_to_db(ACCESS_LOG_KEEP);
+                if let Some(dd) = cfg_clone.read().data_dir.clone() {
+                    api::auth::flush_admin_logs_to_db(&dd, ADMIN_LOG_KEEP);
+                }
+            }
+        });
+    }
+
     let api_router = api::build_router(state.clone());
 
     // Static file handler with safe-entry and SPA fallback

@@ -6,7 +6,24 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use ipnetwork::IpNetwork;
 use serde::Deserialize;
+use std::net::IpAddr;
+use std::str::FromStr;
+
+const MAX_UPLOAD_BYTES: usize = 2 * 1024 * 1024; // 2 MB
+
+/// Validate a list of IP/CIDR strings. Returns the first invalid entry if any.
+fn validate_ips(ips: &[String]) -> Option<String> {
+    for entry in ips {
+        let s = entry.trim();
+        if s.is_empty() { continue; }
+        if IpNetwork::from_str(s).is_ok() { continue; }
+        if IpAddr::from_str(s).is_ok() { continue; }
+        return Some(s.to_string());
+    }
+    None
+}
 
 pub async fn list_rules(State(state): State<AppState>) -> impl IntoResponse {
     Json(state.cfg.read().ip_filter.clone())
@@ -48,12 +65,17 @@ pub async fn create_rule(State(state): State<AppState>, Json(req): Json<FilterRu
         return (StatusCode::CONFLICT, Json(serde_json::json!({"error": format!("scope conflict: {}", desc)}))).into_response();
     }
 
+    let manual_ips = req.manual_ips.unwrap_or_default();
+    if let Some(bad) = validate_ips(&manual_ips) {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("invalid IP/CIDR: {}", bad)}))).into_response();
+    }
+
     let rule = IpFilterRule {
         id: new_id(),
         enabled: req.enabled.unwrap_or(false),
         mode: req.mode.unwrap_or_else(|| "whitelist".into()),
         scopes,
-        manual_ips: req.manual_ips.unwrap_or_default(),
+        manual_ips,
         attachments: vec![],
         created_at: now_rfc3339(),
     };
@@ -80,6 +102,12 @@ pub async fn update_rule(
     };
     if let Some(desc) = conflict {
         return (StatusCode::CONFLICT, Json(serde_json::json!({"error": format!("scope conflict: {}", desc)}))).into_response();
+    }
+
+    if let Some(ref ips) = req.manual_ips {
+        if let Some(bad) = validate_ips(ips) {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("invalid IP/CIDR: {}", bad)}))).into_response();
+        }
     }
 
     {
@@ -155,6 +183,13 @@ pub async fn upload_file(
                     .into_response()
             }
         };
+        if data.len() > MAX_UPLOAD_BYTES {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(serde_json::json!({"error": format!("file too large (max {}MB)", MAX_UPLOAD_BYTES / 1024 / 1024)})),
+            )
+                .into_response();
+        }
         let text = String::from_utf8_lossy(&data);
         let ips = parse_ip_list(&text);
         let count = ips.len();

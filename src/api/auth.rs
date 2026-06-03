@@ -23,6 +23,9 @@ pub struct AdminLoginRecord {
     pub time: String,
 }
 
+/// In-memory buffer: keeps the latest 200 entries between flushes.
+const ADMIN_LOG_MEM_CAP: usize = 200;
+
 static ADMIN_LOGS: Lazy<Mutex<Vec<AdminLoginRecord>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 fn log_admin(ip: &str, success: bool) {
@@ -32,15 +35,42 @@ fn log_admin(ip: &str, success: bool) {
         success,
         time: now_rfc3339(),
     });
-    if logs.len() > 500 {
+    // Trim in-memory buffer; persisted rows are kept separately in DB.
+    if logs.len() > ADMIN_LOG_MEM_CAP {
         let len = logs.len();
-        logs.drain(0..len - 500);
+        logs.drain(0..len - ADMIN_LOG_MEM_CAP);
     }
 }
 
-pub async fn get_admin_logs(State(_): State<AppState>) -> impl IntoResponse {
-    let logs = ADMIN_LOGS.lock().unwrap().clone();
-    Json(logs)
+pub async fn get_admin_logs(State(state): State<AppState>) -> impl IntoResponse {
+    // Merge DB (older, newest-first) + in-memory buffer (newer).
+    let mem: Vec<AdminLoginRecord> = ADMIN_LOGS.lock().unwrap().clone();
+    let mut all: Vec<AdminLoginRecord> = if let Some(dd) = state.cfg.read().data_dir.clone() {
+        crate::config::db::load_admin_login_logs(&dd, 200).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    // mem is oldest-first; reverse so newest-first, then extend DB results
+    let mut mem_rev: Vec<_> = mem.into_iter().rev().collect();
+    mem_rev.truncate(200);
+    // Merge: mem_rev (newest) already covers what's not yet flushed
+    all.extend(mem_rev);
+    // Sort newest-first by time string (RFC3339 sorts lexicographically)
+    all.sort_unstable_by(|a, b| b.time.cmp(&a.time));
+    all.dedup_by(|a, b| a.time == b.time && a.ip == b.ip);
+    all.truncate(200);
+    Json(all)
+}
+
+/// Drain in-memory admin logs to DB, keep latest `keep` rows in DB.
+pub fn flush_admin_logs_to_db(dd: &crate::config::DataDir, keep: usize) {
+    let batch: Vec<AdminLoginRecord> = {
+        let mut logs = ADMIN_LOGS.lock().unwrap();
+        std::mem::take(&mut *logs)
+    };
+    if let Err(e) = crate::config::db::flush_admin_login_logs(dd, &batch, keep) {
+        tracing::warn!("[auth] flush_admin_logs_to_db error: {}", e);
+    }
 }
 
 // ─── Rate limiter ─────────────────────────────────────────────────────────────
@@ -112,6 +142,14 @@ pub async fn login(
 ) -> impl IntoResponse {
     let socket_ip = connect_info.map(|c| c.0.ip().to_string());
     let ip = extract_client_ip(&headers, socket_ip.as_deref());
+
+    // Apply admin IP filter to the login endpoint too.
+    // auth_middleware only covers protected routes; without this check the
+    // login endpoint is reachable from any IP even when a whitelist is configured.
+    if !state.cfg.check_ip_allowed("admin", "", &ip) {
+        log_admin(&ip, false);
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Forbidden"}))).into_response();
+    }
 
     if !check_rate_limit(&ip) {
         log_admin(&ip, false);
@@ -237,21 +275,76 @@ fn generate_token() -> String {
 
 /// Extract the real client IP.
 ///
-/// Priority:
-///   1. `X-Real-IP` header — set by a trusted reverse proxy (nginx `proxy_set_header X-Real-IP $remote_addr`).
-///   2. First address in `X-Forwarded-For` — set by many proxies/CDNs.
-///   3. `socket_ip` — the actual TCP connection peer address (reliable for direct connections).
+/// Security model:
+///   X-Real-IP and X-Forwarded-For are **only trusted when the request arrives
+///   from a known trusted reverse proxy** (i.e. socket_ip is in TRUSTED_PROXY_CIDRS).
+///   If the connection comes directly from an untrusted source those headers are
+///   attacker-controlled and MUST be ignored — otherwise an attacker can send
+///   `X-Forwarded-For: 127.0.0.1` to bypass the admin IP whitelist.
 ///
-/// The `socket_ip` fallback ensures that when Vane is accessed directly (no proxy),
-/// the real source address is used instead of the previous hard-coded "127.0.0.1".
+/// Priority (when socket_ip is a trusted proxy):
+///   1. `X-Real-IP` header
+///   2. First address in `X-Forwarded-For`
+///   3. socket_ip (fallback)
+///
+/// When socket_ip is NOT a trusted proxy, socket_ip is always used directly.
 fn extract_client_ip(headers: &HeaderMap, socket_ip: Option<&str>) -> String {
-    headers.get("x-real-ip")
-        .or_else(|| headers.get("x-forwarded-for"))
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.split(',').next().unwrap_or("").trim().to_string())
-        .filter(|s| !s.is_empty())
-        .or_else(|| socket_ip.map(|s| s.to_string()))
-        .unwrap_or_else(|| "127.0.0.1".to_string())
+    let socket = socket_ip.unwrap_or("127.0.0.1");
+
+    if is_trusted_proxy(socket) {
+        // Only honour proxy headers when the TCP peer is itself a trusted proxy.
+        if let Some(ip) = headers.get("x-real-ip")
+            .or_else(|| headers.get("x-forwarded-for"))
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.split(',').next().unwrap_or("").trim().to_string())
+            .filter(|s| !s.is_empty())
+        {
+            return ip;
+        }
+    }
+
+    socket.to_string()
+}
+
+/// CIDRs whose HTTP headers (X-Real-IP, X-Forwarded-For) are trusted.
+/// Loopback and link-local are trusted by default (local reverse proxies).
+/// Set the `VANE_TRUSTED_PROXIES` environment variable to a comma-separated
+/// list of additional CIDR ranges, e.g. `10.0.0.0/8,172.16.0.0/12`.
+fn is_trusted_proxy(ip: &str) -> bool {
+    use std::net::IpAddr;
+    use std::str::FromStr;
+
+    let addr = match IpAddr::from_str(ip) {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+
+    // Always trust loopback (127.x, ::1) and link-local (169.254.x, fe80::)
+    if addr.is_loopback() {
+        return true;
+    }
+    if let IpAddr::V4(v4) = addr {
+        // 169.254.0.0/16 link-local
+        if v4.octets()[0] == 169 && v4.octets()[1] == 254 {
+            return true;
+        }
+    }
+
+    // Additional ranges from environment variable
+    if let Ok(extra) = std::env::var("VANE_TRUSTED_PROXIES") {
+        use ipnetwork::IpNetwork;
+        for cidr in extra.split(',') {
+            let cidr = cidr.trim();
+            if cidr.is_empty() { continue; }
+            if let Ok(net) = IpNetwork::from_str(cidr) {
+                if net.contains(addr) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
 }
 
 // ─── Purge expired sessions (called from main) ─────────────────────────────────
