@@ -3,7 +3,7 @@ use anyhow::{anyhow, Result};
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::{Request, Response, StatusCode};
-use hyper_util::client::legacy::{Client, connect::HttpConnector};
+use hyper_util::client::legacy::{connect::HttpConnector, Client};
 use hyper_util::rt::TokioExecutor;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::ServerConfig;
@@ -64,8 +64,13 @@ impl LogStore {
         // Remove old logs
         self.logs.retain(|l| l.time.starts_with(&today));
 
-        let key = format!("{}\x00{}\x00{}\x00{}", today, log.route_id, log.client_ip, log.user_agent);
-        if self.dedup.contains_key(&key) { return; }
+        let key = format!(
+            "{}\x00{}\x00{}\x00{}",
+            today, log.route_id, log.client_ip, log.user_agent
+        );
+        if self.dedup.contains_key(&key) {
+            return;
+        }
         self.dedup.insert(key, ());
         self.logs.push(log);
         if self.logs.len() > 2000 {
@@ -75,7 +80,9 @@ impl LogStore {
     }
 
     fn list(&self, service_id: &str, limit: usize) -> Vec<AccessLog> {
-        self.logs.iter().rev()
+        self.logs
+            .iter()
+            .rev()
             .filter(|l| service_id.is_empty() || l.service_id == service_id)
             .take(limit)
             .cloned()
@@ -98,7 +105,9 @@ fn days_to_ymd(days: u64) -> (u64, u64, u64) {
     let mut month = 1u64;
     let mut rem = d;
     for &md in &month_days {
-        if rem < md { break; }
+        if rem < md {
+            break;
+        }
         rem -= md;
         month += 1;
     }
@@ -132,7 +141,9 @@ impl Manager {
     /// Drain all in-memory logs into the DB and trim to `keep` total rows.
     /// Called by the periodic flush task in main.rs.
     pub fn flush_logs_to_db(&self, keep: usize) {
-        let Some(ref dd) = self.dd else { return; };
+        let Some(ref dd) = self.dd else {
+            return;
+        };
         let batch: Vec<AccessLog> = {
             let mut store = self.logs.lock().unwrap();
             // Take a snapshot of what's accumulated, leave memory empty so
@@ -147,7 +158,11 @@ impl Manager {
     pub fn start_all(self: &Arc<Self>) {
         let svcs: Vec<WebService> = {
             let cfg = self.cfg.read();
-            cfg.web_services.iter().filter(|s| s.enabled).cloned().collect()
+            cfg.web_services
+                .iter()
+                .filter(|s| s.enabled)
+                .cloned()
+                .collect()
         };
         for svc in svcs {
             if let Err(e) = self.start(&svc.id) {
@@ -167,8 +182,13 @@ impl Manager {
         let (tx, rx) = watch::channel(false);
         let mgr = Arc::clone(self);
         let svc_id = id.to_string();
-        tokio::spawn(async move { mgr.run_service(svc, rx, svc_id).await; });
-        self.handles.lock().unwrap().insert(id.to_string(), ServiceHandle { stop: tx });
+        tokio::spawn(async move {
+            mgr.run_service(svc, rx, svc_id).await;
+        });
+        self.handles
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), ServiceHandle { stop: tx });
         Ok(())
     }
 
@@ -198,19 +218,33 @@ impl Manager {
         mem
     }
 
-    async fn run_service(self: Arc<Self>, svc: WebService, mut stop: watch::Receiver<bool>, svc_id: String) {
+    async fn run_service(
+        self: Arc<Self>,
+        svc: WebService,
+        mut stop: watch::Receiver<bool>,
+        svc_id: String,
+    ) {
         let addr = format!("0.0.0.0:{}", svc.listen_port);
         let listener = match TcpListener::bind(&addr).await {
             Ok(l) => l,
-            Err(e) => { error!("[webservice] bind {} error: {}", addr, e); return; }
+            Err(e) => {
+                error!("[webservice] bind {} error: {}", addr, e);
+                return;
+            }
         };
-        info!("[webservice] listening on {} (https={})", addr, svc.enable_https);
+        info!(
+            "[webservice] listening on {} (https={})",
+            addr, svc.enable_https
+        );
 
         // When HTTPS is enabled on port 443, also bind port 80 to redirect HTTP → HTTPS
         if svc.enable_https && svc.listen_port == 443 {
             let ln80 = match TcpListener::bind("0.0.0.0:80").await {
                 Ok(l) => {
-                    info!("[webservice] :80 redirect listener started for svc {}", svc_id);
+                    info!(
+                        "[webservice] :80 redirect listener started for svc {}",
+                        svc_id
+                    );
                     l
                 }
                 Err(e) => {
@@ -292,7 +326,9 @@ impl Manager {
 
         if svc.enable_https {
             let mut peek_buf = [0u8; 1];
-            if stream.peek(&mut peek_buf).await.is_err() { return; }
+            if stream.peek(&mut peek_buf).await.is_err() {
+                return;
+            }
 
             if peek_buf[0] == 0x16 {
                 let tls_config = self.build_tls_config(svc_id);
@@ -301,36 +337,59 @@ impl Manager {
                         let acceptor = TlsAcceptor::from(config);
                         match acceptor.accept(stream).await {
                             Ok(tls_stream) => {
-                                self.serve_http(hyper_util::rt::TokioIo::new(tls_stream), &client_ip, svc_id, true).await;
+                                self.serve_http(
+                                    hyper_util::rt::TokioIo::new(tls_stream),
+                                    &client_ip,
+                                    svc_id,
+                                    true,
+                                )
+                                .await;
                             }
-                            Err(e) => { warn!("[webservice] TLS accept error from {}: {}", client_ip, e); }
+                            Err(e) => {
+                                warn!("[webservice] TLS accept error from {}: {}", client_ip, e);
+                            }
                         }
                     }
-                    None => { warn!("[webservice] no TLS config for {}", svc_id); }
+                    None => {
+                        warn!("[webservice] no TLS config for {}", svc_id);
+                    }
                 }
             } else {
                 self.serve_redirect(stream, svc.listen_port).await;
             }
         } else {
-            self.serve_http(hyper_util::rt::TokioIo::new(stream), &client_ip, svc_id, false).await;
+            self.serve_http(
+                hyper_util::rt::TokioIo::new(stream),
+                &client_ip,
+                svc_id,
+                false,
+            )
+            .await;
         }
     }
 
     fn build_tls_config(&self, svc_id: &str) -> Option<Arc<ServerConfig>> {
         let cfg = self.cfg.read();
         let svc = cfg.web_services.iter().find(|s| s.id == svc_id)?;
-        let mut cert_map: HashMap<String, (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> = HashMap::new();
+        let mut cert_map: HashMap<String, (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> =
+            HashMap::new();
 
         for route in &svc.routes {
-            if !route.enabled || route.matched_cert_id.is_empty() { continue; }
+            if !route.enabled || route.matched_cert_id.is_empty() {
+                continue;
+            }
             if let Some(tls_cert) = cfg.tls_certs.iter().find(|c| c.id == route.matched_cert_id) {
-                if tls_cert.cert_pem.is_empty() || tls_cert.key_pem.is_empty() { continue; }
+                if tls_cert.cert_pem.is_empty() || tls_cert.key_pem.is_empty() {
+                    continue;
+                }
                 if let Ok((certs, key)) = load_pem_pair(&tls_cert.cert_pem, &tls_cert.key_pem) {
                     cert_map.insert(route.domain.to_lowercase(), (certs, key));
                 }
             }
         }
-        if cert_map.is_empty() { return None; }
+        if cert_map.is_empty() {
+            return None;
+        }
 
         let resolver = Arc::new(SniResolver { certs: cert_map });
         let config = ServerConfig::builder()
@@ -343,15 +402,15 @@ impl Manager {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let mut stream = stream;
         let mut buf = [0u8; 4096];
-        let n = match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            stream.read(&mut buf),
-        ).await {
+        let n = match tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut buf))
+            .await
+        {
             Ok(Ok(n)) => n,
             _ => return,
         };
         let req_str = std::str::from_utf8(&buf[..n]).unwrap_or("");
-        let host = req_str.lines()
+        let host = req_str
+            .lines()
             .find(|l| l.to_lowercase().starts_with("host:"))
             .map(|l| l[5..].trim().to_string())
             .unwrap_or_default();
@@ -368,8 +427,13 @@ impl Manager {
         let _ = stream.write_all(resp.as_bytes()).await;
     }
 
-    async fn serve_http<S>(self: &Arc<Self>, io: hyper_util::rt::TokioIo<S>, client_ip: &str, svc_id: &str, is_https: bool)
-    where
+    async fn serve_http<S>(
+        self: &Arc<Self>,
+        io: hyper_util::rt::TokioIo<S>,
+        client_ip: &str,
+        svc_id: &str,
+        is_https: bool,
+    ) where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
         let mgr = Arc::clone(self);
@@ -395,15 +459,19 @@ impl Manager {
         svc_id: String,
         is_https: bool,
     ) -> Result<Response<BoxBody>, std::convert::Infallible> {
-        let host = req.headers()
+        let host = req
+            .headers()
             .get("host")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
-            .split(':').next()
+            .split(':')
+            .next()
             .unwrap_or("")
             .to_lowercase();
 
-        let ua = req.headers().get("user-agent")
+        let ua = req
+            .headers()
+            .get("user-agent")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
@@ -413,9 +481,13 @@ impl Manager {
             let cfg = self.cfg.read();
             let mut found = None;
             'outer: for svc in &cfg.web_services {
-                if svc.id != svc_id { continue; }
+                if svc.id != svc_id {
+                    continue;
+                }
                 for route in &svc.routes {
-                    if !route.enabled { continue; }
+                    if !route.enabled {
+                        continue;
+                    }
                     let rd = route.domain.trim_start_matches("www.").to_lowercase();
                     let hd = host.trim_start_matches("www.");
                     if rd == hd {
@@ -431,12 +503,18 @@ impl Manager {
             Some(r) => r,
             None => {
                 self.log_access(&svc_id, "", "", &host, &client_ip, &parse_browser(&ua));
-                return Ok(error_resp(StatusCode::BAD_GATEWAY, format!("No matching route for host: {}", host)));
+                return Ok(error_resp(
+                    StatusCode::BAD_GATEWAY,
+                    format!("No matching route for host: {}", host),
+                ));
             }
         };
 
         // IP filter
-        if !self.cfg.check_ip_allowed("webservice", &route.id, &client_ip) {
+        if !self
+            .cfg
+            .check_ip_allowed("webservice", &route.id, &client_ip)
+        {
             return Ok(error_resp(StatusCode::FORBIDDEN, "Forbidden".into()));
         }
 
@@ -445,22 +523,39 @@ impl Manager {
             let cookie_name = format!("vane_auth_{}", &route.id[..8.min(route.id.len())]);
             let session_token = auth_session_token(&route.id, &route.auth_pass_hash);
 
-            let has_valid_cookie = req.headers()
+            let has_valid_cookie = req
+                .headers()
                 .get("cookie")
                 .and_then(|v| v.to_str().ok())
-                .map(|cookies| cookies.split(';').any(|c| {
-                    c.trim() == format!("{}={}", cookie_name, session_token)
-                }))
+                .map(|cookies| {
+                    cookies
+                        .split(';')
+                        .any(|c| c.trim() == format!("{}={}", cookie_name, session_token))
+                })
                 .unwrap_or(false);
 
             if !has_valid_cookie {
                 // Handle POST login
                 if req.method() == hyper::Method::POST && req.uri().path() == "/__vane_login__" {
-                    return self.handle_login(req, &route, &cookie_name, &session_token, is_https).await;
+                    return self
+                        .handle_login(req, &route, &cookie_name, &session_token, is_https)
+                        .await;
                 }
-                let next = req.uri().path_and_query().map(|pq| pq.as_str()).unwrap_or("/").to_string();
+                let next = req
+                    .uri()
+                    .path_and_query()
+                    .map(|pq| pq.as_str())
+                    .unwrap_or("/")
+                    .to_string();
                 let body = build_login_page(&next, "", &route.domain);
-                self.log_access(&svc_id, &route.id, &route.name, &host, &client_ip, &parse_browser(&ua));
+                self.log_access(
+                    &svc_id,
+                    &route.id,
+                    &route.name,
+                    &host,
+                    &client_ip,
+                    &parse_browser(&ua),
+                );
                 return Ok(Response::builder()
                     .status(StatusCode::UNAUTHORIZED)
                     .header("content-type", "text/html; charset=utf-8")
@@ -469,7 +564,14 @@ impl Manager {
             }
         }
 
-        self.log_access(&svc_id, &route.id, &route.name, &host, &client_ip, &parse_browser(&ua));
+        self.log_access(
+            &svc_id,
+            &route.id,
+            &route.name,
+            &host,
+            &client_ip,
+            &parse_browser(&ua),
+        );
         match proxy_request(req, &route.backend_url, &client_ip, is_https).await {
             Ok(resp) => Ok(resp),
             Err(e) => {
@@ -493,15 +595,23 @@ impl Manager {
         };
 
         let form: HashMap<String, String> = url::form_urlencoded::parse(&body_bytes)
-            .into_owned().collect();
+            .into_owned()
+            .collect();
         let username = form.get("username").map(|s| s.as_str()).unwrap_or("");
         let password = form.get("password").map(|s| s.as_str()).unwrap_or("");
-        let next = form.get("next").map(|s| s.as_str()).unwrap_or("/").to_string();
+        let next = form
+            .get("next")
+            .map(|s| s.as_str())
+            .unwrap_or("/")
+            .to_string();
 
-        if username == route.auth_user && bcrypt::verify(password, &route.auth_pass_hash).unwrap_or(false) {
+        if username == route.auth_user
+            && bcrypt::verify(password, &route.auth_pass_hash).unwrap_or(false)
+        {
             let cookie = format!(
                 "{}={}; Path=/; Max-Age=86400; HttpOnly{}; SameSite=Lax",
-                cookie_name, session_token,
+                cookie_name,
+                session_token,
                 if is_https { "; Secure" } else { "" }
             );
             return Ok(Response::builder()
@@ -520,7 +630,15 @@ impl Manager {
             .unwrap())
     }
 
-    fn log_access(&self, svc_id: &str, route_id: &str, route_name: &str, domain: &str, client_ip: &str, ua: &str) {
+    fn log_access(
+        &self,
+        svc_id: &str,
+        route_id: &str,
+        route_name: &str,
+        domain: &str,
+        client_ip: &str,
+        ua: &str,
+    ) {
         self.logs.lock().unwrap().add(AccessLog {
             service_id: svc_id.to_string(),
             route_id: route_id.to_string(),
@@ -538,11 +656,25 @@ impl Manager {
         let mut best_status = "no_cert".to_string();
 
         for cert in &certs {
-            if cert.cert_pem.is_empty() || cert.key_pem.is_empty() { continue; }
-            let cert_domains: Vec<&str> = cert.domains.iter().map(|s| s.as_str())
-                .chain(if cert.domain.is_empty() { None } else { Some(cert.domain.as_str()) })
+            if cert.cert_pem.is_empty() || cert.key_pem.is_empty() {
+                continue;
+            }
+            let cert_domains: Vec<&str> = cert
+                .domains
+                .iter()
+                .map(|s| s.as_str())
+                .chain(if cert.domain.is_empty() {
+                    None
+                } else {
+                    Some(cert.domain.as_str())
+                })
                 .collect();
-            if !cert_domains.iter().any(|cd| cert_domain_matches(cd, &route.domain)) { continue; }
+            if !cert_domains
+                .iter()
+                .any(|cd| cert_domain_matches(cd, &route.domain))
+            {
+                continue;
+            }
             if cert.status == "active" {
                 best_id = cert.id.clone();
                 best_status = "ok".to_string();
@@ -557,7 +689,9 @@ impl Manager {
 
         let mut cfg = self.cfg.write();
         for svc in cfg.web_services.iter_mut() {
-            if svc.id != svc_id { continue; }
+            if svc.id != svc_id {
+                continue;
+            }
             for r in svc.routes.iter_mut() {
                 if r.id == route.id {
                     r.matched_cert_id = route.matched_cert_id.clone();
@@ -571,7 +705,8 @@ impl Manager {
     pub fn rematch_all_routes(&self) {
         let pairs: Vec<(String, WebRoute)> = {
             let cfg = self.cfg.read();
-            cfg.web_services.iter()
+            cfg.web_services
+                .iter()
                 .flat_map(|svc| svc.routes.iter().map(move |r| (svc.id.clone(), r.clone())))
                 .collect()
         };
@@ -589,32 +724,51 @@ struct SniResolver {
 
 impl std::fmt::Debug for SniResolver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "SniResolver({:?})", self.certs.keys().collect::<Vec<_>>())
+        write!(
+            f,
+            "SniResolver({:?})",
+            self.certs.keys().collect::<Vec<_>>()
+        )
     }
 }
 
 impl rustls::server::ResolvesServerCert for SniResolver {
-    fn resolve(&self, hello: rustls::server::ClientHello<'_>) -> Option<Arc<rustls::sign::CertifiedKey>> {
+    fn resolve(
+        &self,
+        hello: rustls::server::ClientHello<'_>,
+    ) -> Option<Arc<rustls::sign::CertifiedKey>> {
         let name = hello.server_name()?.to_lowercase();
-        if let Some(pair) = self.certs.get(&name) { return make_certified_key(pair); }
+        if let Some(pair) = self.certs.get(&name) {
+            return make_certified_key(pair);
+        }
         if let Some(rest) = name.splitn(2, '.').nth(1) {
             let wildcard = format!("*.{}", rest);
-            if let Some(pair) = self.certs.get(&wildcard) { return make_certified_key(pair); }
+            if let Some(pair) = self.certs.get(&wildcard) {
+                return make_certified_key(pair);
+            }
         }
         self.certs.values().next().and_then(make_certified_key)
     }
 }
 
-fn make_certified_key(pair: &(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)) -> Option<Arc<rustls::sign::CertifiedKey>> {
+fn make_certified_key(
+    pair: &(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>),
+) -> Option<Arc<rustls::sign::CertifiedKey>> {
     let signing_key = rustls::crypto::ring::sign::any_supported_type(&pair.1).ok()?;
-    Some(Arc::new(rustls::sign::CertifiedKey::new(pair.0.clone(), signing_key)))
+    Some(Arc::new(rustls::sign::CertifiedKey::new(
+        pair.0.clone(),
+        signing_key,
+    )))
 }
 
-fn load_pem_pair(cert_pem: &str, key_pem: &str) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
+fn load_pem_pair(
+    cert_pem: &str,
+    key_pem: &str,
+) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
     use rustls_pemfile::{certs, private_key};
     use std::io::BufReader;
-    let certs: Vec<CertificateDer<'static>> = certs(&mut BufReader::new(cert_pem.as_bytes()))
-        .collect::<std::result::Result<_, _>>()?;
+    let certs: Vec<CertificateDer<'static>> =
+        certs(&mut BufReader::new(cert_pem.as_bytes())).collect::<std::result::Result<_, _>>()?;
     let key = private_key(&mut BufReader::new(key_pem.as_bytes()))?
         .ok_or_else(|| anyhow!("no private key"))?;
     Ok((certs, key))
@@ -622,11 +776,20 @@ fn load_pem_pair(cert_pem: &str, key_pem: &str) -> Result<(Vec<CertificateDer<'s
 
 // ─── Reverse proxy ────────────────────────────────────────────────────────────
 
-async fn proxy_request(req: Request<Incoming>, backend_url: &str, client_ip: &str, is_https: bool)
-    -> Result<Response<BoxBody>>
-{
-    let backend = backend_url.parse::<hyper::Uri>().map_err(|e| anyhow!("{}", e))?;
-    let path_and_query = req.uri().path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
+async fn proxy_request(
+    req: Request<Incoming>,
+    backend_url: &str,
+    client_ip: &str,
+    is_https: bool,
+) -> Result<Response<BoxBody>> {
+    let backend = backend_url
+        .parse::<hyper::Uri>()
+        .map_err(|e| anyhow!("{}", e))?;
+    let path_and_query = req
+        .uri()
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or("/");
     let backend_path = backend.path().trim_end_matches('/');
     let new_uri = format!(
         "{}://{}{}{}",
@@ -634,28 +797,43 @@ async fn proxy_request(req: Request<Incoming>, backend_url: &str, client_ip: &st
         backend.authority().ok_or_else(|| anyhow!("no authority"))?,
         backend_path,
         path_and_query,
-    ).parse::<hyper::Uri>()?;
+    )
+    .parse::<hyper::Uri>()?;
 
     let (mut parts, body) = req.into_parts();
     parts.uri = new_uri;
 
     // Set proxy headers
-    let prior = parts.headers.get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+    let prior = parts
+        .headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
     let forwarded_for = match prior {
         Some(p) => format!("{}, {}", p, client_ip),
         None => client_ip.to_string(),
     };
-    parts.headers.insert("x-forwarded-for", forwarded_for.parse().unwrap());
-    parts.headers.insert("x-real-ip", client_ip.parse().unwrap());
-    parts.headers.insert("x-forwarded-proto", if is_https { "https" } else { "http" }.parse().unwrap());
+    parts
+        .headers
+        .insert("x-forwarded-for", forwarded_for.parse().unwrap());
+    parts
+        .headers
+        .insert("x-real-ip", client_ip.parse().unwrap());
+    parts.headers.insert(
+        "x-forwarded-proto",
+        if is_https { "https" } else { "http" }.parse().unwrap(),
+    );
     parts.headers.remove("te");
     parts.headers.remove("trailers");
 
     let new_req = Request::from_parts(parts, body);
 
-    let client: Client<HttpConnector, Incoming> = Client::builder(TokioExecutor::new()).build_http();
-    let resp = client.request(new_req).await.map_err(|e| anyhow!("proxy: {}", e))?;
+    let client: Client<HttpConnector, Incoming> =
+        Client::builder(TokioExecutor::new()).build_http();
+    let resp = client
+        .request(new_req)
+        .await
+        .map_err(|e| anyhow!("proxy: {}", e))?;
     Ok(resp.map(|b| box_body(b)))
 }
 
@@ -672,7 +850,9 @@ fn error_resp(status: StatusCode, body: String) -> Response<BoxBody> {
 fn cert_domain_matches(cert_domain: &str, req_domain: &str) -> bool {
     let cd = cert_domain.to_lowercase();
     let rd = req_domain.to_lowercase();
-    if cd == rd { return true; }
+    if cd == rd {
+        return true;
+    }
     if let Some(suffix) = cd.strip_prefix("*.") {
         if rd.ends_with(&format!(".{}", suffix)) {
             let host = &rd[..rd.len() - suffix.len() - 1];
@@ -693,21 +873,41 @@ fn auth_session_token(route_id: &str, pass_hash: &str) -> String {
 
 fn parse_browser(ua: &str) -> String {
     let ua = ua.to_lowercase();
-    if ua.contains("edg/") { return "Edge".into(); }
-    if ua.contains("chrome") && ua.contains("mobile") { return "Chrome/Android".into(); }
-    if ua.contains("chrome") { return "Chrome".into(); }
-    if ua.contains("firefox") { return "Firefox".into(); }
-    if ua.contains("safari") && ua.contains("mobile") { return "Safari/iOS".into(); }
-    if ua.contains("safari") { return "Safari".into(); }
-    if ua.contains("curl") { return "curl".into(); }
-    if ua.is_empty() { return "—".into(); }
+    if ua.contains("edg/") {
+        return "Edge".into();
+    }
+    if ua.contains("chrome") && ua.contains("mobile") {
+        return "Chrome/Android".into();
+    }
+    if ua.contains("chrome") {
+        return "Chrome".into();
+    }
+    if ua.contains("firefox") {
+        return "Firefox".into();
+    }
+    if ua.contains("safari") && ua.contains("mobile") {
+        return "Safari/iOS".into();
+    }
+    if ua.contains("safari") {
+        return "Safari".into();
+    }
+    if ua.contains("curl") {
+        return "curl".into();
+    }
+    if ua.is_empty() {
+        return "—".into();
+    }
     "Other".into()
 }
 
 fn build_login_page(next: &str, err_msg: &str, domain: &str) -> String {
-    let err_html = if err_msg.is_empty() { String::new() }
-        else { format!("<div class=\"error\">{}</div>", err_msg) };
-    format!(r#"<!DOCTYPE html><html lang="zh-CN"><head>
+    let err_html = if err_msg.is_empty() {
+        String::new()
+    } else {
+        format!("<div class=\"error\">{}</div>", err_msg)
+    };
+    format!(
+        r#"<!DOCTYPE html><html lang="zh-CN"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>登录 · {domain}</title>
 <style>
@@ -732,5 +932,6 @@ button{{width:100%;padding:12px;border:none;border-radius:10px;background:#6366f
     <div class="field"><label>密码</label><input type="password" name="password" required></div>
     <button type="submit">登录 →</button>
   </form>
-</div></body></html>"#)
+</div></body></html>"#
+    )
 }

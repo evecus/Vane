@@ -1,6 +1,4 @@
-use crate::config::{
-    db, Config, DdnsRule, IpRecord,
-};
+use crate::config::{db, Config, DdnsRule, IpRecord};
 use anyhow::{anyhow, Result};
 use regex::Regex;
 use std::collections::HashMap;
@@ -76,7 +74,14 @@ impl Manager {
             domains: HashMap::new(),
         };
 
-        let ip = match get_public_ip(&rule.ip_version, &rule.ip_detect_mode, &rule.ip_interface, rule.ip_index).await {
+        let ip = match get_public_ip(
+            &rule.ip_version,
+            &rule.ip_detect_mode,
+            &rule.ip_interface,
+            rule.ip_index,
+        )
+        .await
+        {
             Ok(ip) => ip,
             Err(e) => {
                 result.ip_err = Some(e.to_string());
@@ -96,7 +101,9 @@ impl Manager {
                 other => Err(anyhow!("未知的 DNS 服务商: {}", other)),
             };
             match update_result {
-                Ok(_) => { result.domains.insert(fqdn.clone(), String::new()); }
+                Ok(_) => {
+                    result.domains.insert(fqdn.clone(), String::new());
+                }
                 Err(e) => {
                     let msg = e.to_string();
                     if first_err.is_empty() {
@@ -117,7 +124,10 @@ impl Manager {
                 r.last_sync_at = now;
                 r.last_sync_ok = Some(all_ok);
                 r.last_sync_err = if all_ok { String::new() } else { first_err };
-                r.ip_history.push(IpRecord { ip: ip.clone(), timestamp: crate::config::types::now_rfc3339() });
+                r.ip_history.push(IpRecord {
+                    ip: ip.clone(),
+                    timestamp: crate::config::types::now_rfc3339(),
+                });
                 if r.ip_history.len() > 100 {
                     let len = r.ip_history.len();
                     r.ip_history.drain(0..len - 100);
@@ -252,7 +262,12 @@ fn effective_domains(rule: &DdnsRule) -> Vec<String> {
 
 // ─── Public IP detection ──────────────────────────────────────────────────────
 
-pub async fn get_public_ip(version: &str, mode: &str, iface: &str, ip_index: i32) -> Result<String> {
+pub async fn get_public_ip(
+    version: &str,
+    mode: &str,
+    iface: &str,
+    ip_index: i32,
+) -> Result<String> {
     if mode == "iface" && !iface.is_empty() {
         return get_ip_from_interface(iface, version, ip_index);
     }
@@ -261,18 +276,24 @@ pub async fn get_public_ip(version: &str, mode: &str, iface: &str, ip_index: i32
 
 async fn get_public_ip_via_api(version: &str) -> Result<String> {
     let (urls, is_v6) = if version == "ipv6" {
-        (vec![
-            "https://ipv6.icanhazip.com",
-            "https://api6.ipify.org",
-            "https://v6.ident.me",
-        ], true)
+        (
+            vec![
+                "https://ipv6.icanhazip.com",
+                "https://api6.ipify.org",
+                "https://v6.ident.me",
+            ],
+            true,
+        )
     } else {
-        (vec![
-            "https://ipv4.icanhazip.com",
-            "https://api4.ipify.org",
-            "https://v4.ident.me",
-            "https://4.ipw.cn",
-        ], false)
+        (
+            vec![
+                "https://ipv4.icanhazip.com",
+                "https://api4.ipify.org",
+                "https://v4.ident.me",
+                "https://4.ipw.cn",
+            ],
+            false,
+        )
     };
 
     let ipv4_re = Regex::new(r"((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])").unwrap();
@@ -294,7 +315,9 @@ async fn get_public_ip_via_api(version: &str) -> Result<String> {
                     }
                 }
             }
-            Err(e) => { warn!("[ddns] API {} failed: {}", url, e); }
+            Err(e) => {
+                warn!("[ddns] API {} failed: {}", url, e);
+            }
         }
     }
     Err(anyhow!("all {} IP detection endpoints failed", version))
@@ -308,21 +331,34 @@ fn get_ip_from_interface(iface_name: &str, version: &str, ip_index: i32) -> Resu
     let mut private_found = Vec::new();
 
     for (name, addrs) in &ifaces {
-        if name != iface_name { continue; }
+        if name != iface_name {
+            continue;
+        }
         for addr in addrs {
             let is_v6 = matches!(addr, IpAddr::V6(_));
-            if is_v6 != want_v6 { continue; }
+            if is_v6 != want_v6 {
+                continue;
+            }
             match addr {
                 IpAddr::V4(v4) => {
-                    if v4.is_loopback() || v4.is_link_local() { continue; }
-                    if v4.is_private() { private_found.push(addr.to_string()); continue; }
+                    if v4.is_loopback() || v4.is_link_local() {
+                        continue;
+                    }
+                    if v4.is_private() {
+                        private_found.push(addr.to_string());
+                        continue;
+                    }
                     candidates.push(addr.to_string());
                 }
                 IpAddr::V6(v6) => {
-                    if v6.is_loopback() || v6.is_multicast() { continue; }
+                    if v6.is_loopback() || v6.is_multicast() {
+                        continue;
+                    }
                     // skip ULA (fc00::/7)
                     let first = v6.octets()[0];
-                    if first & 0xfe == 0xfc { continue; }
+                    if first & 0xfe == 0xfc {
+                        continue;
+                    }
                     candidates.push(addr.to_string());
                 }
             }
@@ -331,9 +367,17 @@ fn get_ip_from_interface(iface_name: &str, version: &str, ip_index: i32) -> Resu
 
     if candidates.is_empty() {
         if !private_found.is_empty() {
-            return Err(anyhow!("网卡 {} 上未检测到公网IP（当前地址 {} 为内网地址）", iface_name, private_found.join(", ")));
+            return Err(anyhow!(
+                "网卡 {} 上未检测到公网IP（当前地址 {} 为内网地址）",
+                iface_name,
+                private_found.join(", ")
+            ));
         }
-        return Err(anyhow!("网卡 {} 上未找到可用的 {} 地址", iface_name, version));
+        return Err(anyhow!(
+            "网卡 {} 上未找到可用的 {} 地址",
+            iface_name,
+            version
+        ));
     }
 
     let idx = (ip_index as usize).min(candidates.len() - 1);
@@ -371,13 +415,19 @@ pub async fn list_iface_ips(iface_name: &str, version: &str) -> Vec<String> {
     let mut result = Vec::new();
 
     for iface in pnet_datalink::interfaces() {
-        if iface.name != iface_name { continue; }
+        if iface.name != iface_name {
+            continue;
+        }
         for ip_net in &iface.ips {
             let ip = ip_net.ip();
             let is_v6 = matches!(ip, IpAddr::V6(_));
-            if is_v6 != want_v6 { continue; }
+            if is_v6 != want_v6 {
+                continue;
+            }
             match ip {
-                IpAddr::V4(v4) if v4.is_loopback() || v4.is_link_local() || v4.is_private() => continue,
+                IpAddr::V4(v4) if v4.is_loopback() || v4.is_link_local() || v4.is_private() => {
+                    continue
+                }
                 IpAddr::V6(v6) if v6.is_loopback() || (v6.octets()[0] & 0xfe == 0xfc) => continue,
                 _ => result.push(ip.to_string()),
             }
@@ -389,20 +439,35 @@ pub async fn list_iface_ips(iface_name: &str, version: &str) -> Vec<String> {
 
 // ─── Cloudflare DDNS ──────────────────────────────────────────────────────────
 
-async fn cf_resolve_zone_id(client: &reqwest::Client, token: &str, zone_id_hint: &str, fqdn: &str) -> Result<String> {
+async fn cf_resolve_zone_id(
+    client: &reqwest::Client,
+    token: &str,
+    zone_id_hint: &str,
+    fqdn: &str,
+) -> Result<String> {
     if !zone_id_hint.is_empty() {
         return Ok(zone_id_hint.to_string());
     }
     let resp = client
         .get("https://api.cloudflare.com/client/v4/zones?per_page=100")
         .bearer_auth(token)
-        .send().await?
-        .json::<serde_json::Value>().await?;
+        .send()
+        .await?
+        .json::<serde_json::Value>()
+        .await?;
 
-    let zones = resp["result"].as_array().ok_or_else(|| anyhow!("cloudflare: no result"))?;
-    let zone_map: HashMap<String, String> = zones.iter().filter_map(|z| {
-        Some((z["name"].as_str()?.to_string(), z["id"].as_str()?.to_string()))
-    }).collect();
+    let zones = resp["result"]
+        .as_array()
+        .ok_or_else(|| anyhow!("cloudflare: no result"))?;
+    let zone_map: HashMap<String, String> = zones
+        .iter()
+        .filter_map(|z| {
+            Some((
+                z["name"].as_str()?.to_string(),
+                z["id"].as_str()?.to_string(),
+            ))
+        })
+        .collect();
 
     let parts: Vec<&str> = fqdn.split('.').collect();
     for n in 2..=parts.len().min(20) {
@@ -421,15 +486,28 @@ async fn update_cloudflare(rule: &DdnsRule, fqdn: &str, ip: &str) -> Result<()> 
         .build()?;
 
     let zone_id = cf_resolve_zone_id(&client, token, &rule.provider_conf.zone_id, fqdn).await?;
-    let rec_type = if rule.ip_version == "ipv6" { "AAAA" } else { "A" };
+    let rec_type = if rule.ip_version == "ipv6" {
+        "AAAA"
+    } else {
+        "A"
+    };
 
     // Find existing record
     let list_url = format!(
         "https://api.cloudflare.com/client/v4/zones/{}/dns_records?type={}&name={}",
         zone_id, rec_type, fqdn
     );
-    let list_resp = client.get(&list_url).bearer_auth(token).send().await?.json::<serde_json::Value>().await?;
-    let result = list_resp["result"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+    let list_resp = client
+        .get(&list_url)
+        .bearer_auth(token)
+        .send()
+        .await?
+        .json::<serde_json::Value>()
+        .await?;
+    let result = list_resp["result"]
+        .as_array()
+        .map(|a| a.as_slice())
+        .unwrap_or(&[]);
 
     let body = serde_json::json!({
         "type": rec_type,
@@ -437,19 +515,32 @@ async fn update_cloudflare(rule: &DdnsRule, fqdn: &str, ip: &str) -> Result<()> 
         "content": ip,
         "ttl": 60,
         "proxied": false
-    }).to_string();
+    })
+    .to_string();
 
     if let Some(rec) = result.first() {
         let record_id = rec["id"].as_str().ok_or_else(|| anyhow!("no record id"))?;
-        let put_url = format!("https://api.cloudflare.com/client/v4/zones/{}/dns_records/{}", zone_id, record_id);
+        let put_url = format!(
+            "https://api.cloudflare.com/client/v4/zones/{}/dns_records/{}",
+            zone_id, record_id
+        );
         cf_do(&client, "PUT", &put_url, token, &body).await
     } else {
-        let post_url = format!("https://api.cloudflare.com/client/v4/zones/{}/dns_records", zone_id);
+        let post_url = format!(
+            "https://api.cloudflare.com/client/v4/zones/{}/dns_records",
+            zone_id
+        );
         cf_do(&client, "POST", &post_url, token, &body).await
     }
 }
 
-async fn cf_do(client: &reqwest::Client, method: &str, url: &str, token: &str, body: &str) -> Result<()> {
+async fn cf_do(
+    client: &reqwest::Client,
+    method: &str,
+    url: &str,
+    token: &str,
+    body: &str,
+) -> Result<()> {
     let req = match method {
         "PUT" => client.put(url),
         _ => client.post(url),
@@ -458,8 +549,10 @@ async fn cf_do(client: &reqwest::Client, method: &str, url: &str, token: &str, b
         .bearer_auth(token)
         .header("Content-Type", "application/json")
         .body(body.to_string())
-        .send().await?
-        .json::<serde_json::Value>().await?;
+        .send()
+        .await?
+        .json::<serde_json::Value>()
+        .await?;
 
     if resp["success"].as_bool() == Some(true) {
         return Ok(());
