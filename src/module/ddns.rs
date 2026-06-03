@@ -1,6 +1,4 @@
-use crate::config::{
-    db, Config, DdnsRule, IpRecord,
-};
+use crate::config::{db, Config, DdnsRule, IpRecord};
 use anyhow::{anyhow, Result};
 use regex::Regex;
 use std::collections::HashMap;
@@ -76,7 +74,14 @@ impl Manager {
             domains: HashMap::new(),
         };
 
-        let ip = match get_public_ip(&rule.ip_version, &rule.ip_detect_mode, &rule.ip_interface, rule.ip_index).await {
+        let ip = match get_public_ip(
+            &rule.ip_version,
+            &rule.ip_detect_mode,
+            &rule.ip_interface,
+            rule.ip_index,
+        )
+        .await
+        {
             Ok(ip) => ip,
             Err(e) => {
                 result.ip_err = Some(e.to_string());
@@ -99,7 +104,9 @@ impl Manager {
                 other => Err(anyhow!("未知的 DNS 服务商: {}", other)),
             };
             match update_result {
-                Ok(_) => { result.domains.insert(fqdn.clone(), String::new()); }
+                Ok(_) => {
+                    result.domains.insert(fqdn.clone(), String::new());
+                }
                 Err(e) => {
                     let msg = e.to_string();
                     if first_err.is_empty() {
@@ -120,7 +127,10 @@ impl Manager {
                 r.last_sync_at = now;
                 r.last_sync_ok = Some(all_ok);
                 r.last_sync_err = if all_ok { String::new() } else { first_err };
-                r.ip_history.push(IpRecord { ip: ip.clone(), timestamp: crate::config::types::now_rfc3339() });
+                r.ip_history.push(IpRecord {
+                    ip: ip.clone(),
+                    timestamp: crate::config::types::now_rfc3339(),
+                });
                 if r.ip_history.len() > 100 {
                     let len = r.ip_history.len();
                     r.ip_history.drain(0..len - 100);
@@ -258,7 +268,12 @@ fn effective_domains(rule: &DdnsRule) -> Vec<String> {
 
 // ─── Public IP detection ──────────────────────────────────────────────────────
 
-pub async fn get_public_ip(version: &str, mode: &str, iface: &str, ip_index: i32) -> Result<String> {
+pub async fn get_public_ip(
+    version: &str,
+    mode: &str,
+    iface: &str,
+    ip_index: i32,
+) -> Result<String> {
     if mode == "iface" && !iface.is_empty() {
         return get_ip_from_interface(iface, version, ip_index);
     }
@@ -267,18 +282,24 @@ pub async fn get_public_ip(version: &str, mode: &str, iface: &str, ip_index: i32
 
 async fn get_public_ip_via_api(version: &str) -> Result<String> {
     let (urls, is_v6) = if version == "ipv6" {
-        (vec![
-            "https://ipv6.icanhazip.com",
-            "https://api6.ipify.org",
-            "https://v6.ident.me",
-        ], true)
+        (
+            vec![
+                "https://ipv6.icanhazip.com",
+                "https://api6.ipify.org",
+                "https://v6.ident.me",
+            ],
+            true,
+        )
     } else {
-        (vec![
-            "https://ipv4.icanhazip.com",
-            "https://api4.ipify.org",
-            "https://v4.ident.me",
-            "https://4.ipw.cn",
-        ], false)
+        (
+            vec![
+                "https://ipv4.icanhazip.com",
+                "https://api4.ipify.org",
+                "https://v4.ident.me",
+                "https://4.ipw.cn",
+            ],
+            false,
+        )
     };
 
     let ipv4_re = Regex::new(r"((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])").unwrap();
@@ -300,7 +321,9 @@ async fn get_public_ip_via_api(version: &str) -> Result<String> {
                     }
                 }
             }
-            Err(e) => { warn!("[ddns] API {} failed: {}", url, e); }
+            Err(e) => {
+                warn!("[ddns] API {} failed: {}", url, e);
+            }
         }
     }
     Err(anyhow!("all {} IP detection endpoints failed", version))
@@ -314,21 +337,34 @@ fn get_ip_from_interface(iface_name: &str, version: &str, ip_index: i32) -> Resu
     let mut private_found = Vec::new();
 
     for (name, addrs) in &ifaces {
-        if name != iface_name { continue; }
+        if name != iface_name {
+            continue;
+        }
         for addr in addrs {
             let is_v6 = matches!(addr, IpAddr::V6(_));
-            if is_v6 != want_v6 { continue; }
+            if is_v6 != want_v6 {
+                continue;
+            }
             match addr {
                 IpAddr::V4(v4) => {
-                    if v4.is_loopback() || v4.is_link_local() { continue; }
-                    if v4.is_private() { private_found.push(addr.to_string()); continue; }
+                    if v4.is_loopback() || v4.is_link_local() {
+                        continue;
+                    }
+                    if v4.is_private() {
+                        private_found.push(addr.to_string());
+                        continue;
+                    }
                     candidates.push(addr.to_string());
                 }
                 IpAddr::V6(v6) => {
-                    if v6.is_loopback() || v6.is_multicast() { continue; }
+                    if v6.is_loopback() || v6.is_multicast() {
+                        continue;
+                    }
                     // skip ULA (fc00::/7)
                     let first = v6.octets()[0];
-                    if first & 0xfe == 0xfc { continue; }
+                    if first & 0xfe == 0xfc {
+                        continue;
+                    }
                     candidates.push(addr.to_string());
                 }
             }
@@ -337,9 +373,17 @@ fn get_ip_from_interface(iface_name: &str, version: &str, ip_index: i32) -> Resu
 
     if candidates.is_empty() {
         if !private_found.is_empty() {
-            return Err(anyhow!("网卡 {} 上未检测到公网IP（当前地址 {} 为内网地址）", iface_name, private_found.join(", ")));
+            return Err(anyhow!(
+                "网卡 {} 上未检测到公网IP（当前地址 {} 为内网地址）",
+                iface_name,
+                private_found.join(", ")
+            ));
         }
-        return Err(anyhow!("网卡 {} 上未找到可用的 {} 地址", iface_name, version));
+        return Err(anyhow!(
+            "网卡 {} 上未找到可用的 {} 地址",
+            iface_name,
+            version
+        ));
     }
 
     let idx = (ip_index as usize).min(candidates.len() - 1);
@@ -377,13 +421,19 @@ pub async fn list_iface_ips(iface_name: &str, version: &str) -> Vec<String> {
     let mut result = Vec::new();
 
     for iface in pnet_datalink::interfaces() {
-        if iface.name != iface_name { continue; }
+        if iface.name != iface_name {
+            continue;
+        }
         for ip_net in &iface.ips {
             let ip = ip_net.ip();
             let is_v6 = matches!(ip, IpAddr::V6(_));
-            if is_v6 != want_v6 { continue; }
+            if is_v6 != want_v6 {
+                continue;
+            }
             match ip {
-                IpAddr::V4(v4) if v4.is_loopback() || v4.is_link_local() || v4.is_private() => continue,
+                IpAddr::V4(v4) if v4.is_loopback() || v4.is_link_local() || v4.is_private() => {
+                    continue
+                }
                 IpAddr::V6(v6) if v6.is_loopback() || (v6.octets()[0] & 0xfe == 0xfc) => continue,
                 _ => result.push(ip.to_string()),
             }
@@ -395,20 +445,35 @@ pub async fn list_iface_ips(iface_name: &str, version: &str) -> Vec<String> {
 
 // ─── Cloudflare DDNS ──────────────────────────────────────────────────────────
 
-async fn cf_resolve_zone_id(client: &reqwest::Client, token: &str, zone_id_hint: &str, fqdn: &str) -> Result<String> {
+async fn cf_resolve_zone_id(
+    client: &reqwest::Client,
+    token: &str,
+    zone_id_hint: &str,
+    fqdn: &str,
+) -> Result<String> {
     if !zone_id_hint.is_empty() {
         return Ok(zone_id_hint.to_string());
     }
     let resp = client
         .get("https://api.cloudflare.com/client/v4/zones?per_page=100")
         .bearer_auth(token)
-        .send().await?
-        .json::<serde_json::Value>().await?;
+        .send()
+        .await?
+        .json::<serde_json::Value>()
+        .await?;
 
-    let zones = resp["result"].as_array().ok_or_else(|| anyhow!("cloudflare: no result"))?;
-    let zone_map: HashMap<String, String> = zones.iter().filter_map(|z| {
-        Some((z["name"].as_str()?.to_string(), z["id"].as_str()?.to_string()))
-    }).collect();
+    let zones = resp["result"]
+        .as_array()
+        .ok_or_else(|| anyhow!("cloudflare: no result"))?;
+    let zone_map: HashMap<String, String> = zones
+        .iter()
+        .filter_map(|z| {
+            Some((
+                z["name"].as_str()?.to_string(),
+                z["id"].as_str()?.to_string(),
+            ))
+        })
+        .collect();
 
     let parts: Vec<&str> = fqdn.split('.').collect();
     for n in 2..=parts.len().min(20) {
@@ -427,15 +492,28 @@ async fn update_cloudflare(rule: &DdnsRule, fqdn: &str, ip: &str) -> Result<()> 
         .build()?;
 
     let zone_id = cf_resolve_zone_id(&client, token, &rule.provider_conf.zone_id, fqdn).await?;
-    let rec_type = if rule.ip_version == "ipv6" { "AAAA" } else { "A" };
+    let rec_type = if rule.ip_version == "ipv6" {
+        "AAAA"
+    } else {
+        "A"
+    };
 
     // Find existing record
     let list_url = format!(
         "https://api.cloudflare.com/client/v4/zones/{}/dns_records?type={}&name={}",
         zone_id, rec_type, fqdn
     );
-    let list_resp = client.get(&list_url).bearer_auth(token).send().await?.json::<serde_json::Value>().await?;
-    let result = list_resp["result"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+    let list_resp = client
+        .get(&list_url)
+        .bearer_auth(token)
+        .send()
+        .await?
+        .json::<serde_json::Value>()
+        .await?;
+    let result = list_resp["result"]
+        .as_array()
+        .map(|a| a.as_slice())
+        .unwrap_or(&[]);
 
     let body = serde_json::json!({
         "type": rec_type,
@@ -443,19 +521,32 @@ async fn update_cloudflare(rule: &DdnsRule, fqdn: &str, ip: &str) -> Result<()> 
         "content": ip,
         "ttl": 60,
         "proxied": false
-    }).to_string();
+    })
+    .to_string();
 
     if let Some(rec) = result.first() {
         let record_id = rec["id"].as_str().ok_or_else(|| anyhow!("no record id"))?;
-        let put_url = format!("https://api.cloudflare.com/client/v4/zones/{}/dns_records/{}", zone_id, record_id);
+        let put_url = format!(
+            "https://api.cloudflare.com/client/v4/zones/{}/dns_records/{}",
+            zone_id, record_id
+        );
         cf_do(&client, "PUT", &put_url, token, &body).await
     } else {
-        let post_url = format!("https://api.cloudflare.com/client/v4/zones/{}/dns_records", zone_id);
+        let post_url = format!(
+            "https://api.cloudflare.com/client/v4/zones/{}/dns_records",
+            zone_id
+        );
         cf_do(&client, "POST", &post_url, token, &body).await
     }
 }
 
-async fn cf_do(client: &reqwest::Client, method: &str, url: &str, token: &str, body: &str) -> Result<()> {
+async fn cf_do(
+    client: &reqwest::Client,
+    method: &str,
+    url: &str,
+    token: &str,
+    body: &str,
+) -> Result<()> {
     let req = match method {
         "PUT" => client.put(url),
         _ => client.post(url),
@@ -464,8 +555,10 @@ async fn cf_do(client: &reqwest::Client, method: &str, url: &str, token: &str, b
         .bearer_auth(token)
         .header("Content-Type", "application/json")
         .body(body.to_string())
-        .send().await?
-        .json::<serde_json::Value>().await?;
+        .send()
+        .await?
+        .json::<serde_json::Value>()
+        .await?;
 
     if resp["success"].as_bool() == Some(true) {
         return Ok(());
@@ -516,8 +609,9 @@ fn alidns_encode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
-            | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{:02X}", b)),
         }
     }
@@ -531,8 +625,8 @@ async fn alidns_call(
     action: &str,
     mut params: Vec<(&str, String)>,
 ) -> Result<serde_json::Value> {
-    use rand::RngCore;
     use chrono::Utc;
+    use rand::RngCore;
 
     let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let mut nonce_bytes = [0u8; 8];
@@ -552,7 +646,8 @@ async fn alidns_call(
     params.sort_by(|a, b| a.0.cmp(b.0));
 
     // 构造待签字符串
-    let query_str: String = params.iter()
+    let query_str: String = params
+        .iter()
         .map(|(k, v)| format!("{}={}", alidns_encode(k), alidns_encode(v)))
         .collect::<Vec<_>>()
         .join("&");
@@ -565,7 +660,12 @@ async fn alidns_call(
         alidns_encode(&signature),
     );
 
-    let resp = client.get(&url).send().await?.json::<serde_json::Value>().await?;
+    let resp = client
+        .get(&url)
+        .send()
+        .await?
+        .json::<serde_json::Value>()
+        .await?;
     if let Some(code) = resp.get("Code").and_then(|v| v.as_str()) {
         if code != "OK" {
             let msg = resp["Message"].as_str().unwrap_or(code);
@@ -582,7 +682,11 @@ async fn update_alidns(rule: &DdnsRule, fqdn: &str, ip: &str) -> Result<()> {
         return Err(anyhow!("alidns: AccessKeyId / AccessKeySecret 不能为空"));
     }
 
-    let rec_type = if rule.ip_version == "ipv6" { "AAAA" } else { "A" };
+    let rec_type = if rule.ip_version == "ipv6" {
+        "AAAA"
+    } else {
+        "A"
+    };
     let (rr, domain) = split_rr(fqdn);
 
     let client = reqwest::Client::builder()
@@ -590,12 +694,19 @@ async fn update_alidns(rule: &DdnsRule, fqdn: &str, ip: &str) -> Result<()> {
         .build()?;
 
     // 查询现有记录
-    let list_resp = alidns_call(&client, key_id, key_secret, "DescribeDomainRecords", vec![
-        ("DomainName", domain.clone()),
-        ("RRKeyWord", rr.clone()),
-        ("Type", rec_type.to_string()),
-        ("PageSize", "10".to_string()),
-    ]).await?;
+    let list_resp = alidns_call(
+        &client,
+        key_id,
+        key_secret,
+        "DescribeDomainRecords",
+        vec![
+            ("DomainName", domain.clone()),
+            ("RRKeyWord", rr.clone()),
+            ("Type", rec_type.to_string()),
+            ("PageSize", "10".to_string()),
+        ],
+    )
+    .await?;
 
     let records = list_resp["DomainRecords"]["Record"]
         .as_array()
@@ -603,9 +714,9 @@ async fn update_alidns(rule: &DdnsRule, fqdn: &str, ip: &str) -> Result<()> {
         .unwrap_or_default();
 
     // 找到精确匹配的记录
-    let existing = records.iter().find(|r| {
-        r["RR"].as_str() == Some(&rr) && r["Type"].as_str() == Some(rec_type)
-    });
+    let existing = records
+        .iter()
+        .find(|r| r["RR"].as_str() == Some(&rr) && r["Type"].as_str() == Some(rec_type));
 
     if let Some(rec) = existing {
         let record_id = rec["RecordId"].as_str().unwrap_or("").to_string();
@@ -615,22 +726,36 @@ async fn update_alidns(rule: &DdnsRule, fqdn: &str, ip: &str) -> Result<()> {
             return Ok(());
         }
         // 更新
-        alidns_call(&client, key_id, key_secret, "UpdateDomainRecord", vec![
-            ("RecordId", record_id),
-            ("RR", rr),
-            ("Type", rec_type.to_string()),
-            ("Value", ip.to_string()),
-            ("TTL", "600".to_string()),
-        ]).await?;
+        alidns_call(
+            &client,
+            key_id,
+            key_secret,
+            "UpdateDomainRecord",
+            vec![
+                ("RecordId", record_id),
+                ("RR", rr),
+                ("Type", rec_type.to_string()),
+                ("Value", ip.to_string()),
+                ("TTL", "600".to_string()),
+            ],
+        )
+        .await?;
     } else {
         // 新增
-        alidns_call(&client, key_id, key_secret, "AddDomainRecord", vec![
-            ("DomainName", domain),
-            ("RR", rr),
-            ("Type", rec_type.to_string()),
-            ("Value", ip.to_string()),
-            ("TTL", "600".to_string()),
-        ]).await?;
+        alidns_call(
+            &client,
+            key_id,
+            key_secret,
+            "AddDomainRecord",
+            vec![
+                ("DomainName", domain),
+                ("RR", rr),
+                ("Type", rec_type.to_string()),
+                ("Value", ip.to_string()),
+                ("TTL", "600".to_string()),
+            ],
+        )
+        .await?;
     }
 
     info!("[ddns] alidns updated {} → {}", fqdn, ip);
@@ -655,14 +780,19 @@ async fn dnspod_call(
     form.push(("lang", "cn".to_string()));
 
     let url = format!("https://dnsapi.cn/{}", endpoint);
-    let resp = client.post(&url)
+    let resp = client
+        .post(&url)
         .form(&form)
-        .send().await?
-        .json::<serde_json::Value>().await?;
+        .send()
+        .await?
+        .json::<serde_json::Value>()
+        .await?;
 
     let code = resp["status"]["code"].as_str().unwrap_or("0");
     if code != "1" {
-        let msg = resp["status"]["message"].as_str().unwrap_or("unknown error");
+        let msg = resp["status"]["message"]
+            .as_str()
+            .unwrap_or("unknown error");
         return Err(anyhow!("dnspod error {}: {}", code, msg));
     }
     Ok(resp)
@@ -675,7 +805,11 @@ async fn update_dnspod(rule: &DdnsRule, fqdn: &str, ip: &str) -> Result<()> {
         return Err(anyhow!("dnspod: SecretId / SecretKey 不能为空"));
     }
 
-    let rec_type = if rule.ip_version == "ipv6" { "AAAA" } else { "A" };
+    let rec_type = if rule.ip_version == "ipv6" {
+        "AAAA"
+    } else {
+        "A"
+    };
     let (sub_domain, domain) = split_rr(fqdn);
 
     let client = reqwest::Client::builder()
@@ -684,16 +818,23 @@ async fn update_dnspod(rule: &DdnsRule, fqdn: &str, ip: &str) -> Result<()> {
         .build()?;
 
     // 查询记录列表
-    let list_resp = dnspod_call(&client, secret_id, secret_key, "Record.List", vec![
-        ("domain", domain.clone()),
-        ("sub_domain", sub_domain.clone()),
-        ("record_type", rec_type.to_string()),
-    ]).await?;
+    let list_resp = dnspod_call(
+        &client,
+        secret_id,
+        secret_key,
+        "Record.List",
+        vec![
+            ("domain", domain.clone()),
+            ("sub_domain", sub_domain.clone()),
+            ("record_type", rec_type.to_string()),
+        ],
+    )
+    .await?;
 
     let records = list_resp["records"].as_array().cloned().unwrap_or_default();
-    let existing = records.iter().find(|r| {
-        r["name"].as_str() == Some(&sub_domain) && r["type"].as_str() == Some(rec_type)
-    });
+    let existing = records
+        .iter()
+        .find(|r| r["name"].as_str() == Some(&sub_domain) && r["type"].as_str() == Some(rec_type));
 
     if let Some(rec) = existing {
         let record_id = rec["id"].as_str().unwrap_or("").to_string();
@@ -703,25 +844,39 @@ async fn update_dnspod(rule: &DdnsRule, fqdn: &str, ip: &str) -> Result<()> {
             return Ok(());
         }
         // 修改
-        dnspod_call(&client, secret_id, secret_key, "Record.Modify", vec![
-            ("domain", domain),
-            ("record_id", record_id),
-            ("sub_domain", sub_domain),
-            ("record_type", rec_type.to_string()),
-            ("value", ip.to_string()),
-            ("record_line", "默认".to_string()),
-            ("ttl", "600".to_string()),
-        ]).await?;
+        dnspod_call(
+            &client,
+            secret_id,
+            secret_key,
+            "Record.Modify",
+            vec![
+                ("domain", domain),
+                ("record_id", record_id),
+                ("sub_domain", sub_domain),
+                ("record_type", rec_type.to_string()),
+                ("value", ip.to_string()),
+                ("record_line", "默认".to_string()),
+                ("ttl", "600".to_string()),
+            ],
+        )
+        .await?;
     } else {
         // 新增
-        dnspod_call(&client, secret_id, secret_key, "Record.Create", vec![
-            ("domain", domain),
-            ("sub_domain", sub_domain),
-            ("record_type", rec_type.to_string()),
-            ("value", ip.to_string()),
-            ("record_line", "默认".to_string()),
-            ("ttl", "600".to_string()),
-        ]).await?;
+        dnspod_call(
+            &client,
+            secret_id,
+            secret_key,
+            "Record.Create",
+            vec![
+                ("domain", domain),
+                ("sub_domain", sub_domain),
+                ("record_type", rec_type.to_string()),
+                ("value", ip.to_string()),
+                ("record_line", "默认".to_string()),
+                ("ttl", "600".to_string()),
+            ],
+        )
+        .await?;
     }
 
     info!("[ddns] dnspod updated {} → {}", fqdn, ip);
@@ -735,8 +890,8 @@ async fn update_dnspod(rule: &DdnsRule, fqdn: &str, ip: &str) -> Result<()> {
 
 fn tc3_sign(
     secret_key: &str,
-    date: &str,       // "2024-01-02"
-    service: &str,    // "dnspod"
+    date: &str,    // "2024-01-02"
+    service: &str, // "dnspod"
     string_to_sign: &str,
 ) -> String {
     use hmac::{Hmac, Mac};
@@ -744,9 +899,7 @@ fn tc3_sign(
     type HmacSha256 = Hmac<Sha256>;
 
     let sign_date = {
-        let mut m = HmacSha256::new_from_slice(
-            format!("TC3{}", secret_key).as_bytes()
-        ).unwrap();
+        let mut m = HmacSha256::new_from_slice(format!("TC3{}", secret_key).as_bytes()).unwrap();
         m.update(date.as_bytes());
         m.finalize().into_bytes()
     };
@@ -772,8 +925,8 @@ async fn tc3_call(
     action: &str,
     body: &str,
 ) -> Result<serde_json::Value> {
-    use sha2::{Digest, Sha256};
     use chrono::Utc;
+    use sha2::{Digest, Sha256};
 
     let service = "dnspod";
     let host = "dnspod.tencentcloudapi.com";
@@ -812,7 +965,8 @@ async fn tc3_call(
         secret_id, credential_scope, signed_headers, signature
     );
 
-    let resp = client.post(&endpoint)
+    let resp = client
+        .post(&endpoint)
         .header("Authorization", authorization)
         .header("Content-Type", "application/json")
         .header("Host", host)
@@ -820,8 +974,10 @@ async fn tc3_call(
         .header("X-TC-Timestamp", &timestamp)
         .header("X-TC-Version", "2021-03-23")
         .body(body.to_string())
-        .send().await?
-        .json::<serde_json::Value>().await?;
+        .send()
+        .await?
+        .json::<serde_json::Value>()
+        .await?;
 
     if let Some(err) = resp.get("Response").and_then(|r| r.get("Error")) {
         let code = err["Code"].as_str().unwrap_or("Unknown");
@@ -838,7 +994,11 @@ async fn update_tencentcloud(rule: &DdnsRule, fqdn: &str, ip: &str) -> Result<()
         return Err(anyhow!("tencentcloud: SecretId / SecretKey 不能为空"));
     }
 
-    let rec_type = if rule.ip_version == "ipv6" { "AAAA" } else { "A" };
+    let rec_type = if rule.ip_version == "ipv6" {
+        "AAAA"
+    } else {
+        "A"
+    };
     let (sub_domain, domain) = split_rr(fqdn);
 
     let client = reqwest::Client::builder()
@@ -851,22 +1011,28 @@ async fn update_tencentcloud(rule: &DdnsRule, fqdn: &str, ip: &str) -> Result<()
         "Subdomain": sub_domain,
         "RecordType": rec_type,
         "Limit": 10,
-    }).to_string();
+    })
+    .to_string();
 
-    let list_resp = tc3_call(&client, secret_id, secret_key, "DescribeRecordList", &list_body).await;
+    let list_resp = tc3_call(
+        &client,
+        secret_id,
+        secret_key,
+        "DescribeRecordList",
+        &list_body,
+    )
+    .await;
 
     // DescribeRecordList 如果没有记录会返回 error InvalidParameter.RecordListEmpty，这是正常的
     let existing_id: Option<u64> = match &list_resp {
-        Ok(resp) => {
-            resp["RecordList"].as_array()
-                .and_then(|arr| {
-                    arr.iter().find(|r| {
-                        r["Name"].as_str() == Some(&sub_domain)
-                        && r["Type"].as_str() == Some(rec_type)
-                    })
+        Ok(resp) => resp["RecordList"]
+            .as_array()
+            .and_then(|arr| {
+                arr.iter().find(|r| {
+                    r["Name"].as_str() == Some(&sub_domain) && r["Type"].as_str() == Some(rec_type)
                 })
-                .and_then(|r| r["RecordId"].as_u64())
-        }
+            })
+            .and_then(|r| r["RecordId"].as_u64()),
         Err(_) => None,
     };
 
@@ -874,8 +1040,7 @@ async fn update_tencentcloud(rule: &DdnsRule, fqdn: &str, ip: &str) -> Result<()
     if let Ok(ref resp) = list_resp {
         if let Some(arr) = resp["RecordList"].as_array() {
             if let Some(rec) = arr.iter().find(|r| {
-                r["Name"].as_str() == Some(&sub_domain)
-                && r["Type"].as_str() == Some(rec_type)
+                r["Name"].as_str() == Some(&sub_domain) && r["Type"].as_str() == Some(rec_type)
             }) {
                 if rec["Value"].as_str() == Some(ip) {
                     info!("[ddns] tencentcloud {} already up to date: {}", fqdn, ip);
@@ -895,7 +1060,8 @@ async fn update_tencentcloud(rule: &DdnsRule, fqdn: &str, ip: &str) -> Result<()
             "Value": ip,
             "RecordId": record_id,
             "TTL": 600,
-        }).to_string();
+        })
+        .to_string();
         tc3_call(&client, secret_id, secret_key, "ModifyRecord", &body).await?;
     } else {
         // 新增记录
@@ -906,7 +1072,8 @@ async fn update_tencentcloud(rule: &DdnsRule, fqdn: &str, ip: &str) -> Result<()
             "RecordLine": "默认",
             "Value": ip,
             "TTL": 600,
-        }).to_string();
+        })
+        .to_string();
         tc3_call(&client, secret_id, secret_key, "CreateRecord", &body).await?;
     }
 

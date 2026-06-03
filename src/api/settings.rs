@@ -30,7 +30,11 @@ pub async fn mark_welcome_shown(State(state): State<AppState>) -> impl IntoRespo
     if let Some(dd) = dd {
         let admin = state.cfg.read().admin.clone();
         if let Err(e) = db::save_admin(&dd, &admin) {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response();
         }
     }
     Json(serde_json::json!({"ok": true})).into_response()
@@ -59,19 +63,32 @@ pub async fn update_settings(
     }
 
     // Check if credential change requires current password
-    let credential_change = req.new_password.as_deref().map(|p| !p.is_empty()).unwrap_or(false)
-        || req.username.as_deref().map(|u| {
-            let cfg = state.cfg.read();
-            !u.is_empty() && u != cfg.admin.username.as_str()
-        }).unwrap_or(false);
+    let credential_change = req
+        .new_password
+        .as_deref()
+        .map(|p| !p.is_empty())
+        .unwrap_or(false)
+        || req
+            .username
+            .as_deref()
+            .map(|u| {
+                let cfg = state.cfg.read();
+                !u.is_empty() && u != cfg.admin.username.as_str()
+            })
+            .unwrap_or(false);
 
     if credential_change {
         let current_ok = {
             let cfg = state.cfg.read();
-            cfg.admin.check_password(req.current_password.as_deref().unwrap_or(""))
+            cfg.admin
+                .check_password(req.current_password.as_deref().unwrap_or(""))
         };
         if !current_ok {
-            return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "当前密码错误"}))).into_response();
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": "当前密码错误"})),
+            )
+                .into_response();
         }
     }
 
@@ -80,15 +97,23 @@ pub async fn update_settings(
         if let Some(pw) = &req.new_password {
             if !pw.is_empty() {
                 if let Err(e) = cfg.admin.set_password(pw) {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response();
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({"error": e.to_string()})),
+                    )
+                        .into_response();
                 }
             }
         }
         if let Some(u) = &req.username {
-            if !u.is_empty() { cfg.admin.username = u.clone(); }
+            if !u.is_empty() {
+                cfg.admin.username = u.clone();
+            }
         }
         if let Some(p) = req.port {
-            if p > 0 { cfg.admin.port = p; }
+            if p > 0 {
+                cfg.admin.port = p;
+            }
         }
         if let Some(se) = &req.safe_entry {
             cfg.admin.safe_entry = se.trim_matches('/').to_string();
@@ -99,7 +124,11 @@ pub async fn update_settings(
     if let Some(dd) = dd {
         let admin = state.cfg.read().admin.clone();
         if let Err(e) = db::save_admin(&dd, &admin) {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response();
         }
     }
 
@@ -127,7 +156,8 @@ pub async fn update_settings(
         "ok": true,
         "restart": port_changed,
         "logout": needs_logout,
-    })).into_response()
+    }))
+    .into_response()
 }
 
 fn restart_self() {
@@ -171,10 +201,14 @@ pub async fn backup_config(State(state): State<AppState>) -> impl IntoResponse {
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, "application/octet-stream"),
-            (header::CONTENT_DISPOSITION, &format!("attachment; filename=\"{}\"", name)),
+            (
+                header::CONTENT_DISPOSITION,
+                &format!("attachment; filename=\"{}\"", name),
+            ),
         ],
         enc.into_bytes(),
-    ).into_response()
+    )
+        .into_response()
 }
 
 pub async fn restore_config(State(state): State<AppState>, body: Bytes) -> impl IntoResponse {
@@ -183,7 +217,13 @@ pub async fn restore_config(State(state): State<AppState>, body: Bytes) -> impl 
 
     let snap: FullBackup = match crypto::decrypt_json(&backup_key, &data_str) {
         Ok(s) => s,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("invalid or unrecognised backup file: {}", e)}))).into_response(),
+        Err(e) => return (
+            StatusCode::BAD_REQUEST,
+            Json(
+                serde_json::json!({"error": format!("invalid or unrecognised backup file: {}", e)}),
+            ),
+        )
+            .into_response(),
     };
 
     {
@@ -201,14 +241,24 @@ pub async fn restore_config(State(state): State<AppState>, body: Bytes) -> impl 
     if let Some(dd) = dd {
         let cfg = state.cfg.read();
         let _ = db::save_admin(&dd, &cfg.admin);
-        for r in &cfg.port_forwards { let _ = db::save_port_forward(&dd, r); }
-        for r in &cfg.ddns { let _ = db::save_ddns(&dd, r); }
+        for r in &cfg.port_forwards {
+            let _ = db::save_port_forward(&dd, r);
+        }
+        for r in &cfg.ddns {
+            let _ = db::save_ddns(&dd, r);
+        }
         for svc in &cfg.web_services {
             let _ = db::save_web_service(&dd, svc);
-            for route in &svc.routes { let _ = db::save_web_route(&dd, &svc.id, route); }
+            for route in &svc.routes {
+                let _ = db::save_web_route(&dd, &svc.id, route);
+            }
         }
-        for c in &cfg.tls_certs { let _ = db::save_tls_cert(&dd, c); }
-        for r in &cfg.ip_filter { let _ = db::save_ip_filter_rule(&dd, r); }
+        for c in &cfg.tls_certs {
+            let _ = db::save_tls_cert(&dd, c);
+        }
+        for r in &cfg.ip_filter {
+            let _ = db::save_ip_filter_rule(&dd, r);
+        }
     }
 
     Json(serde_json::json!({"ok": true})).into_response()
