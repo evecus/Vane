@@ -50,7 +50,7 @@ pub struct DdnsRule {
     pub domain: String,
     #[serde(default)]
     pub sub_domain: String,
-    pub ip_version: String, // "ipv4" | "ipv6"
+    pub ip_version: String,     // "ipv4" | "ipv6"
     pub ip_detect_mode: String, // "api" | "iface"
     #[serde(default)]
     pub ip_interface: String,
@@ -148,7 +148,14 @@ impl serde::Serialize for WebRoute {
         st.serialize_field("auth_user", &self.auth_user)?;
         // Never expose the hash; send a simple flag so the frontend knows
         // whether a password is currently stored.
-        st.serialize_field("auth_pass_set", if self.auth_pass_hash.is_empty() { "" } else { "set" })?;
+        st.serialize_field(
+            "auth_pass_set",
+            if self.auth_pass_hash.is_empty() {
+                ""
+            } else {
+                "set"
+            },
+        )?;
         st.serialize_field("created_at", &self.created_at)?;
         st.end()
     }
@@ -163,9 +170,9 @@ pub struct TlsCert {
     pub domains: Vec<String>,
     #[serde(default)]
     pub domain: String,
-    pub source: String,     // "acme" | "upload"
+    pub source: String,      // "acme" | "upload"
     pub ca_provider: String, // "letsencrypt" | "zerossl"
-    pub provider: String,   // dns provider for ACME
+    pub provider: String,    // dns provider for ACME
     pub provider_conf: ProviderConf,
     #[serde(default)]
     pub cert_pem: String,

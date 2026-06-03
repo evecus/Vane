@@ -103,7 +103,13 @@ fn check_rate_limit(ip: &str) -> bool {
         a.count += 1;
         a.count <= MAX_LOGIN_ATTEMPTS
     } else {
-        map.insert(ip.to_string(), LoginAttempt { count: 1, window_at: now });
+        map.insert(
+            ip.to_string(),
+            LoginAttempt {
+                count: 1,
+                window_at: now,
+            },
+        );
         true
     }
 }
@@ -116,8 +122,7 @@ fn clear_rate_limit(ip: &str) {
 /// growth when hit by many source IPs (distributed brute-force scan).
 /// Mirrors the Go version's init() cleanup goroutine.
 pub async fn purge_rate_limit_loop() {
-    let mut ticker =
-        tokio::time::interval(std::time::Duration::from_secs(GC_INTERVAL_SECS));
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(GC_INTERVAL_SECS));
     loop {
         ticker.tick().await;
         let now = Utc::now();
@@ -148,12 +153,20 @@ pub async fn login(
     // login endpoint is reachable from any IP even when a whitelist is configured.
     if !state.cfg.check_ip_allowed("admin", "", &ip) {
         log_admin(&ip, false);
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Forbidden"}))).into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Forbidden"})),
+        )
+            .into_response();
     }
 
     if !check_rate_limit(&ip) {
         log_admin(&ip, false);
-        return (StatusCode::TOO_MANY_REQUESTS, Json(serde_json::json!({"error": "登录尝试次数过多，请稍后再试"}))).into_response();
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({"error": "登录尝试次数过多，请稍后再试"})),
+        )
+            .into_response();
     }
 
     let ok = {
@@ -163,7 +176,11 @@ pub async fn login(
 
     if !ok {
         log_admin(&ip, false);
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "用户名或密码错误"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "用户名或密码错误"})),
+        )
+            .into_response();
     }
 
     clear_rate_limit(&ip);
@@ -179,11 +196,9 @@ pub async fn login(
     Json(serde_json::json!({"token": token})).into_response()
 }
 
-pub async fn logout(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
-    let token = headers.get("authorization")
+pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    let token = headers
+        .get("authorization")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
@@ -213,13 +228,18 @@ pub async fn auth_middleware(
         return (StatusCode::FORBIDDEN, "Forbidden").into_response();
     }
 
-    let token = headers.get("authorization")
+    let token = headers
+        .get("authorization")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
 
     if token.is_empty() {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "unauthorized"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "unauthorized"})),
+        )
+            .into_response();
     }
 
     let dd = state.cfg.read().data_dir.clone();
@@ -230,13 +250,21 @@ pub async fn auth_middleware(
     let exp = match db::session_get(&dd, &token) {
         Ok(Some(e)) => e,
         _ => {
-            return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "unauthorized"}))).into_response();
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error": "unauthorized"})),
+            )
+                .into_response();
         }
     };
 
     if Utc::now().timestamp() > exp {
         let _ = db::session_delete(&dd, &token);
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "unauthorized"}))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "unauthorized"})),
+        )
+            .into_response();
     }
 
     // Sliding expiry: renew by 24h
@@ -251,9 +279,17 @@ pub async fn auth_middleware(
 pub fn check_safe_entry(path: &str, entry: &str) -> bool {
     if path.starts_with("/api/")
         || path.starts_with("/assets/")
-        || matches!(path, "/favicon.svg" | "/favicon.ico" | "/favicon.png"
-            | "/robots.txt" | "/manifest.json" | "/icon-192.png"
-            | "/icon-512.png" | "/apple-touch-icon.png")
+        || matches!(
+            path,
+            "/favicon.svg"
+                | "/favicon.ico"
+                | "/favicon.png"
+                | "/robots.txt"
+                | "/manifest.json"
+                | "/icon-192.png"
+                | "/icon-512.png"
+                | "/apple-touch-icon.png"
+        )
     {
         return true;
     }
@@ -293,7 +329,8 @@ fn extract_client_ip(headers: &HeaderMap, socket_ip: Option<&str>) -> String {
 
     if is_trusted_proxy(socket) {
         // Only honour proxy headers when the TCP peer is itself a trusted proxy.
-        if let Some(ip) = headers.get("x-real-ip")
+        if let Some(ip) = headers
+            .get("x-real-ip")
             .or_else(|| headers.get("x-forwarded-for"))
             .and_then(|v| v.to_str().ok())
             .map(|s| s.split(',').next().unwrap_or("").trim().to_string())
@@ -335,7 +372,9 @@ fn is_trusted_proxy(ip: &str) -> bool {
         use ipnetwork::IpNetwork;
         for cidr in extra.split(',') {
             let cidr = cidr.trim();
-            if cidr.is_empty() { continue; }
+            if cidr.is_empty() {
+                continue;
+            }
             if let Ok(net) = IpNetwork::from_str(cidr) {
                 if net.contains(addr) {
                     return true;

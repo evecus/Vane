@@ -39,12 +39,7 @@ impl Config {
         self.0.write().unwrap()
     }
 
-    pub fn check_ip_allowed(
-        &self,
-        scope_type: &str,
-        target_id: &str,
-        client_ip: &str,
-    ) -> bool {
+    pub fn check_ip_allowed(&self, scope_type: &str, target_id: &str, client_ip: &str) -> bool {
         let inner = self.read();
         check_ip_allowed(&inner.ip_filter, scope_type, target_id, client_ip)
     }

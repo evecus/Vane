@@ -26,7 +26,11 @@ pub fn check_ip_allowed(
             .manual_ips
             .iter()
             .map(|s| s.as_str())
-            .chain(rule.attachments.iter().flat_map(|a| a.ips.iter().map(|s| s.as_str())))
+            .chain(
+                rule.attachments
+                    .iter()
+                    .flat_map(|a| a.ips.iter().map(|s| s.as_str())),
+            )
             .collect();
 
         let matched = ip_in_list(ip, client_ip, &all);
@@ -42,9 +46,9 @@ pub fn check_ip_allowed(
 }
 
 fn scope_matches(scopes: &[IpFilterScope], scope_type: &str, target_id: &str) -> bool {
-    scopes.iter().any(|s| {
-        s.scope_type == scope_type && (s.target_id.is_empty() || s.target_id == target_id)
-    })
+    scopes
+        .iter()
+        .any(|s| s.scope_type == scope_type && (s.target_id.is_empty() || s.target_id == target_id))
 }
 
 fn ip_in_list(ip: Option<IpAddr>, raw: &str, list: &[&str]) -> bool {
@@ -104,7 +108,11 @@ pub fn has_scope_conflict(
     let claimed: HashSet<_> = rules
         .iter()
         .filter(|r| r.id != exclude_id)
-        .flat_map(|r| r.scopes.iter().map(|s| (s.scope_type.clone(), s.target_id.clone())))
+        .flat_map(|r| {
+            r.scopes
+                .iter()
+                .map(|s| (s.scope_type.clone(), s.target_id.clone()))
+        })
         .collect();
 
     for s in new_scopes {
@@ -112,7 +120,11 @@ pub fn has_scope_conflict(
             let desc = if s.target_id.is_empty() {
                 format!("{} (全局)", s.scope_type)
             } else {
-                let name = if s.target_name.is_empty() { &s.target_id } else { &s.target_name };
+                let name = if s.target_name.is_empty() {
+                    &s.target_id
+                } else {
+                    &s.target_name
+                };
                 format!("{}: {}", s.scope_type, name)
             };
             return Some(desc);

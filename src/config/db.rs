@@ -1,12 +1,8 @@
-use crate::config::{
-    crypto,
-    types::*,
-    ConfigInner,
-};
+use crate::config::{crypto, types::*, ConfigInner};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
-use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 // ─── DataDir ──────────────────────────────────────────────────────────────────
 
@@ -25,8 +21,7 @@ impl std::fmt::Debug for DataDir {
 impl DataDir {
     pub fn open(custom_path: Option<&str>) -> Result<Arc<Self>> {
         let root = if let Some(p) = custom_path {
-            std::fs::canonicalize(p)
-                .unwrap_or_else(|_| PathBuf::from(p))
+            std::fs::canonicalize(p).unwrap_or_else(|_| PathBuf::from(p))
         } else {
             std::env::current_exe()
                 .unwrap_or_else(|_| PathBuf::from("."))
@@ -83,8 +78,7 @@ fn load_or_create_key(root: &PathBuf) -> Result<[u8; 32]> {
         use rand::RngCore;
         let mut raw = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut raw);
-        std::fs::write(&key_file, hex::encode(raw))
-            .context("write secret.key")?;
+        std::fs::write(&key_file, hex::encode(raw)).context("write secret.key")?;
         Ok(raw)
     }
 }
@@ -93,14 +87,14 @@ fn load_or_create_key(root: &PathBuf) -> Result<[u8; 32]> {
 
 fn open_db(root: &PathBuf) -> Result<Connection> {
     let path = root.join("vane.db");
-    let conn = Connection::open(&path)
-        .with_context(|| format!("open db: {}", path.display()))?;
+    let conn = Connection::open(&path).with_context(|| format!("open db: {}", path.display()))?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
     Ok(conn)
 }
 
 fn migrate(conn: &Connection) -> Result<()> {
-    conn.execute_batch(r#"
+    conn.execute_batch(
+        r#"
         CREATE TABLE IF NOT EXISTS admin (
             id INTEGER PRIMARY KEY CHECK(id=1),
             username TEXT NOT NULL,
@@ -220,7 +214,8 @@ fn migrate(conn: &Connection) -> Result<()> {
             time    TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_admin_login_logs_time ON admin_login_logs(time);
-    "#)?;
+    "#,
+    )?;
     Ok(())
 }
 
@@ -593,10 +588,16 @@ pub fn delete_web_route(dd: &DataDir, id: &str) -> Result<()> {
 pub fn save_tls_cert(dd: &DataDir, cert: &TlsCert) -> Result<()> {
     let domains_enc = crypto::encrypt_json(&dd.key, &cert.domains)?;
     let provider_conf_enc = crypto::encrypt_json(&dd.key, &cert.provider_conf)?;
-    let cert_pem_enc = if cert.cert_pem.is_empty() { String::new() }
-        else { crypto::encrypt_str(&dd.key, &cert.cert_pem)? };
-    let key_pem_enc = if cert.key_pem.is_empty() { String::new() }
-        else { crypto::encrypt_str(&dd.key, &cert.key_pem)? };
+    let cert_pem_enc = if cert.cert_pem.is_empty() {
+        String::new()
+    } else {
+        crypto::encrypt_str(&dd.key, &cert.cert_pem)?
+    };
+    let key_pem_enc = if cert.key_pem.is_empty() {
+        String::new()
+    } else {
+        crypto::encrypt_str(&dd.key, &cert.key_pem)?
+    };
     dd.with_conn(|conn| {
         conn.execute(
             "INSERT INTO tls_certs(id,name,domains_enc,domain,source,ca_provider,provider,provider_conf_enc,cert_pem_enc,key_pem_enc,issued_at,expires_at,auto_renew,email,status,error_msg,created_at)
@@ -691,8 +692,14 @@ pub fn session_purge_expired(dd: &DataDir) -> Result<()> {
 
 /// Batch-insert web-service access log entries.
 /// Older rows are trimmed so the table never exceeds `keep` rows total.
-pub fn flush_access_logs(dd: &DataDir, logs: &[crate::module::webservice::AccessLog], keep: usize) -> Result<()> {
-    if logs.is_empty() { return Ok(()); }
+pub fn flush_access_logs(
+    dd: &DataDir,
+    logs: &[crate::module::webservice::AccessLog],
+    keep: usize,
+) -> Result<()> {
+    if logs.is_empty() {
+        return Ok(());
+    }
     dd.with_conn(|conn| {
         let tx = conn.unchecked_transaction()?;
         for l in logs {
@@ -711,7 +718,11 @@ pub fn flush_access_logs(dd: &DataDir, logs: &[crate::module::webservice::Access
     })
 }
 
-pub fn load_access_logs(dd: &DataDir, service_id: &str, limit: usize) -> Result<Vec<crate::module::webservice::AccessLog>> {
+pub fn load_access_logs(
+    dd: &DataDir,
+    service_id: &str,
+    limit: usize,
+) -> Result<Vec<crate::module::webservice::AccessLog>> {
     dd.with_conn(|conn| {
         let sql = if service_id.is_empty() {
             "SELECT service_id,route_id,route_name,domain,client_ip,user_agent,time FROM access_logs ORDER BY id DESC LIMIT ?1".to_string()
@@ -730,22 +741,30 @@ pub fn load_access_logs(dd: &DataDir, service_id: &str, limit: usize) -> Result<
     })
 }
 
-fn row_to_access_log(row: &rusqlite::Row<'_>) -> rusqlite::Result<crate::module::webservice::AccessLog> {
+fn row_to_access_log(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<crate::module::webservice::AccessLog> {
     Ok(crate::module::webservice::AccessLog {
         service_id: row.get(0)?,
-        route_id:   row.get(1)?,
+        route_id: row.get(1)?,
         route_name: row.get(2)?,
-        domain:     row.get(3)?,
-        client_ip:  row.get(4)?,
+        domain: row.get(3)?,
+        client_ip: row.get(4)?,
         user_agent: row.get(5)?,
-        time:       row.get(6)?,
+        time: row.get(6)?,
     })
 }
 
 // ─── Admin login log persistence ──────────────────────────────────────────────
 
-pub fn flush_admin_login_logs(dd: &DataDir, logs: &[crate::api::auth::AdminLoginRecord], keep: usize) -> Result<()> {
-    if logs.is_empty() { return Ok(()); }
+pub fn flush_admin_login_logs(
+    dd: &DataDir,
+    logs: &[crate::api::auth::AdminLoginRecord],
+    keep: usize,
+) -> Result<()> {
+    if logs.is_empty() {
+        return Ok(());
+    }
     dd.with_conn(|conn| {
         let tx = conn.unchecked_transaction()?;
         for l in logs {
@@ -763,18 +782,22 @@ pub fn flush_admin_login_logs(dd: &DataDir, logs: &[crate::api::auth::AdminLogin
     })
 }
 
-pub fn load_admin_login_logs(dd: &DataDir, limit: usize) -> Result<Vec<crate::api::auth::AdminLoginRecord>> {
+pub fn load_admin_login_logs(
+    dd: &DataDir,
+    limit: usize,
+) -> Result<Vec<crate::api::auth::AdminLoginRecord>> {
     dd.with_conn(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT ip,success,time FROM admin_login_logs ORDER BY id DESC LIMIT ?"
-        )?;
-        let rows = stmt.query_map(params![limit as i64], |row| {
-            Ok(crate::api::auth::AdminLoginRecord {
-                ip:      row.get(0)?,
-                success: row.get::<_, i32>(1)? == 1,
-                time:    row.get(2)?,
-            })
-        })?.collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut stmt =
+            conn.prepare("SELECT ip,success,time FROM admin_login_logs ORDER BY id DESC LIMIT ?")?;
+        let rows = stmt
+            .query_map(params![limit as i64], |row| {
+                Ok(crate::api::auth::AdminLoginRecord {
+                    ip: row.get(0)?,
+                    success: row.get::<_, i32>(1)? == 1,
+                    time: row.get(2)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     })
 }
