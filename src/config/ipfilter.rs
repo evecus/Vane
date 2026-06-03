@@ -11,7 +11,6 @@ use std::str::FromStr;
 /// CIDR 网段放 Vec，数量远少于展开后的 IP 数。
 #[derive(Debug, Default)]
 pub struct CompiledRule {
-    pub id: String,
     pub enabled: bool,
     pub mode: String, // "whitelist" | "blacklist"
     pub scopes: Vec<IpFilterScope>,
@@ -43,11 +42,7 @@ impl IpFilterCache {
                 continue;
             }
             let matched = ip_in_compiled(ip, &rule.exact, &rule.cidrs);
-            return if rule.mode == "blacklist" {
-                !matched
-            } else {
-                matched
-            };
+            return if rule.mode == "blacklist" { !matched } else { matched };
         }
 
         true // 无匹配规则 → 放行
@@ -58,11 +53,15 @@ fn compile_rule(rule: &IpFilterRule) -> CompiledRule {
     let mut exact: HashSet<IpAddr> = HashSet::new();
     let mut cidrs: Vec<IpNetwork> = Vec::new();
 
-    let all_ips = rule.manual_ips.iter().map(|s| s.as_str()).chain(
-        rule.attachments
-            .iter()
-            .flat_map(|a| a.ips.iter().map(|s| s.as_str())),
-    );
+    let all_ips = rule
+        .manual_ips
+        .iter()
+        .map(|s| s.as_str())
+        .chain(
+            rule.attachments
+                .iter()
+                .flat_map(|a| a.ips.iter().map(|s| s.as_str())),
+        );
 
     for entry in all_ips {
         let entry = entry.trim();
@@ -90,7 +89,6 @@ fn compile_rule(rule: &IpFilterRule) -> CompiledRule {
     }
 
     CompiledRule {
-        id: rule.id.clone(),
         enabled: rule.enabled,
         mode: rule.mode.clone(),
         scopes: rule.scopes.clone(),
@@ -107,22 +105,12 @@ fn ip_in_compiled(ip: Option<IpAddr>, exact: &HashSet<IpAddr>, cidrs: &[IpNetwor
     cidrs.iter().any(|net| net.contains(ip))
 }
 
-// ─── 辅助函数（供 check_ip_allowed 旧接口及其他模块使用）─────────────────────
+// ─── 辅助函数 ─────────────────────────────────────────────────────────────────
 
 fn scope_matches(scopes: &[IpFilterScope], scope_type: &str, target_id: &str) -> bool {
-    scopes
-        .iter()
-        .any(|s| s.scope_type == scope_type && (s.target_id.is_empty() || s.target_id == target_id))
-}
-
-/// 不经缓存的原始检查（仅在缓存尚未建立时作为兜底，正常路径不走这里）。
-pub fn check_ip_allowed(
-    rules: &[IpFilterRule],
-    scope_type: &str,
-    target_id: &str,
-    client_ip: &str,
-) -> bool {
-    IpFilterCache::rebuild(rules).check_allowed(scope_type, target_id, client_ip)
+    scopes.iter().any(|s| {
+        s.scope_type == scope_type && (s.target_id.is_empty() || s.target_id == target_id)
+    })
 }
 
 /// 删除目标时清理 scopes，返回被修改的规则 ID 列表。
@@ -152,11 +140,7 @@ pub fn has_scope_conflict(
     let claimed: HashSet<_> = rules
         .iter()
         .filter(|r| r.id != exclude_id)
-        .flat_map(|r| {
-            r.scopes
-                .iter()
-                .map(|s| (s.scope_type.clone(), s.target_id.clone()))
-        })
+        .flat_map(|r| r.scopes.iter().map(|s| (s.scope_type.clone(), s.target_id.clone())))
         .collect();
 
     for s in new_scopes {
