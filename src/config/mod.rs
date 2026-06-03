@@ -48,11 +48,14 @@ impl Config {
     }
 
     /// 查询 client_ip 是否被允许访问指定 scope，直接走预编译缓存。
-    pub fn check_ip_allowed(&self, scope_type: &str, target_id: &str, client_ip: &str) -> bool {
+    pub fn check_ip_allowed(
+        &self,
+        scope_type: &str,
+        target_id: &str,
+        client_ip: &str,
+    ) -> bool {
         let inner = self.read();
-        inner
-            .ip_filter_cache
-            .check_allowed(scope_type, target_id, client_ip)
+        inner.ip_filter_cache.check_allowed(scope_type, target_id, client_ip)
     }
 
     /// 删除 portforward/webservice 目标时清理 scopes，返回被修改的规则供调用方持久化。

@@ -5,7 +5,12 @@ mod module;
 
 use api::{auth::check_safe_entry, AppState};
 use assets::serve_asset;
-use axum::{extract::Request, http::StatusCode, response::IntoResponse, Router};
+use axum::{
+    extract::Request,
+    http::StatusCode,
+    response::IntoResponse,
+    Router,
+};
 use config::DataDir;
 use std::sync::Arc;
 use tracing::info;
@@ -82,15 +87,16 @@ async fn main() -> anyhow::Result<()> {
 
     // Spawn log persistence task: flush every 30 minutes, keep latest 2000 rows per log type.
     {
-        let ws_clone = Arc::clone(&ws);
-        let cfg_clone = cfg.clone();
+        let ws_clone   = Arc::clone(&ws);
+        let cfg_clone  = cfg.clone();
         tokio::spawn(async move {
             const FLUSH_INTERVAL_SECS: u64 = 30 * 60;
-            const ACCESS_LOG_KEEP: usize = 2000;
-            const ADMIN_LOG_KEEP: usize = 200;
+            const ACCESS_LOG_KEEP:  usize  = 2000;
+            const ADMIN_LOG_KEEP:   usize  = 200;
 
-            let mut ticker =
-                tokio::time::interval(std::time::Duration::from_secs(FLUSH_INTERVAL_SECS));
+            let mut ticker = tokio::time::interval(
+                std::time::Duration::from_secs(FLUSH_INTERVAL_SECS)
+            );
             ticker.tick().await; // skip the immediate first tick
             loop {
                 ticker.tick().await;
@@ -105,27 +111,25 @@ async fn main() -> anyhow::Result<()> {
     let api_router = api::build_router(state.clone());
 
     // Static file handler with safe-entry and SPA fallback
-    let static_handler = Router::new().fallback(move |req: Request| {
-        let cfg = state.cfg.clone();
-        async move {
-            let path = req.uri().path().to_string();
-            let entry = cfg.read().admin.safe_entry.clone();
+    let static_handler = Router::new()
+        .fallback(move |req: Request| {
+            let cfg = state.cfg.clone();
+            async move {
+                let path = req.uri().path().to_string();
+                let entry = cfg.read().admin.safe_entry.clone();
 
-            // Enforce safe-entry gate
-            if !check_safe_entry(&path, &entry) {
-                return StatusCode::FORBIDDEN.into_response();
+                // Enforce safe-entry gate
+                if !check_safe_entry(&path, &entry) {
+                    return StatusCode::FORBIDDEN.into_response();
+                }
+
+                serve_asset(req.uri().clone(), if entry.is_empty() { None } else { Some(entry) }).await.into_response()
             }
+        });
 
-            serve_asset(
-                req.uri().clone(),
-                if entry.is_empty() { None } else { Some(entry) },
-            )
-            .await
-            .into_response()
-        }
-    });
-
-    let app = Router::new().merge(api_router).merge(static_handler);
+    let app = Router::new()
+        .merge(api_router)
+        .merge(static_handler);
 
     let port = cfg.read().admin.port;
     let addr = format!("0.0.0.0:{}", port);

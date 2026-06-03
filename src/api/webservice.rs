@@ -22,19 +22,10 @@ pub struct ServiceReq {
     enabled: Option<bool>,
 }
 
-pub async fn create_service(
-    State(state): State<AppState>,
-    Json(req): Json<ServiceReq>,
-) -> impl IntoResponse {
+pub async fn create_service(State(state): State<AppState>, Json(req): Json<ServiceReq>) -> impl IntoResponse {
     let listen_port = match req.listen_port {
         Some(p) if p > 0 => p,
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "listen_port required"})),
-            )
-                .into_response()
-        }
+        _ => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "listen_port required"}))).into_response(),
     };
     let svc = WebService {
         id: new_id(),
@@ -49,19 +40,13 @@ pub async fn create_service(
     let dd = state.cfg.read().data_dir.clone();
     if let Some(dd) = dd {
         if let Err(e) = db::save_web_service(&dd, &svc) {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response();
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response();
         }
     }
     let id = svc.id.clone();
     let enabled = svc.enabled;
     state.cfg.write().web_services.push(svc.clone());
-    if enabled {
-        let _ = state.ws.start(&id);
-    }
+    if enabled { let _ = state.ws.start(&id); }
     (StatusCode::CREATED, Json(svc)).into_response()
 }
 
@@ -73,83 +58,43 @@ pub async fn update_service(
     // If the port is changing, verify the new port is available before we
     // stop the running service (avoids an unrecoverable stopped-with-no-port state).
     if let Some(new_port) = req.listen_port {
-        let current_port = state
-            .cfg
-            .read()
-            .web_services
-            .iter()
+        let current_port = state.cfg.read().web_services.iter()
             .find(|s| s.id == id)
             .map(|s| s.listen_port);
         if let Some(current) = current_port {
             if current != new_port && !crate::config::types::is_port_available(new_port) {
-                return (
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({"error": format!("端口 {} 已被占用", new_port)})),
-                )
-                    .into_response();
+                return (StatusCode::CONFLICT, Json(serde_json::json!({"error": format!("端口 {} 已被占用", new_port)}))).into_response();
             }
         }
     }
     {
         let mut cfg = state.cfg.write();
         let Some(s) = cfg.web_services.iter_mut().find(|s| s.id == id) else {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "not found"})),
-            )
-                .into_response();
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "not found"}))).into_response();
         };
-        if let Some(v) = req.name {
-            s.name = v;
-        }
-        if let Some(v) = req.listen_port {
-            s.listen_port = v;
-        }
-        if let Some(v) = req.enable_https {
-            s.enable_https = v;
-        }
-        if let Some(v) = req.enabled {
-            s.enabled = v;
-        }
+        if let Some(v) = req.name { s.name = v; }
+        if let Some(v) = req.listen_port { s.listen_port = v; }
+        if let Some(v) = req.enable_https { s.enable_https = v; }
+        if let Some(v) = req.enabled { s.enabled = v; }
     }
 
-    let svc = state
-        .cfg
-        .read()
-        .web_services
-        .iter()
-        .find(|s| s.id == id)
-        .cloned();
+    let svc = state.cfg.read().web_services.iter().find(|s| s.id == id).cloned();
     let Some(svc) = svc else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "not found"})),
-        )
-            .into_response();
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "not found"}))).into_response();
     };
 
     let dd = state.cfg.read().data_dir.clone();
-    if let Some(dd) = dd {
-        let _ = db::save_web_service(&dd, &svc);
-    }
+    if let Some(dd) = dd { let _ = db::save_web_service(&dd, &svc); }
 
     state.ws.stop(&id);
-    if svc.enabled {
-        let _ = state.ws.start(&id);
-    }
+    if svc.enabled { let _ = state.ws.start(&id); }
     Json(svc).into_response()
 }
 
-pub async fn delete_service(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+pub async fn delete_service(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     // Collect all route IDs before removing the service (needed for scope cleanup)
-    let route_ids: Vec<String> = state
-        .cfg
-        .read()
-        .web_services
-        .iter()
+    let route_ids: Vec<String> = state.cfg.read()
+        .web_services.iter()
         .find(|s| s.id == id)
         .map(|s| s.routes.iter().map(|r| r.id.clone()).collect())
         .unwrap_or_default();
@@ -160,20 +105,14 @@ pub async fn delete_service(
     let dd = state.cfg.read().data_dir.clone();
     if let Some(dd) = dd {
         if let Err(e) = db::delete_web_service(&dd, &id) {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response();
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response();
         }
     }
 
     // Cascade: remove ip_filter scope entries for every route in this service.
     let mut all_modified: Vec<crate::config::types::IpFilterRule> = Vec::new();
     for route_id in &route_ids {
-        let modified = state
-            .cfg
-            .clean_scopes_for_deleted_target("webservice", route_id);
+        let modified = state.cfg.clean_scopes_for_deleted_target("webservice", route_id);
         all_modified.extend(modified);
     }
     if !all_modified.is_empty() {
@@ -191,53 +130,31 @@ pub async fn delete_service(
     Json(serde_json::json!({"ok": true})).into_response()
 }
 
-pub async fn toggle_service(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+pub async fn toggle_service(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     let enabled;
     {
         let mut cfg = state.cfg.write();
         let Some(s) = cfg.web_services.iter_mut().find(|s| s.id == id) else {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "not found"})),
-            )
-                .into_response();
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "not found"}))).into_response();
         };
         s.enabled = !s.enabled;
         enabled = s.enabled;
     }
-    let svc = state
-        .cfg
-        .read()
-        .web_services
-        .iter()
-        .find(|s| s.id == id)
-        .cloned();
+    let svc = state.cfg.read().web_services.iter().find(|s| s.id == id).cloned();
     if let Some(svc) = svc {
         let dd = state.cfg.read().data_dir.clone();
-        if let Some(dd) = dd {
-            let _ = db::save_web_service(&dd, &svc);
-        }
+        if let Some(dd) = dd { let _ = db::save_web_service(&dd, &svc); }
     }
     state.ws.stop(&id);
-    if enabled {
-        let _ = state.ws.start(&id);
-    }
+    if enabled { let _ = state.ws.start(&id); }
     Json(serde_json::json!({"ok": true, "enabled": enabled})).into_response()
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
-pub async fn list_routes(
-    State(state): State<AppState>,
-    Path(svc_id): Path<String>,
-) -> impl IntoResponse {
+pub async fn list_routes(State(state): State<AppState>, Path(svc_id): Path<String>) -> impl IntoResponse {
     let cfg = state.cfg.read();
-    let routes = cfg
-        .web_services
-        .iter()
+    let routes = cfg.web_services.iter()
         .find(|s| s.id == svc_id)
         .map(|s| s.routes.clone())
         .unwrap_or_default();
@@ -268,13 +185,7 @@ pub async fn create_route(
         match &req.auth_password {
             Some(pw) if !pw.is_empty() => match bcrypt::hash(pw, bcrypt::DEFAULT_COST) {
                 Ok(h) => h,
-                Err(e) => {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({"error": e.to_string()})),
-                    )
-                        .into_response()
-                }
+                Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
             },
             _ => String::new(),
         }
@@ -302,11 +213,7 @@ pub async fn create_route(
     let dd = state.cfg.read().data_dir.clone();
     if let Some(dd) = dd {
         if let Err(e) = db::save_web_route(&dd, &svc_id, &route) {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response();
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response();
         }
     }
 
@@ -328,9 +235,7 @@ pub async fn update_route(
     let existing_hash;
     {
         let cfg = state.cfg.read();
-        existing_hash = cfg
-            .web_services
-            .iter()
+        existing_hash = cfg.web_services.iter()
             .find(|s| s.id == svc_id)
             .and_then(|s| s.routes.iter().find(|r| r.id == route_id))
             .map(|r| r.auth_pass_hash.clone())
@@ -342,24 +247,12 @@ pub async fn update_route(
         match &req.auth_password {
             Some(pw) if !pw.is_empty() => match bcrypt::hash(pw, bcrypt::DEFAULT_COST) {
                 Ok(h) => h,
-                Err(e) => {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({"error": e.to_string()})),
-                    )
-                        .into_response()
-                }
+                Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
             },
             // Keep the existing hash only when one is already stored.
             // If there is no existing hash (first-time enable), a password is required.
             _ if !existing_hash.is_empty() => existing_hash,
-            _ => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({"error": "开启访问验证时必须设置密码"})),
-                )
-                    .into_response()
-            }
+            _ => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "开启访问验证时必须设置密码"}))).into_response(),
         }
     } else {
         // Always wipe the hash when auth is turned off so a stale credential
@@ -370,60 +263,35 @@ pub async fn update_route(
     {
         let mut cfg = state.cfg.write();
         let Some(svc) = cfg.web_services.iter_mut().find(|s| s.id == svc_id) else {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "service not found"})),
-            )
-                .into_response();
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "service not found"}))).into_response();
         };
         let Some(r) = svc.routes.iter_mut().find(|r| r.id == route_id) else {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "route not found"})),
-            )
-                .into_response();
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "route not found"}))).into_response();
         };
-        if let Some(v) = req.name {
-            r.name = v;
-        }
-        if let Some(v) = req.domain {
-            r.domain = v;
-        }
-        if let Some(v) = req.backend_url {
-            r.backend_url = v;
-        }
-        if let Some(v) = req.enabled {
-            r.enabled = v;
-        }
+        if let Some(v) = req.name { r.name = v; }
+        if let Some(v) = req.domain { r.domain = v; }
+        if let Some(v) = req.backend_url { r.backend_url = v; }
+        if let Some(v) = req.enabled { r.enabled = v; }
         r.auth_enabled = auth_enabled;
-        if let Some(v) = req.auth_user {
-            r.auth_user = v;
-        }
+        if let Some(v) = req.auth_user { r.auth_user = v; }
         r.auth_pass_hash = new_hash;
     }
 
     let route = {
         let cfg = state.cfg.read();
-        cfg.web_services
-            .iter()
+        cfg.web_services.iter()
             .find(|s| s.id == svc_id)
             .and_then(|s| s.routes.iter().find(|r| r.id == route_id))
             .cloned()
     };
     let Some(mut route) = route else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "not found"})),
-        )
-            .into_response();
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "not found"}))).into_response();
     };
 
     state.ws.match_route_cert(&svc_id, &mut route);
 
     let dd = state.cfg.read().data_dir.clone();
-    if let Some(dd) = dd {
-        let _ = db::save_web_route(&dd, &svc_id, &route);
-    }
+    if let Some(dd) = dd { let _ = db::save_web_route(&dd, &svc_id, &route); }
 
     Json(route).into_response()
 }
@@ -439,14 +307,10 @@ pub async fn delete_route(
         }
     }
     let dd = state.cfg.read().data_dir.clone();
-    if let Some(dd) = dd {
-        let _ = db::delete_web_route(&dd, &route_id);
-    }
+    if let Some(dd) = dd { let _ = db::delete_web_route(&dd, &route_id); }
 
     // Cascade: remove ip_filter scope entries referencing this route.
-    let modified_rules = state
-        .cfg
-        .clean_scopes_for_deleted_target("webservice", &route_id);
+    let modified_rules = state.cfg.clean_scopes_for_deleted_target("webservice", &route_id);
     if !modified_rules.is_empty() {
         if let Some(dd) = state.cfg.read().data_dir.clone() {
             for rule in &modified_rules {
@@ -466,35 +330,24 @@ pub async fn toggle_route(
     {
         let mut cfg = state.cfg.write();
         let Some(svc) = cfg.web_services.iter_mut().find(|s| s.id == svc_id) else {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "not found"})),
-            )
-                .into_response();
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "not found"}))).into_response();
         };
         let Some(r) = svc.routes.iter_mut().find(|r| r.id == route_id) else {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "not found"})),
-            )
-                .into_response();
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "not found"}))).into_response();
         };
         r.enabled = !r.enabled;
         enabled = r.enabled;
     }
     let route = {
         let cfg = state.cfg.read();
-        cfg.web_services
-            .iter()
+        cfg.web_services.iter()
             .find(|s| s.id == svc_id)
             .and_then(|s| s.routes.iter().find(|r| r.id == route_id))
             .cloned()
     };
     if let Some(route) = route {
         let dd = state.cfg.read().data_dir.clone();
-        if let Some(dd) = dd {
-            let _ = db::save_web_route(&dd, &svc_id, &route);
-        }
+        if let Some(dd) = dd { let _ = db::save_web_route(&dd, &svc_id, &route); }
     }
     Json(serde_json::json!({"ok": true, "enabled": enabled})).into_response()
 }
@@ -502,9 +355,7 @@ pub async fn toggle_route(
 // ─── Access logs ──────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
-pub struct LogsQuery {
-    limit: Option<usize>,
-}
+pub struct LogsQuery { limit: Option<usize> }
 
 pub async fn get_logs(
     State(state): State<AppState>,

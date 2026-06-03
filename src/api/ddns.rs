@@ -72,11 +72,7 @@ pub async fn create(State(state): State<AppState>, Json(req): Json<DdnsReq>) -> 
     let dd = state.cfg.read().data_dir.clone();
     if let Some(dd) = dd {
         if let Err(e) = db::save_ddns(&dd, &rule) {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response();
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response();
         }
     }
 
@@ -84,9 +80,7 @@ pub async fn create(State(state): State<AppState>, Json(req): Json<DdnsReq>) -> 
     let enabled = rule.enabled;
     state.cfg.write().ddns.push(rule.clone());
 
-    if enabled {
-        state.ddns.start(&id);
-    }
+    if enabled { state.ddns.start(&id); }
 
     (StatusCode::CREATED, Json(rule)).into_response()
 }
@@ -99,93 +93,48 @@ pub async fn update(
     {
         let mut cfg = state.cfg.write();
         let Some(r) = cfg.ddns.iter_mut().find(|r| r.id == id) else {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "not found"})),
-            )
-                .into_response();
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "not found"}))).into_response();
         };
-        if let Some(v) = req.name {
-            r.name = v;
-        }
-        if let Some(v) = req.provider {
-            r.provider = v;
-        }
-        if let Some(v) = req.domains {
-            r.domains = v;
-        }
-        if let Some(v) = req.domain {
-            r.domain = v;
-        }
-        if let Some(v) = req.sub_domain {
-            r.sub_domain = v;
-        }
-        if let Some(v) = req.ip_version {
-            r.ip_version = v;
-        }
-        if let Some(v) = req.ip_detect_mode {
-            r.ip_detect_mode = v;
-        }
-        if let Some(v) = req.ip_interface {
-            r.ip_interface = v;
-        }
-        if let Some(v) = req.ip_index {
-            r.ip_index = v;
-        }
-        if let Some(v) = req.interval {
-            r.interval = v;
-        }
-        if let Some(v) = req.enabled {
-            r.enabled = v;
-        }
-        if let Some(v) = req.provider_conf {
-            r.provider_conf = v;
-        }
+        if let Some(v) = req.name { r.name = v; }
+        if let Some(v) = req.provider { r.provider = v; }
+        if let Some(v) = req.domains { r.domains = v; }
+        if let Some(v) = req.domain { r.domain = v; }
+        if let Some(v) = req.sub_domain { r.sub_domain = v; }
+        if let Some(v) = req.ip_version { r.ip_version = v; }
+        if let Some(v) = req.ip_detect_mode { r.ip_detect_mode = v; }
+        if let Some(v) = req.ip_interface { r.ip_interface = v; }
+        if let Some(v) = req.ip_index { r.ip_index = v; }
+        if let Some(v) = req.interval { r.interval = v; }
+        if let Some(v) = req.enabled { r.enabled = v; }
+        if let Some(v) = req.provider_conf { r.provider_conf = v; }
     }
 
     let rule = state.cfg.read().ddns.iter().find(|r| r.id == id).cloned();
     let Some(rule) = rule else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "not found"})),
-        )
-            .into_response();
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "not found"}))).into_response();
     };
 
     let dd = state.cfg.read().data_dir.clone();
     if let Some(dd) = dd {
         if let Err(e) = db::save_ddns(&dd, &rule) {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response();
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response();
         }
     }
 
     state.ddns.stop(&id);
-    if rule.enabled {
-        state.ddns.start(&id);
-    }
+    if rule.enabled { state.ddns.start(&id); }
 
     Json(rule).into_response()
 }
 
-pub async fn delete_ddns(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+pub async fn delete_ddns(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     state.ddns.stop(&id);
     state.cfg.write().ddns.retain(|r| r.id != id);
 
     let dd = state.cfg.read().data_dir.clone();
     if let Some(dd) = dd {
         if let Err(e) = db::delete_ddns(&dd, &id) {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response();
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response();
         }
     }
     Json(serde_json::json!({"ok": true})).into_response()
@@ -196,11 +145,7 @@ pub async fn toggle(State(state): State<AppState>, Path(id): Path<String>) -> im
     {
         let mut cfg = state.cfg.write();
         let Some(r) = cfg.ddns.iter_mut().find(|r| r.id == id) else {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "not found"})),
-            )
-                .into_response();
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "not found"}))).into_response();
         };
         r.enabled = !r.enabled;
         enabled = r.enabled;
@@ -209,15 +154,11 @@ pub async fn toggle(State(state): State<AppState>, Path(id): Path<String>) -> im
     let rule = state.cfg.read().ddns.iter().find(|r| r.id == id).cloned();
     if let Some(rule) = rule {
         let dd = state.cfg.read().data_dir.clone();
-        if let Some(dd) = dd {
-            let _ = db::save_ddns(&dd, &rule);
-        }
+        if let Some(dd) = dd { let _ = db::save_ddns(&dd, &rule); }
     }
 
     state.ddns.stop(&id);
-    if enabled {
-        state.ddns.start(&id);
-    }
+    if enabled { state.ddns.start(&id); }
 
     Json(serde_json::json!({"ok": true, "enabled": enabled})).into_response()
 }
@@ -225,10 +166,6 @@ pub async fn toggle(State(state): State<AppState>, Path(id): Path<String>) -> im
 pub async fn refresh(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     match state.ddns.trigger_now(&id).await {
         Ok(result) => Json(serde_json::to_value(&result).unwrap()).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
     }
 }

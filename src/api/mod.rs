@@ -9,7 +9,9 @@ pub mod webservice;
 
 use crate::config::Config;
 use crate::module::{
-    ddns::Manager as DdnsManager, portforward::Manager as PfManager, tls::Manager as TlsManager,
+    ddns::Manager as DdnsManager,
+    portforward::Manager as PfManager,
+    tls::Manager as TlsManager,
     webservice::Manager as WsManager,
 };
 use axum::{
@@ -53,10 +55,7 @@ pub fn build_router(state: AppState) -> Router {
         // Settings
         .route("/api/settings", get(settings::get_settings))
         .route("/api/settings", put(settings::update_settings))
-        .route(
-            "/api/settings/welcome-shown",
-            post(settings::mark_welcome_shown),
-        )
+        .route("/api/settings/welcome-shown", post(settings::mark_welcome_shown))
         .route("/api/settings/backup", get(settings::backup_config))
         .route("/api/settings/restore", post(settings::restore_config))
         // Port Forward
@@ -81,24 +80,12 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/webservice/logs", get(webservice::get_all_logs))
         .route("/api/webservice/:id", put(webservice::update_service))
         .route("/api/webservice/:id", delete(webservice::delete_service))
-        .route(
-            "/api/webservice/:id/toggle",
-            post(webservice::toggle_service),
-        )
+        .route("/api/webservice/:id/toggle", post(webservice::toggle_service))
         .route("/api/webservice/:id/routes", get(webservice::list_routes))
         .route("/api/webservice/:id/routes", post(webservice::create_route))
-        .route(
-            "/api/webservice/:id/routes/:rid",
-            put(webservice::update_route),
-        )
-        .route(
-            "/api/webservice/:id/routes/:rid",
-            delete(webservice::delete_route),
-        )
-        .route(
-            "/api/webservice/:id/routes/:rid/toggle",
-            post(webservice::toggle_route),
-        )
+        .route("/api/webservice/:id/routes/:rid", put(webservice::update_route))
+        .route("/api/webservice/:id/routes/:rid", delete(webservice::delete_route))
+        .route("/api/webservice/:id/routes/:rid/toggle", post(webservice::toggle_route))
         .route("/api/webservice/:id/logs", get(webservice::get_logs))
         // Port check
         .route("/api/check-port", get(dashboard::check_port))
@@ -119,13 +106,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/ipfilter/:id", put(ipfilter::update_rule))
         .route("/api/ipfilter/:id", delete(ipfilter::delete_rule))
         .route("/api/ipfilter/:id/toggle", post(ipfilter::toggle_rule))
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            auth::auth_middleware,
-        ));
+        .layer(middleware::from_fn_with_state(state.clone(), auth::auth_middleware));
 
     // Dynamic manifest.json
-    let manifest = Router::new().route("/manifest.json", get(settings::serve_manifest));
+    let manifest = Router::new()
+        .route("/manifest.json", get(settings::serve_manifest));
 
     Router::new()
         .merge(public)
