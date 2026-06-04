@@ -61,10 +61,6 @@ jobs:
         run: cargo install cross --git https://github.com/cross-rs/cross --locked
 
       # ── 编译 ARM64 musl ───────────────────────────────────────────────────────
-      - name: Inject version
-        run: |
-          sed -i "s/^version = .*/version = \"${RELEASE_VERSION#v}\"/" Cargo.toml
-
       - name: Build linux/arm64 (musl)
         run: |
           cross build --release --target aarch64-unknown-linux-musl
