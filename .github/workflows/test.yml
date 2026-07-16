@@ -9,9 +9,9 @@ on:
         type: choice
         default: 'amd64'
         options:
+          - arm64
           - both
           - amd64
-          - arm64
 
 permissions:
   contents: write
