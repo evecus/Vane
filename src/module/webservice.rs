@@ -450,6 +450,7 @@ impl Manager {
 
         let _ = hyper::server::conn::http1::Builder::new()
             .serve_connection(io, svc)
+            .with_upgrades()
             .await;
     }
 
