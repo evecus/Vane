@@ -1,11 +1,6 @@
 name: test
 on:
   workflow_dispatch:
-    inputs:
-      version:
-        description: '手动指定版本号 (留空则自动生成时间戳)'
-        required: false
-        default: ''
 
 permissions:
   contents: write
