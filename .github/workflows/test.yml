@@ -1,9 +1,5 @@
-name: 测试发布
-
+name: test
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       version:
@@ -16,22 +12,11 @@ permissions:
 
 jobs:
   build:
-    name: Build Vane (ARM64 musl)
+    name: Build Vane
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
-
-      # ── 版本号 ────────────────────────────────────────────────────────────────
-      - name: Set version
-        run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "RELEASE_VERSION=${{ github.ref_name }}" >> $GITHUB_ENV
-          elif [ -n "${{ github.event.inputs.version }}" ]; then
-            echo "RELEASE_VERSION=${{ github.event.inputs.version }}" >> $GITHUB_ENV
-          else
-            echo "RELEASE_VERSION=v$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_ENV
-          fi
 
       # ── 前端 ──────────────────────────────────────────────────────────────────
       - name: Set up Node.js
@@ -49,51 +34,30 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-unknown-linux-musl
+          targets: x86_86-unknown-linux-musl
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: aarch64-unknown-linux-musl
+          key: x86_86-unknown-linux-musl
 
       # cross 解决 glibc 交叉编译器无法链接 musl + SQLite bundled 的问题
       - name: Install cross
         run: cargo install cross --git https://github.com/cross-rs/cross --locked
 
-      # ── 编译 ARM64 musl ───────────────────────────────────────────────────────
-      - name: Build linux/arm64 (musl)
+      - name: Build
         run: |
-          cross build --release --target aarch64-unknown-linux-musl
-          cp target/aarch64-unknown-linux-musl/release/vane vane-linux-arm64
-          chmod +x vane-linux-arm64
-
-      # ── 校验和 ────────────────────────────────────────────────────────────────
-      - name: Checksum
-        run: sha256sum vane-linux-arm64 > sha256sums.txt
+          cross build --release --target x86_86-unknown-linux-musl
+          cp target/x86_86-unknown-linux-musl/release/vane vane-linux-x86_86
+          chmod +x vane-linux-x86_86
 
       # ── 发布 ──────────────────────────────────────────────────────────────────
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.RELEASE_VERSION }}
-          name: "Vane ${{ env.RELEASE_VERSION }} (Pre-release)"
-          body: |
-            ## 🌀 Vane ${{ env.RELEASE_VERSION }}
-            > 自动构建的预览版本。
-
-            ### 快速开始
-            ```bash
-            chmod +x vane-linux-arm64
-            ./vane-linux-arm64
-            ```
-            访问 `http://your-ip:4455`，默认账号 `admin / admin`
-
-            | 平台 | 文件 |
-            |------|------|
-            | Linux ARM64 (musl) | `vane-linux-arm64` |
-
+          tag_name: test
+          name: "Vane test"
           files: |
-            vane-linux-arm64
-            sha256sums.txt
+            vane-linux-x86_86
           draft: false
           prerelease: true
