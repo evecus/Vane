@@ -4,12 +4,13 @@ use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::{Request, Response, StatusCode};
 use hyper_util::client::legacy::{connect::HttpConnector, Client};
-use hyper_util::rt::TokioExecutor;
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::ServerConfig;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 use tokio_rustls::TlsAcceptor;
@@ -572,6 +573,16 @@ impl Manager {
             &client_ip,
             &parse_browser(&ua),
         );
+        if is_upgrade_request(&req) {
+            return match proxy_upgrade(req, &route.backend_url).await {
+                Ok(resp) => Ok(resp),
+                Err(e) => {
+                    error!("[webservice] websocket proxy error: {}", e);
+                    Ok(error_resp(StatusCode::BAD_GATEWAY, "Bad Gateway".into()))
+                }
+            };
+        }
+
         match proxy_request(req, &route.backend_url, &client_ip, is_https).await {
             Ok(resp) => Ok(resp),
             Err(e) => {
@@ -775,6 +786,191 @@ fn load_pem_pair(
 }
 
 // ─── Reverse proxy ────────────────────────────────────────────────────────────
+
+/// Returns true if the request is an HTTP Upgrade request (e.g. WebSocket
+/// handshake): `Connection: Upgrade` + `Upgrade: <protocol>`.
+fn is_upgrade_request(req: &Request<Incoming>) -> bool {
+    let has_upgrade_header = req.headers().get("upgrade").is_some();
+    let connection_has_upgrade = req
+        .headers()
+        .get("connection")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.split(',').any(|tok| tok.trim().eq_ignore_ascii_case("upgrade")))
+        .unwrap_or(false);
+    has_upgrade_header && connection_has_upgrade
+}
+
+/// Proxies an HTTP Upgrade request (WebSocket, etc.) end-to-end.
+///
+/// The regular `proxy_request` path uses the hyper_util legacy `Client`,
+/// which only understands the normal request/response model and cannot
+/// hand off a raw, bidirectional byte stream once the backend answers with
+/// `101 Switching Protocols`. WebSocket connections rely on exactly that
+/// hand-off, so they need a separate code path:
+///
+/// 1. Open a raw TCP connection to the backend ourselves.
+/// 2. Replay the client's handshake request to the backend over that raw
+///    connection (headers untouched, including `Upgrade`/`Connection`).
+/// 3. If the backend answers `101 Switching Protocols`, take over the
+///    client connection via `hyper::upgrade::on(&mut req)` as well, and
+///    splice the two raw streams together bidirectionally.
+async fn proxy_upgrade(
+    mut req: Request<Incoming>,
+    backend_url: &str,
+) -> Result<Response<BoxBody>> {
+    let backend = backend_url
+        .parse::<hyper::Uri>()
+        .map_err(|e| anyhow!("{}", e))?;
+    let host = backend
+        .host()
+        .ok_or_else(|| anyhow!("backend url has no host"))?
+        .to_string();
+    let port = backend
+        .port_u16()
+        .unwrap_or(if backend.scheme_str() == Some("https") {
+            443
+        } else {
+            80
+        });
+
+    let path_and_query = req
+        .uri()
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or("/")
+        .to_string();
+    let backend_path = backend.path().trim_end_matches('/');
+    let full_path = format!("{}{}", backend_path, path_and_query);
+
+    // Only plain-HTTP backends are supported for the raw-socket hand-off
+    // (this mirrors proxy_request, which also always connects to the
+    // backend over HTTP).
+    let mut backend_stream = TcpStream::connect((host.as_str(), port))
+        .await
+        .map_err(|e| anyhow!("connecting to backend {}:{}: {}", host, port, e))?;
+
+    // Build the raw HTTP/1.1 handshake request to replay to the backend,
+    // preserving all original headers (Upgrade, Connection, Sec-WebSocket-*,
+    // cookies, auth, etc.) untouched.
+    let method = req.method().clone();
+    let version_str = "HTTP/1.1";
+    let mut raw_req = format!("{} {} {}\r\n", method, full_path, version_str);
+    let mut has_host = false;
+    for (name, value) in req.headers().iter() {
+        if name.as_str().eq_ignore_ascii_case("host") {
+            has_host = true;
+        }
+        if let Ok(v) = value.to_str() {
+            raw_req.push_str(name.as_str());
+            raw_req.push_str(": ");
+            raw_req.push_str(v);
+            raw_req.push_str("\r\n");
+        }
+    }
+    if !has_host {
+        raw_req.push_str(&format!("Host: {}\r\n", host));
+    }
+    raw_req.push_str("\r\n");
+
+    backend_stream
+        .write_all(raw_req.as_bytes())
+        .await
+        .map_err(|e| anyhow!("writing handshake to backend: {}", e))?;
+
+    // Read the backend's handshake response headers (until the blank line).
+    let backend_head = read_http_head(&mut backend_stream).await?;
+    let backend_status = parse_status_line(&backend_head)?;
+
+    if backend_status != 101 {
+        // Backend declined the upgrade; relay its response as-is so the
+        // client sees the real status/body instead of a generic 502.
+        let resp = Response::builder()
+            .status(backend_status)
+            .body(full_body(backend_head))
+            .unwrap();
+        return Ok(resp);
+    }
+
+    // Backend agreed to upgrade. Now take over the *client* connection too,
+    // and once both sides are raw streams, splice them together.
+    let mut response = Response::builder()
+        .status(StatusCode::SWITCHING_PROTOCOLS)
+        .body(full_body(Bytes::new()))
+        .unwrap();
+    for line in backend_head.split("\r\n").skip(1) {
+        if let Some((name, value)) = line.split_once(':') {
+            if let (Ok(name), Ok(value)) = (
+                hyper::header::HeaderName::try_from(name.trim()),
+                hyper::header::HeaderValue::from_str(value.trim()),
+            ) {
+                response.headers_mut().insert(name, value);
+            }
+        }
+    }
+
+    tokio::spawn(async move {
+        match hyper::upgrade::on(&mut req).await {
+            Ok(upgraded) => {
+                let mut client_io = TokioIo::new(upgraded);
+                if let Err(e) =
+                    tokio::io::copy_bidirectional(&mut client_io, &mut backend_stream).await
+                {
+                    warn!("[webservice] websocket relay ended: {}", e);
+                }
+            }
+            Err(e) => {
+                error!("[webservice] client upgrade failed: {}", e);
+            }
+        }
+    });
+
+    Ok(response)
+}
+
+/// Reads raw bytes from `stream` until the `\r\n\r\n` header terminator and
+/// returns the head (status line + headers) as a UTF-8 string. Any bytes
+/// read past the terminator (e.g. buffered body data) are intentionally
+/// not supported here since WebSocket upgrade responses have no body.
+async fn read_http_head(stream: &mut TcpStream) -> Result<String> {
+    let mut buf = Vec::with_capacity(1024);
+    let mut chunk = [0u8; 512];
+    loop {
+        let n = stream
+            .read(&mut chunk)
+            .await
+            .map_err(|e| anyhow!("reading backend handshake: {}", e))?;
+        if n == 0 {
+            return Err(anyhow!("backend closed connection during handshake"));
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if let Some(pos) = find_header_terminator(&buf) {
+            buf.truncate(pos);
+            return String::from_utf8(buf).map_err(|e| anyhow!("invalid handshake utf8: {}", e));
+        }
+        if buf.len() > 64 * 1024 {
+            return Err(anyhow!("backend handshake headers too large"));
+        }
+    }
+}
+
+fn find_header_terminator(buf: &[u8]) -> Option<usize> {
+    buf.windows(4).position(|w| w == b"\r\n\r\n")
+}
+
+fn parse_status_line(head: &str) -> Result<StatusCode> {
+    let first_line = head
+        .lines()
+        .next()
+        .ok_or_else(|| anyhow!("empty backend response"))?;
+    let code_str = first_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or_else(|| anyhow!("malformed status line: {}", first_line))?;
+    let code: u16 = code_str
+        .parse()
+        .map_err(|_| anyhow!("malformed status code: {}", code_str))?;
+    StatusCode::from_u16(code).map_err(|e| anyhow!("invalid status code {}: {}", code, e))
+}
 
 async fn proxy_request(
     req: Request<Incoming>,
