@@ -7,7 +7,7 @@ on:
         description: '选择要编译的架构'
         required: true
         type: choice
-        default: 'both'
+        default: 'amd64'
         options:
           - both
           - amd64
