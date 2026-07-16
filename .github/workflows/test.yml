@@ -1,19 +1,50 @@
-name: test
+name: 测试发布
+
 on:
   workflow_dispatch:
+    inputs:
+      arch:
+        description: '选择要编译的架构'
+        required: true
+        type: choice
+        default: 'both'
+        options:
+          - both
+          - amd64
+          - arm64
 
 permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build Vane
+  # ─── 生成本次要编译的架构矩阵 ────────────────────────────────────────────────
+  matrix:
+    name: Prepare build matrix
     runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.set.outputs.include }}
+    steps:
+      - id: set
+        run: |
+          case "${{ github.event.inputs.arch }}" in
+            amd64)
+              echo 'include=[{"name":"linux-amd64","target":"x86_64-unknown-linux-musl","output":"vane-linux-amd64"}]' >> $GITHUB_OUTPUT
+              ;;
+            arm64)
+              echo 'include=[{"name":"linux-arm64","target":"aarch64-unknown-linux-musl","output":"vane-linux-arm64"}]' >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo 'include=[{"name":"linux-amd64","target":"x86_64-unknown-linux-musl","output":"vane-linux-amd64"},{"name":"linux-arm64","target":"aarch64-unknown-linux-musl","output":"vane-linux-arm64"}]' >> $GITHUB_OUTPUT
+              ;;
+          esac
 
+  # ─── 前端 ────────────────────────────────────────────────────────────────────
+  build-frontend:
+    name: Build Frontend
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # ── 前端 ──────────────────────────────────────────────────────────────────
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -25,34 +56,97 @@ jobs:
           npm install
           npm run build
 
+      - name: Upload frontend dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: web/dist/
+          retention-days: 1
+
+  # ─── Rust + cross（按所选架构编译） ──────────────────────────────────────────
+  build:
+    name: Build ${{ matrix.name }}
+    needs: [matrix, build-frontend]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.matrix.outputs.include) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download frontend dist
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: web/dist/
+
       # ── Rust + cross ──────────────────────────────────────────────────────────
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_86-unknown-linux-musl
+          targets: ${{ matrix.target }}
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: x86_86-unknown-linux-musl
+          key: ${{ matrix.target }}
 
       # cross 解决 glibc 交叉编译器无法链接 musl + SQLite bundled 的问题
       - name: Install cross
         run: cargo install cross --git https://github.com/cross-rs/cross --locked
 
-      - name: Build
+      # ── 编译 ─────────────────────────────────────────────────────────────────
+      - name: Build ${{ matrix.target }}
         run: |
-          cross build --release --target x86_86-unknown-linux-musl
-          cp target/x86_86-unknown-linux-musl/release/vane vane-linux-x86_86
-          chmod +x vane-linux-x86_86
+          cross build --release --target ${{ matrix.target }}
+          cp target/${{ matrix.target }}/release/vane ${{ matrix.output }}
+          chmod +x ${{ matrix.output }}
 
-      # ── 发布 ──────────────────────────────────────────────────────────────────
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output }}
+          path: ${{ matrix.output }}
+          retention-days: 1
+
+  # ─── 发布 ────────────────────────────────────────────────────────────────────
+  release:
+    name: Create Release
+    needs: [matrix, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: vane-linux-*
+          merge-multiple: true
+
+      - name: Checksum
+        run: |
+          sha256sum vane-linux-* > sha256sums.txt
+          cat sha256sums.txt
+
+      - name: Build file table
+        id: table
+        run: |
+          {
+            echo 'table<<EOF'
+            echo '| 平台 | 文件 |'
+            echo '|------|------|'
+            [ -f vane-linux-amd64 ] && echo '| Linux AMD64 (musl) | `vane-linux-amd64` |'
+            [ -f vane-linux-arm64 ] && echo '| Linux ARM64 (musl) | `vane-linux-arm64` |'
+            echo 'EOF'
+          } >> $GITHUB_OUTPUT
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: test
-          name: "Vane test"
+          name: "Vane test (Pre-release)"
           files: |
-            vane-linux-x86_86
+            vane-linux-*
+            sha256sums.txt
           draft: false
           prerelease: true
