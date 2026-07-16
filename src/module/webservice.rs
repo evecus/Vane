@@ -818,6 +818,16 @@ async fn proxy_upgrade(
     mut req: Request<Incoming>,
     backend_url: &str,
 ) -> Result<Response<BoxBody>> {
+    // IMPORTANT: hyper requires the upgrade intent to be registered via
+    // `hyper::upgrade::on()` *before* the response is handed back to the
+    // connection driver — not afterwards, and not from inside a detached
+    // task created near the end of the handler. Registering it late (or
+    // via the "low level" call path hyper detects when this ordering is
+    // violated) fails with "upgrade expected but low level API in use".
+    // So we grab the upgrade future FIRST, before doing anything else
+    // (including talking to the backend), and only `.await` it later.
+    let on_upgrade = hyper::upgrade::on(&mut req);
+
     let backend = backend_url
         .parse::<hyper::Uri>()
         .map_err(|e| anyhow!("{}", e))?;
@@ -884,6 +894,8 @@ async fn proxy_upgrade(
     if backend_status != 101 {
         // Backend declined the upgrade; relay its response as-is so the
         // client sees the real status/body instead of a generic 502.
+        // We never `.await` on_upgrade in this branch, so hyper simply
+        // treats the connection as a normal, non-upgraded response.
         let resp = Response::builder()
             .status(backend_status)
             .body(full_body(backend_head))
@@ -891,8 +903,9 @@ async fn proxy_upgrade(
         return Ok(resp);
     }
 
-    // Backend agreed to upgrade. Now take over the *client* connection too,
-    // and once both sides are raw streams, splice them together.
+    // Backend agreed to upgrade. Build the 101 response to send back to
+    // the client, then spawn the relay task that waits on the
+    // already-registered `on_upgrade` future.
     let mut response = Response::builder()
         .status(StatusCode::SWITCHING_PROTOCOLS)
         .body(full_body(Bytes::new()))
@@ -909,7 +922,7 @@ async fn proxy_upgrade(
     }
 
     tokio::spawn(async move {
-        match hyper::upgrade::on(&mut req).await {
+        match on_upgrade.await {
             Ok(upgraded) => {
                 let mut client_io = TokioIo::new(upgraded);
                 if let Err(e) =
