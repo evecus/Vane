@@ -243,6 +243,8 @@
               <label class="input-label">{{ t('dnsProviderLabel') }}</label>
               <select v-model="form.provider" class="select">
                 <option value="cloudflare">Cloudflare</option>
+                <option value="alidns">AliDNS</option>
+                <option value="tencentcloud">{{ t('tencentCloud') }} DNS</option>
               </select>
             </div>
 
@@ -257,6 +259,38 @@
                   <label class="input-label">API Token</label>
                   <input v-model="form.provider_conf.api_token" class="input font-mono text-xs"
                          placeholder="CF API Token (DNS:Edit)" autocomplete="off" />
+                </div>
+              </div>
+            </template>
+
+            <!-- 阿里云 DNS 配置 -->
+            <template v-if="form.provider === 'alidns'">
+              <div class="p-4 bg-blue-50 rounded-xl border border-blue-100 space-y-3">
+                <h4 class="text-xs font-bold text-blue-700 uppercase tracking-wide">{{ t('alidnsConfig') }}</h4>
+                <div>
+                  <label class="input-label">Access Key ID</label>
+                  <input v-model="form.provider_conf.access_key_id" class="input font-mono text-xs" autocomplete="off" />
+                </div>
+                <div>
+                  <label class="input-label">Access Key Secret</label>
+                  <input v-model="form.provider_conf.access_key_secret" class="input font-mono text-xs"
+                         type="password" autocomplete="off" />
+                </div>
+              </div>
+            </template>
+
+            <!-- 腾讯云 DNS 配置 -->
+            <template v-if="form.provider === 'tencentcloud'">
+              <div class="p-4 bg-blue-50 rounded-xl border border-blue-100 space-y-3">
+                <h4 class="text-xs font-bold text-blue-700 uppercase tracking-wide">{{ t('dnspodConfig', {name: t('tencentCloud')}) }}</h4>
+                <div>
+                  <label class="input-label">SecretId</label>
+                  <input v-model="form.provider_conf.secret_id" class="input font-mono text-xs" autocomplete="off" />
+                </div>
+                <div>
+                  <label class="input-label">SecretKey</label>
+                  <input v-model="form.provider_conf.secret_key" class="input font-mono text-xs"
+                         type="password" autocomplete="off" />
                 </div>
               </div>
             </template>
@@ -551,6 +585,14 @@ function validateForm() {
   }
   if (form.value.provider === 'cloudflare' && !form.value.provider_conf.api_token) {
     return t('errNoCfToken')
+  }
+  if (form.value.provider === 'alidns' &&
+      (!form.value.provider_conf.access_key_id || !form.value.provider_conf.access_key_secret)) {
+    return t('errNoAlidnsKey')
+  }
+  if (form.value.provider === 'tencentcloud' &&
+      (!form.value.provider_conf.secret_id || !form.value.provider_conf.secret_key)) {
+    return t('errNoTencentKey')
   }
   return null
 }

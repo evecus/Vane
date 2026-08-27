@@ -172,7 +172,6 @@
                 <select v-model="form.provider" class="select">
                   <option value="cloudflare">Cloudflare</option>
                   <option value="alidns">AliDNS</option>
-                  <option value="dnspod">DNSPod</option>
                   <option value="tencentcloud">{{ t('tencentCloud') }} DNS</option>
                 </select>
               </div>
@@ -386,9 +385,9 @@
               </div>
             </template>
 
-            <template v-if="form.provider === 'dnspod' || form.provider === 'tencentcloud'">
+            <template v-if="form.provider === 'tencentcloud'">
               <div class="p-3 sm:p-4 bg-blue-50 rounded-xl border border-blue-100 space-y-3">
-                <h4 class="text-xs font-bold text-blue-700 uppercase tracking-wide">{{ t('dnspodConfig', {name: form.provider === 'dnspod' ? 'DNSPod' : t('tencentCloud')}) }}</h4>
+                <h4 class="text-xs font-bold text-blue-700 uppercase tracking-wide">{{ t('dnspodConfig', {name: t('tencentCloud')}) }}</h4>
                 <div><label class="input-label">SecretId</label><input v-model="form.provider_conf.secret_id" class="input font-mono text-xs" /></div>
                 <div><label class="input-label">SecretKey</label><input v-model="form.provider_conf.secret_key" class="input font-mono text-xs" type="password" /></div>
               </div>

@@ -9,7 +9,8 @@ const cfg = computed(() => {
   const map = {
     cloudflare: { label: 'Cloudflare', cls: 'badge-amber' },
     alidns:     { label: '阿里云', cls: 'badge-blue' },
-    dnspod:     { label: 'DNSPod', cls: 'badge-green' },
+    // 'dnspod' 保留兼容：旧数据中可能仍存有该值，统一按腾讯云 DNS 展示
+    dnspod:     { label: '腾讯云', cls: 'badge-blue' },
     tencentcloud: { label: '腾讯云', cls: 'badge-blue' },
   }
   return map[props.provider] || { label: props.provider, cls: 'badge-slate' }
