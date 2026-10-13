@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 use tokio::sync::watch;
 use tokio_rustls::TlsAcceptor;
 use tracing::{error, info, warn};
@@ -225,8 +225,8 @@ impl Manager {
         mut stop: watch::Receiver<bool>,
         svc_id: String,
     ) {
-        let addr = format!("0.0.0.0:{}", svc.listen_port);
-        let listener = match TcpListener::bind(&addr).await {
+        let addr = format!("[::]:{}", svc.listen_port);
+        let listener = match crate::net::bind_tcp(svc.listen_port).await {
             Ok(l) => l,
             Err(e) => {
                 error!("[webservice] bind {} error: {}", addr, e);
@@ -240,7 +240,7 @@ impl Manager {
 
         // When HTTPS is enabled on port 443, also bind port 80 to redirect HTTP → HTTPS
         if svc.enable_https && svc.listen_port == 443 {
-            let ln80 = match TcpListener::bind("0.0.0.0:80").await {
+            let ln80 = match crate::net::bind_tcp(80).await {
                 Ok(l) => {
                     info!(
                         "[webservice] :80 redirect listener started for svc {}",
@@ -318,7 +318,7 @@ impl Manager {
     }
 
     async fn handle_conn(self: &Arc<Self>, stream: TcpStream, peer: SocketAddr, svc_id: &str) {
-        let client_ip = peer.ip().to_string();
+        let client_ip = crate::net::ip_string(peer.ip());
         let svc = {
             let cfg = self.cfg.read();
             cfg.web_services.iter().find(|s| s.id == svc_id).cloned()
@@ -856,7 +856,9 @@ async fn proxy_upgrade(
     // Only plain-HTTP backends are supported for the raw-socket hand-off
     // (this mirrors proxy_request, which also always connects to the
     // backend over HTTP).
-    let mut backend_stream = TcpStream::connect((host.as_str(), port))
+    // hyper keeps the brackets of IPv6 literals in host(); strip them for connect().
+    let connect_host = host.trim_start_matches('[').trim_end_matches(']');
+    let mut backend_stream = TcpStream::connect((connect_host, port))
         .await
         .map_err(|e| anyhow!("connecting to backend {}:{}: {}", host, port, e))?;
 

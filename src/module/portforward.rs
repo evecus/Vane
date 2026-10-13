@@ -2,7 +2,7 @@ use crate::config::{Config, PortForwardRule};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::io;
-use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::watch;
 use tracing::{error, info, warn};
 
@@ -171,8 +171,8 @@ async fn run_tcp(
     mut stop: watch::Receiver<bool>,
     cfg: Config,
 ) {
-    let addr = format!("0.0.0.0:{}", rule.listen_port);
-    let listener = match TcpListener::bind(&addr).await {
+    let addr = format!("[::]:{}", rule.listen_port);
+    let listener = match crate::net::bind_tcp(rule.listen_port).await {
         Ok(l) => l,
         Err(e) => {
             error!("[portforward] TCP listen {} error: {}", addr, e);
@@ -180,8 +180,9 @@ async fn run_tcp(
         }
     };
     info!(
-        "[portforward] TCP {} → {}:{}",
-        addr, rule.target_ip, rule.target_port
+        "[portforward] TCP {} → {}",
+        addr,
+        crate::net::host_port(&rule.target_ip, rule.target_port)
     );
 
     loop {
@@ -190,12 +191,12 @@ async fn run_tcp(
             res = listener.accept() => {
                 match res {
                     Ok((conn, peer)) => {
-                        let client_ip = peer.ip().to_string();
+                        let client_ip = crate::net::ip_string(peer.ip());
                         if !cfg.check_ip_allowed("portforward", &rule.id, &client_ip) {
                             warn!("[portforward] TCP blocked {} → port {}", client_ip, rule.listen_port);
                             continue;
                         }
-                        let target = format!("{}:{}", rule.target_ip, rule.target_port);
+                        let target = crate::net::host_port(&rule.target_ip, rule.target_port);
                         let st = Arc::clone(&stats);
                         tokio::spawn(async move {
                             handle_tcp(conn, target, st).await;
@@ -254,8 +255,8 @@ async fn run_udp(
     mut stop: watch::Receiver<bool>,
     cfg: Config,
 ) {
-    let addr = format!("0.0.0.0:{}", rule.listen_port);
-    let sock = match UdpSocket::bind(&addr).await {
+    let addr = format!("[::]:{}", rule.listen_port);
+    let sock = match crate::net::bind_udp(rule.listen_port) {
         Ok(s) => Arc::new(s),
         Err(e) => {
             error!("[portforward] UDP bind {} error: {}", addr, e);
@@ -263,11 +264,12 @@ async fn run_udp(
         }
     };
     info!(
-        "[portforward] UDP {} → {}:{}",
-        addr, rule.target_ip, rule.target_port
+        "[portforward] UDP {} → {}",
+        addr,
+        crate::net::host_port(&rule.target_ip, rule.target_port)
     );
 
-    let target = format!("{}:{}", rule.target_ip, rule.target_port);
+    let target = crate::net::host_port(&rule.target_ip, rule.target_port);
     let mut buf = vec![0u8; 65535];
 
     loop {
@@ -276,7 +278,7 @@ async fn run_udp(
             res = sock.recv_from(&mut buf) => {
                 match res {
                     Ok((n, peer)) => {
-                        let client_ip = peer.ip().to_string();
+                        let client_ip = crate::net::ip_string(peer.ip());
                         if !cfg.check_ip_allowed("portforward", &rule.id, &client_ip) {
                             warn!("[portforward] UDP blocked {} → port {}", client_ip, rule.listen_port);
                             continue;
@@ -305,11 +307,20 @@ async fn handle_udp(
     data: Vec<u8>,
     stats: Arc<Stats>,
 ) {
-    let dst = match UdpSocket::bind("0.0.0.0:0").await {
+    // Resolve the target first so the outbound socket matches its address family
+    // (IPv4 or IPv6).
+    let target_addr = match tokio::net::lookup_host(&target).await {
+        Ok(mut it) => match it.next() {
+            Some(a) => a,
+            None => return,
+        },
+        Err(_) => return,
+    };
+    let dst = match crate::net::bind_udp_for(&target_addr).await {
         Ok(s) => s,
         Err(_) => return,
     };
-    if dst.send_to(&data, &target).await.is_err() {
+    if dst.send_to(&data, target_addr).await.is_err() {
         return;
     }
     let mut resp = vec![0u8; 65535];
