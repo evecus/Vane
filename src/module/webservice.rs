@@ -206,7 +206,7 @@ impl Manager {
             if let Ok(mut db_logs) = crate::config::db::load_access_logs(dd, service_id, limit) {
                 // db_logs are already newest-first; append mem (also newest-first)
                 // then dedup on time+route_id+client_ip and take `limit`.
-                db_logs.extend(mem.drain(..));
+                db_logs.append(&mut mem);
                 let mut seen = std::collections::HashSet::new();
                 db_logs.retain(|l| {
                     let k = format!("{}|{}|{}", l.time, l.route_id, l.client_ip);
@@ -753,7 +753,7 @@ impl rustls::server::ResolvesServerCert for SniResolver {
         if let Some(pair) = self.certs.get(&name) {
             return make_certified_key(pair);
         }
-        if let Some(rest) = name.splitn(2, '.').nth(1) {
+        if let Some(rest) = name.split_once('.').map(|x| x.1) {
             let wildcard = format!("*.{}", rest);
             if let Some(pair) = self.certs.get(&wildcard) {
                 return make_certified_key(pair);
@@ -1046,7 +1046,7 @@ async fn proxy_request(
         .request(new_req)
         .await
         .map_err(|e| anyhow!("proxy: {}", e))?;
-    Ok(resp.map(|b| box_body(b)))
+    Ok(resp.map(box_body))
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

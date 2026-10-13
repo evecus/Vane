@@ -137,7 +137,7 @@ impl Manager {
                 }
             }
         }
-        self.persist(&id);
+        self.persist(id);
         Ok(result)
     }
 

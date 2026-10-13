@@ -944,12 +944,10 @@ pub fn extract_domains_from_cert_pem(cert_pem: &str) -> Vec<String> {
     };
 
     let mut domains = std::collections::HashSet::new();
-    if let Ok(san) = parsed.subject_alternative_name() {
-        if let Some(san) = san {
-            for name in &san.value.general_names {
-                if let x509_parser::extensions::GeneralName::DNSName(d) = name {
-                    domains.insert(d.to_string());
-                }
+    if let Ok(Some(san)) = parsed.subject_alternative_name() {
+        for name in &san.value.general_names {
+            if let x509_parser::extensions::GeneralName::DNSName(d) = name {
+                domains.insert(d.to_string());
             }
         }
     }
