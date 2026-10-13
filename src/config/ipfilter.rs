@@ -32,7 +32,9 @@ impl IpFilterCache {
     /// 查询 client_ip 是否被允许访问 scope_type/target_id。
     /// 无匹配规则时默认放行。
     pub fn check_allowed(&self, scope_type: &str, target_id: &str, client_ip: &str) -> bool {
-        let ip = IpAddr::from_str(client_ip).ok();
+        let ip = IpAddr::from_str(client_ip)
+            .ok()
+            .map(crate::net::canonical_ip);
 
         for rule in &self.0 {
             if !rule.enabled {

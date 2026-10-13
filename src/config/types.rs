@@ -258,5 +258,5 @@ pub fn now_rfc3339() -> String {
 }
 
 pub fn is_port_available(port: u16) -> bool {
-    std::net::TcpListener::bind(format!("0.0.0.0:{}", port)).is_ok()
+    crate::net::port_available(port)
 }
