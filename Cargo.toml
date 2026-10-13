@@ -37,6 +37,7 @@ regex = "1"
 once_cell = "1"
 ipnetwork = "0.20"
 scopeguard = "1"
+socket2 = { version = "0.5", features = ["all"] }
 url = "2"
 pnet_datalink = "0.35"
 rust-embed = { version = "8", features = ["include-exclude"] }
