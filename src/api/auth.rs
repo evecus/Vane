@@ -145,7 +145,7 @@ pub async fn login(
     connect_info: Option<ConnectInfo<SocketAddr>>,
     Json(req): Json<LoginReq>,
 ) -> impl IntoResponse {
-    let socket_ip = connect_info.map(|c| c.0.ip().to_string());
+    let socket_ip = connect_info.map(|c| crate::net::ip_string(c.0.ip()));
     let ip = extract_client_ip(&headers, socket_ip.as_deref());
 
     // Apply admin IP filter to the login endpoint too.
@@ -222,7 +222,7 @@ pub async fn auth_middleware(
     // IP filter on admin scope — prefer X-Real-IP/X-Forwarded-For (set by a
     // trusted reverse proxy), then fall back to the real socket address so that
     // direct connections are never mis-identified as 127.0.0.1.
-    let socket_ip = connect_info.map(|c| c.0.ip().to_string());
+    let socket_ip = connect_info.map(|c| crate::net::ip_string(c.0.ip()));
     let client_ip = extract_client_ip(&headers, socket_ip.as_deref());
     if !state.cfg.check_ip_allowed("admin", "", &client_ip) {
         return (StatusCode::FORBIDDEN, "Forbidden").into_response();
@@ -352,7 +352,7 @@ fn is_trusted_proxy(ip: &str) -> bool {
     use std::str::FromStr;
 
     let addr = match IpAddr::from_str(ip) {
-        Ok(a) => a,
+        Ok(a) => crate::net::canonical_ip(a),
         Err(_) => return false,
     };
 
