@@ -2,6 +2,7 @@ mod api;
 mod assets;
 mod config;
 mod module;
+mod net;
 
 use api::{auth::check_safe_entry, AppState};
 use assets::serve_asset;
@@ -128,10 +129,9 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new().merge(api_router).merge(static_handler);
 
     let port = cfg.read().admin.port;
-    let addr = format!("0.0.0.0:{}", port);
-    info!("Vane {} → http://{}", VERSION, addr);
+    info!("Vane {} → http://[::]:{} (IPv4 + IPv6)", VERSION, port);
 
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    let listener = net::bind_tcp(port).await?;
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
@@ -149,7 +149,7 @@ fn print_banner(cfg: &config::Config) {
         format!("/{}", inner.admin.safe_entry)
     };
     println!(
-        "\n  ✨ Dashboard : http://0.0.0.0:{}{}\n     User      : {}\n     Version   : {}\n",
+        "\n  ✨ Dashboard : http://<ip>:{}{}  (IPv4 + IPv6)\n     User      : {}\n     Version   : {}\n",
         inner.admin.port, entry, inner.admin.username, VERSION
     );
 }
