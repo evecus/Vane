@@ -54,13 +54,14 @@ fn udp_std(addr: SocketAddr) -> io::Result<std::net::UdpSocket> {
 fn bind_tcp_std(port: u16) -> io::Result<std::net::TcpListener> {
     match tcp_std(v6_any(port)) {
         Ok(l) => Ok(l),
-        Err(e6) => tcp_std(v4_any(port)).map(|l| {
+        Err(e6) => {
+            let l = tcp_std(v4_any(port))?;
             warn!(
                 "[net] dual-stack TCP bind on port {} failed ({}), listening on IPv4 only",
                 port, e6
             );
-            l
-        }),
+            Ok(l)
+        }
     }
 }
 
@@ -73,13 +74,14 @@ pub async fn bind_tcp(port: u16) -> io::Result<TcpListener> {
 pub fn bind_udp(port: u16) -> io::Result<UdpSocket> {
     let std_sock = match udp_std(v6_any(port)) {
         Ok(s) => s,
-        Err(e6) => udp_std(v4_any(port)).map(|s| {
+        Err(e6) => {
+            let s = udp_std(v4_any(port))?;
             warn!(
                 "[net] dual-stack UDP bind on port {} failed ({}), listening on IPv4 only",
                 port, e6
             );
             s
-        })?,
+        }
     };
     UdpSocket::from_std(std_sock)
 }
