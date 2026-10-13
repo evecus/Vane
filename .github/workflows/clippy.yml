@@ -1,0 +1,37 @@
+name: Clippy
+
+on:
+  workflow_dispatch:
+
+jobs:
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-clippy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-clippy-
+
+      # rust-embed 在编译期要求 web/dist 目录存在，否则 derive 宏直接报错。
+      # clippy 只做静态检查，不需要真实前端产物，建个空目录即可。
+      - name: Create empty web/dist
+        run: mkdir -p web/dist
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
