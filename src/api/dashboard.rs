@@ -14,7 +14,7 @@ pub async fn get_dashboard(State(state): State<AppState>) -> impl IntoResponse {
         .iter()
         .filter(|c| {
             let d = c.days_until_expiry();
-            d >= 0 && d <= 30
+            (0..=30).contains(&d)
         })
         .count();
     Json(serde_json::json!({

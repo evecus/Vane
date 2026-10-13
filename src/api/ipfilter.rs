@@ -254,7 +254,7 @@ pub async fn upload_file(
     State(_state): State<AppState>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
-    while let Ok(Some(field)) = multipart.next_field().await {
+    if let Ok(Some(field)) = multipart.next_field().await {
         // Accept the field regardless of its name, but prefer the "file" field.
         let filename = field.file_name().unwrap_or("upload.txt").to_string();
         let data = match field.bytes().await {
