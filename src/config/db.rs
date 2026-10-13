@@ -1,7 +1,7 @@
 use crate::config::{crypto, types::*, ConfigInner};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 // ─── DataDir ──────────────────────────────────────────────────────────────────
@@ -55,7 +55,7 @@ impl DataDir {
 
 // ─── Key management ───────────────────────────────────────────────────────────
 
-fn load_or_create_key(root: &PathBuf) -> Result<[u8; 32]> {
+fn load_or_create_key(root: &Path) -> Result<[u8; 32]> {
     // Env var override
     if let Ok(secret) = std::env::var("VANE_SECRET") {
         return Ok(crypto::derive_key(&secret));
@@ -85,7 +85,7 @@ fn load_or_create_key(root: &PathBuf) -> Result<[u8; 32]> {
 
 // ─── Database open + migrate ──────────────────────────────────────────────────
 
-fn open_db(root: &PathBuf) -> Result<Connection> {
+fn open_db(root: &Path) -> Result<Connection> {
     let path = root.join("vane.db");
     let conn = Connection::open(&path).with_context(|| format!("open db: {}", path.display()))?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;

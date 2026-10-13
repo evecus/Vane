@@ -117,7 +117,7 @@ fn scope_matches(scopes: &[IpFilterScope], scope_type: &str, target_id: &str) ->
 
 /// 删除目标时清理 scopes，返回被修改的规则 ID 列表。
 pub fn clean_scopes_for_deleted_target(
-    rules: &mut Vec<IpFilterRule>,
+    rules: &mut [IpFilterRule],
     scope_type: &str,
     target_id: &str,
 ) -> Vec<String> {
